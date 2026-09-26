@@ -763,7 +763,7 @@
         </header>
       {/if}
       {#key viewKey}
-        <div class="st-column" in:fly={slide}>
+        <div class="st-column" class:is-detail={!!detail} in:fly={slide}>
           {#if detail}
             {@render detailView(detail)}
 
@@ -888,7 +888,7 @@
                   {/each}
                 </div>
               {:else if !groups.store.length}
-                {@render libraryEmpty('basket', 'Nothing installed yet', 'Extensions you install from the store live here, and update when their makers publish.', 'Discover Extensions', () => show('browse'))}
+                {@render libraryEmpty('Nothing installed yet', 'Extensions you install from the store live here, and update when their makers publish.', 'Discover Extensions', () => show('browse'))}
               {/if}
             </section>
             <section class="st-sec">
@@ -900,7 +900,7 @@
                   {/each}
                 </div>
               {:else if !groups.yours.length}
-                {@render libraryEmpty('wand', 'Nothing made yet', 'Ask your agent for an effect, a panel or a theme. What it makes shows up here, ready to publish.')}
+                {@render libraryEmpty('Nothing made yet', 'Ask your agent for an effect, a panel or a theme. What it makes shows up here, ready to publish.')}
               {/if}
             </section>
           {/if}
@@ -993,9 +993,8 @@
   </div>
 {/snippet}
 
-{#snippet libraryEmpty(icon: string, title: string, body: string, cta?: string, go?: () => void)}
+{#snippet libraryEmpty(title: string, body: string, cta?: string, go?: () => void)}
   <div class="st-empty-card">
-    <span class="st-empty-mark"><Icon {PM} name={icon} /></span>
     <span class="st-empty-copy">
       <b>{title}</b>
       <span>{body}</span>
