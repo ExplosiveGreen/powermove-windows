@@ -446,7 +446,7 @@
   $effect(() => {
     if (!shown || !rootEl) return;
     const root = rootEl;
-    const selector = `${SQUIRCLE_SELECTOR}, .st-card, .st-thumb, .st-slide, .st-item, .st-item-icon, .st-detail-banner, .st-search, .st-plus`;
+    const selector = `${SQUIRCLE_SELECTOR}, .st-card, .st-thumb, .st-slide, .st-item, .st-item-icon, .st-search, .st-plus`;
     let unmount = mountSquircles(root, selector);
     const observer = new MutationObserver(() => { unmount(); unmount = mountSquircles(root, selector); });
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
@@ -1066,9 +1066,6 @@
   <button class="st-back" type="button" onclick={back}>
     <Icon {PM} name="chev" /><span>Back</span>
   </button>
-  <div class="st-banner st-banner-art st-detail-banner" style={art(pair)} aria-hidden="true">
-    <span class="st-banner-mark"><span class="st-thumb is-hero" style={art(pair)}></span></span>
-  </div>
   <!-- Icon, copy, then the one action at the right edge, all on one line
        like the hero card and every row. Anything the action needs to
        explain goes under the head as its own line. -->

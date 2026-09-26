@@ -4,10 +4,11 @@
    medium page title, 13px medium names over 12px hints, 30px controls whose
    corners are the card's radius less its padding, 32px between sections.
 
-   One text edge: fills (cards, the carousel, banners) span the column, and
-   every line of text outside them is inset by --st-inset, the same 14px
-   the text inside a card sits in. Headings, notes, row labels and card
-   icons all share that edge, as a Settings page's text does. Corners are
+   One text edge: fills (cards, the carousel) span the column, and every
+   line of text outside them is inset by --st-inset, the same 14px the text
+   inside a card sits in. Headings, notes, row labels and card icons all
+   share that edge, as a Settings page's text does. The page title is the
+   exception: it starts where the toolbar's pill does. Corners are
    Lisse squircles (settings/squircle.ts). Views inside slide the way you
    moved (StoreScreen.svelte). */
 
@@ -31,14 +32,13 @@
 .st-main{min-width:0;min-height:0;flex:1;display:flex;flex-direction:column}
 
 /* ── header ── */
-/* The title on the text edge, then one 32px toolbar: where you are, search,
-   Publish. */
+/* The title over the pill's edge, then one 32px toolbar: where you are,
+   search, Publish. */
 .st-head{width:960px;max-width:100%;margin:0 auto 32px;display:flex;flex-direction:column;gap:16px}
-.st-title{padding:0 var(--st-inset);font-size:22px;line-height:28px;font-weight:var(--fw-medium);letter-spacing:-.015em;color:var(--tx)}
+.st-title{font-size:22px;line-height:28px;font-weight:var(--fw-medium);letter-spacing:-.015em;color:var(--tx)}
 .st-toolbar{display:flex;align-items:center;gap:8px}
-/* Segment labels sit on the text edge: 3px inset + 11px padding. */
 #store-screen .segmented{--segment-inset:3px;flex:none;gap:2px;margin-right:auto;padding:var(--segment-inset);background:var(--bg-field);border-radius:var(--r-md);box-shadow:none}
-#store-screen .segmented button{height:26px;padding:0 11px;border-radius:calc(var(--r-md) - var(--segment-inset));color:var(--tx-3);font-size:var(--fs-md);font-weight:var(--fw-medium);transition:background var(--dur-1),color var(--dur-1)}
+#store-screen .segmented button{height:26px;padding:0 14px;border-radius:calc(var(--r-md) - var(--segment-inset));color:var(--tx-3);font-size:var(--fs-md);font-weight:var(--fw-medium);transition:background var(--dur-1),color var(--dur-1)}
 #store-screen .segmented button:hover{color:var(--tx)}
 #store-screen .segmented button.on{background:var(--bg-float);color:var(--tx);box-shadow:none}
 #store-screen .segmented button:focus-visible{outline:0;box-shadow:inset 0 0 0 2px var(--ink-3)}
@@ -68,22 +68,6 @@
 .st-thumb{position:relative;display:block;flex:none;width:44px;height:44px;border-radius:var(--r-lg);overflow:hidden}
 .st-thumb.is-hero{width:80px;height:80px;border-radius:20px}
 
-/* Banners: wide artwork every extension carries. Until the registry serves
-   uploaded ones, the same two hues make a looser field than the icon's. */
-.st-banner{position:relative;display:grid;place-items:center;overflow:hidden;background:var(--bg-float)}
-.st-banner>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
-.st-banner-art{
-  background:
-    radial-gradient(55% 80% at 72% 22%, color-mix(in oklch, var(--art-b) 80%, white) 0%, transparent 70%),
-    radial-gradient(70% 110% at 22% 108%, var(--art-a) 0%, transparent 72%),
-    radial-gradient(80% 70% at 88% 100%, color-mix(in oklch, var(--art-a) 45%, black) 0%, transparent 75%),
-    linear-gradient(160deg, color-mix(in oklch, var(--art-b) 70%, var(--art-a)), color-mix(in oklch, var(--art-a) 70%, black))}
-.st-banner-art::after{content:"";position:absolute;inset:0;background:repeating-linear-gradient(115deg, rgb(255 255 255 / .05) 0 1px, transparent 1px 14px);pointer-events:none}
-/* The icon is squircle-clipped, so its lift is a filter on a wrapper. */
-.st-banner-mark{position:relative;z-index:1;display:block;filter:drop-shadow(0 14px 22px rgb(0 0 0 / .32)) drop-shadow(0 2px 4px rgb(0 0 0 / .18))}
-.st-banner-mark>.st-thumb{width:88px;height:88px;border-radius:22px}
-.st-detail-banner{height:200px;border-radius:var(--r-xl)}
-.st-detail-banner+.st-detail-head{margin-top:-12px}
 
 /* ── carousel ── */
 /* One collection at a time on a card that deepens into the tint of its first
@@ -204,7 +188,7 @@ button.st-plus:hover{background:var(--bg-row-hi);color:var(--tx)}
 .st-installed-host .sg-group{margin:0}
 
 /* ── detail ── */
-.st-back{align-self:flex-start;display:inline-flex;align-items:center;gap:2px;height:22px;margin:-6px 0 -20px calc(var(--st-inset) - 6px);padding:0 8px 0 3px;border:0;border-radius:var(--r-sm);color:var(--tx-3);font-size:var(--fs-sm);font-weight:var(--fw-medium);transition:color var(--dur-1),background var(--dur-1)}
+.st-back{align-self:flex-start;display:inline-flex;align-items:center;gap:2px;height:22px;margin:-6px 0 -8px calc(var(--st-inset) - 6px);padding:0 8px 0 3px;border:0;border-radius:var(--r-sm);color:var(--tx-3);font-size:var(--fs-sm);font-weight:var(--fw-medium);transition:color var(--dur-1),background var(--dur-1)}
 .st-back svg{width:12px;height:12px;transform:rotate(180deg)}
 .st-back:hover{color:var(--tx);background:var(--ink-1)}
 .st-back:focus-visible{outline:0;box-shadow:0 0 0 2px var(--ink-2)}
@@ -274,7 +258,7 @@ button.st-plus:hover{background:var(--bg-row-hi);color:var(--tx)}
 .st-empty .btn{margin-top:12px}
 .st-empty .st-coord{font:var(--fs-sm)/18px var(--f-mono);color:var(--tx-2)}
 
-#store-screen .st-item,#store-screen .st-carousel,#store-screen .st-banner,#store-screen .st-head,#store-screen .st-facts,#store-screen .st-empty-card{user-select:none;-webkit-user-select:none}
+#store-screen .st-item,#store-screen .st-carousel,#store-screen .st-head,#store-screen .st-facts,#store-screen .st-empty-card{user-select:none;-webkit-user-select:none}
 
 /* ── live data: loading, failure, row controls ── */
 /* Skeleton rows hold the shape of what is coming; a slow breath says it is
