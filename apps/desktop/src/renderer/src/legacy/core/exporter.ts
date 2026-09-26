@@ -1,5 +1,6 @@
 import { animateExportPreview } from './export-preview';
 import { prepareFrame } from './frame-preparation';
+import { captureFramePixels, renderOpaqueFrame } from './frame-capture';
 import { installRenderQueue, wavBytes } from './render-queue';
 /* Ported from js/core/exporter.js — behavior-preserving. */
 import {
@@ -565,10 +566,9 @@ function renderInto(T: any, W: any, H: any, mblur: any) {
 /* Transparent frames: read back the composited FBO (premultiplied, bottom-up)
    and convert to straight-alpha top-down ImageData. */
 function alphaFrame(T: any, W: any, H: any, mblur: any) {
-  const px: any = PM.GL.renderToPixels(T, W, H, {
+  const px = captureFramePixels(PM, T, W, H, {
     transparent: true, mblur: mblur !== false, mbSamples: 20, shutter: PM.proj.shutter || .5,
   });
-  if (!px) return null;
   const cv: any = window.document.createElement('canvas');
   cv.width = W; cv.height = H;
   const c: any = cv.getContext('2d');
@@ -581,9 +581,9 @@ function alphaFrame(T: any, W: any, H: any, mblur: any) {
       if (a === 255) { d[di] = px[si]; d[di + 1] = px[si + 1]; d[di + 2] = px[si + 2]; d[di + 3] = 255; }
       else if (a === 0) { d[di] = d[di + 1] = d[di + 2] = d[di + 3] = 0; }
       else {
-        d[di] = Math.min(255, (px[si] * 255 / a) | 0);
-        d[di + 1] = Math.min(255, (px[si + 1] * 255 / a) | 0);
-        d[di + 2] = Math.min(255, (px[si + 2] * 255 / a) | 0);
+        d[di] = Math.min(255, (px[si]! * 255 / a) | 0);
+        d[di + 1] = Math.min(255, (px[si + 1]! * 255 / a) | 0);
+        d[di + 2] = Math.min(255, (px[si + 2]! * 255 / a) | 0);
         d[di + 3] = a;
       }
     }
@@ -593,12 +593,56 @@ function alphaFrame(T: any, W: any, H: any, mblur: any) {
 }
 
 async function exportNative({opts,W,H,t0,t1,total,ui,pctx}:any) {
-  const bridge=(hostBridge() as any)?.render;if(!bridge)throw new Error('The native encoder requires the updated desktop runtime.');
-  const token=nativeToken;
-  if(!token)throw new Error('Export destination is unavailable');
-  const chunks=async(bytes:Uint8Array,audio=false)=>{for(let at=0;at<bytes.length;at+=4*1024*1024)await bridge.write(token,bytes.slice(at,at+4*1024*1024),audio);};
-  for(let i=0;i<total;i++){if(X.cancel)break;const T=t0+i/opts.fps;await prepareFrame(PM,T);const cv=opts.alpha?alphaFrame(T,W,H,opts.mblur):PM.renderFrameTo(T,W,H,{mblur:opts.mblur});const pixels=cv.getContext('2d').getImageData(0,0,W,H).data;const bytes=new Uint8Array(pixels.buffer,pixels.byteOffset,pixels.byteLength);await chunks(bytes);pctx.drawImage(cv,0,0,ui.prev.width,ui.prev.height);ui.set(i+1,opts.format==='prores'?'ProRes 4444':'H.264');await new Promise(r=>setTimeout(r,0));}
-    if(X.cancel)return;if(opts.audio!==false&&PM.Audio.hasAudibleLayers(PM.proj)){const mix=await PM.Audio.renderOffline(t0,t1);if(mix)await chunks(wavBytes(mix),true);}const result=await bridge.finish(token);nativeToken=null;if(result.cancelled)X.cancel=true;else if(!result.path)throw new Error('Could not save video');
+  const bridge = (hostBridge() as any)?.render;
+  if (!bridge) throw new Error('The native encoder requires the updated desktop runtime.');
+  const token = nativeToken;
+  if (!token) throw new Error('Export destination is unavailable');
+  const chunks = async (bytes: Uint8Array, audio = false) => {
+    const limit = 4 * 1024 * 1024;
+    for (let at = 0; at < bytes.length; at += limit) {
+      // A view of a large buffer can serialize its entire backing store through
+      // Electron. Keep bounded, owned chunks; avoid copying an already-owned
+      // complete frame/audio buffer that fits in one message.
+      const chunk = bytes.length <= limit && bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+        ? bytes : bytes.slice(at, at + limit);
+      await bridge.write(token, chunk, audio);
+    }
+  };
+  // The canvas is only the progress preview for opaque frames. Retain one
+  // surface per export instead of uploading and reading a new canvas per frame.
+  const preview = opts.alpha ? null : window.document.createElement('canvas');
+  try {
+    if (preview) { preview.width = W; preview.height = H; }
+    const previewContext = preview?.getContext('2d');
+    if (preview && !previewContext) throw new Error('Could not create export preview');
+    for (let i = 0; i < total; i++) {
+      if (X.cancel) break;
+      const T = t0 + i / opts.fps;
+      await prepareFrame(PM, T);
+      if (X.cancel) break;
+      // Preserve Canvas2D's established premultiply/unpremultiply rounding for
+      // alpha delivery. Opaque frames have no such round trip to preserve.
+      const image = preview ? renderOpaqueFrame(PM, T, W, H, { mblur: opts.mblur }) : null;
+      const cv = preview || alphaFrame(T, W, H, opts.mblur);
+      const pixels = image ? image.data : cv.getContext('2d').getImageData(0, 0, W, H).data;
+      await chunks(new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength));
+      if (image) previewContext!.putImageData(image, 0, 0);
+      pctx.drawImage(cv, 0, 0, ui.prev.width, ui.prev.height);
+      ui.set(i + 1, opts.format === 'prores' ? 'ProRes 4444' : 'H.264');
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    if (X.cancel) return;
+    if (opts.audio !== false && PM.Audio.hasAudibleLayers(PM.proj)) {
+      const mix = await PM.Audio.renderOffline(t0, t1);
+      if (mix) await chunks(wavBytes(mix), true);
+    }
+    const result = await bridge.finish(token);
+    nativeToken = null;
+    if (result.cancelled) X.cancel = true;
+    else if (!result.path) throw new Error('Could not save video');
+  } finally {
+    if (preview) { preview.width = 0; preview.height = 0; }
+  }
 }
 
 async function exportWebCodecs({ opts, W, H, t0, t1, total, ui, pctx, bitrate }: any) {

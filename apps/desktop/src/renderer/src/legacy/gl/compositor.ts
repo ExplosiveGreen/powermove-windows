@@ -35,6 +35,35 @@ export function compositingLevel(layers: any[], parentGroup: string | null): any
   return layers.filter((layer: any) => (layer.group || null) === parentGroup);
 }
 
+/** Index membership once per pass. Rescanning the whole composition for every
+ * ordinary group makes flattening a grouped scene quadratic in layer count.
+ * Keep this index local: edits and time-dependent group boundaries must be
+ * visible immediately, including nested composition and motion-blur passes. */
+export function compositingLayers(layers: any[], parentGroup: string | null, boundary: (layer: any) => boolean): any[] {
+  let members: Map<string | null, any[]> | undefined;
+  const children = (parent: string) => {
+    if (!members) {
+      members = new Map();
+      for (const layer of layers) {
+        const owner = layer.group || null;
+        const siblings = members.get(owner);
+        if (siblings) siblings.push(layer);
+        else members.set(owner, [layer]);
+      }
+    }
+    return members.get(parent) || [];
+  };
+  const result: any[] = [];
+  const visit = (level: any[]) => {
+    for (const layer of level) {
+      if (layer.type === 'group' && !boundary(layer)) visit(children(layer.id));
+      else result.push(layer);
+    }
+  };
+  visit(compositingLevel(layers, parentGroup));
+  return result;
+}
+
 /** A group remains in a solo render when the solo switch lives on any nested
  * member. Without this, the containing pass would be skipped before reaching
  * that member. */
@@ -1255,6 +1284,7 @@ function compositeAdjustment(
 }
 
 function activeTransition(L: any, T: any) {
+  if (!L.transitionIn && !L.transitionOut) return null;
   const groupSpan = L.type === 'group' ? PM.groupSpan?.(L) : null;
   const start = Number(groupSpan?.from ?? L.from) || 0;
   const length = Math.max(0, Number(groupSpan?.dur ?? L.dur) || 0);
@@ -1294,13 +1324,7 @@ function groupCreatesCompositingBoundary(L: any, T: any, opt: any): boolean {
  * becomes an offscreen boundary only on frames where one of its visual layer
  * properties needs the combined descendant image. */
 function compositingPass(layers: any[], parentGroup: string | null, T: any, opt: any): any[] {
-  const result: any[] = [];
-  for (const layer of compositingLevel(layers, parentGroup)) {
-    if (layer.type === 'group' && !groupCreatesCompositingBoundary(layer, T, opt)) {
-      result.push(...compositingPass(layers, layer.id, T, opt));
-    } else result.push(layer);
-  }
-  return result;
+  return compositingLayers(layers, parentGroup, layer => groupCreatesCompositingBoundary(layer, T, opt));
 }
 
 function runTransition(L: any, T: any, activeTr: any, before: any, withLayer: any, W: any, H: any) {
@@ -1619,7 +1643,7 @@ GL.render = (T: any, opt: any = {}) => {
 };
 
 /** Render one frame and read back raw RGBA pixels (bottom-up, premultiplied).
-    Used for transparent PNG export where the canvas itself is opaque. */
+    Opaque callers can request topDownOpaque for directly consumable image data. */
 GL.renderToPixels = (T: any, W: any, H: any, opt: any = {}) => {
   const gl = GL.gl; if (!gl) return null;
   const previousPreviews = useVideoPreviews; useVideoPreviews = false;
@@ -1641,7 +1665,7 @@ GL.renderToPixels = (T: any, W: any, H: any, opt: any = {}) => {
         gl.bindFramebuffer(gl.FRAMEBUFFER, target);
         gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, color);
         gl.viewport(0, 0, W, H);
-        const p = program('present', PM.FRAG_COPY), g = use(p);
+        const p = opt.topDownOpaque ? program('capture-opaque', PM.FRAG_CAPTURE_OPAQUE) : program('present', PM.FRAG_COPY), g = use(p);
         bindTex(0, acc.tex); setI(p, 'u_tex', 0);
         g.u('u_m', fullQuad(W, H)); g.u('u_res', W, H); g.u('u_uv', 0, 0, 1, 1);
         gl.disable(gl.BLEND); draw(); gl.enable(gl.BLEND);

@@ -396,6 +396,35 @@ afterEach(async () => {
 });
 
 describe('InspectorPanel', () => {
+  it('updates animated values on time events without rebuilding parenting choices', () => {
+    const candidates = Array.from({ length: 40 }, (_, i) => layer(`L${i}`));
+    const { api, runtime } = setup(candidates, ['L0']);
+    let time = 0;
+    api.transport.time = () => time;
+    vi.spyOn(api.anim, 'ev').mockImplementation((candidate, channel, at) =>
+      channel === 'rotation' ? at * 10 : ((candidate as TestLayer).p[channel]?.v ?? null));
+    const cycles = vi.mocked(runtime.wouldCycle);
+    cycles.mockClear();
+    for (time of [1, 2, .5, 0]) {
+      api.events.emit('time', time);
+      flushSync();
+      expect(labelledSpinbutton('Rotation').value).toBe(String(time * 10));
+    }
+    expect(cycles).not.toHaveBeenCalled();
+
+    candidates[1]!.name = 'Renamed parent';
+    api.events.emit('project:changed', { kind: 'structure' });
+    flushSync();
+    expect(cycles).toHaveBeenCalled();
+    expect([...labelledSelect('Parent').options].some(option => option.textContent === 'Renamed parent')).toBe(true);
+    cycles.mockClear();
+    runtime.sel.layers = ['L1'];
+    api.events.emit('selection', runtime.sel);
+    flushSync();
+    expect(target.querySelector('[data-inspector-layer="L1"]')).not.toBeNull();
+    expect(cycles).toHaveBeenCalled();
+  });
+
   it('exposes the compact footprint of a transparent null object', () => {
     const candidate = layer('N'); candidate.type = 'null'; candidate.name = 'Null';
     candidate.d = { color: '#6A6A70', w: 100, h: 100, radius: 0 };

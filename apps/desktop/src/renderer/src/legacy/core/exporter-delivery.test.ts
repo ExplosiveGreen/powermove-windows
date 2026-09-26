@@ -32,7 +32,7 @@ function setup(download: any = vi.fn(async (_blob: Blob, _name: string): Promise
     scope: [], pause() {}, setTime() {}, time: 0, playing: false, quality: 1,
     round: (number: number) => number, tc: () => '0:00',
     Audio: { hasAudibleLayers: () => false },
-    GL: { canvas: frame, resize() {}, render() {} },
+    GL: { canvas: frame, resize() {}, render() {}, renderToPixels: vi.fn(() => new Uint8Array(16)) },
     renderFrameTo: () => frame,
   };
   install(PM);
@@ -43,13 +43,22 @@ const options = { format: 'png', fps: 2, scale: 1, audio: false, mblur: false };
 let originalMediaRecorder: any;
 
 beforeEach(() => {
+  vi.stubGlobal('ImageData', class {
+    data: Uint8ClampedArray;
+    width: number;
+    height: number;
+    constructor(data: Uint8ClampedArray, width: number, height: number) {
+      this.data = data; this.width = width; this.height = height;
+    }
+  });
   originalMediaRecorder = (window as any).MediaRecorder;
-  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({ drawImage() {} }) as any);
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({ drawImage() {}, putImageData() {} }) as any);
   delete (window as any).showDirectoryPicker;
   delete (window as any).powermove;
 });
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   delete (window as any).showDirectoryPicker;
   delete (window as any).powermove;
   if (originalMediaRecorder === undefined) delete (window as any).MediaRecorder;
@@ -72,6 +81,7 @@ describe('export delivery', () => {
     expect(await result).toEqual({ cancelled: true });
     expect(openedProgress).toBe(0);
     expect(PM.renderFrameTo).not.toHaveBeenCalled();
+    expect(PM.GL.renderToPixels).not.toHaveBeenCalled();
     expect(write).not.toHaveBeenCalled();
     expect(X.busy).toBe(false);
   });
@@ -119,11 +129,11 @@ describe('export delivery', () => {
     expect(X.busy).toBe(false);
   });
 
-  it('streams the owned pixel buffer without copying a second complete frame', async () => {
-    const { X, frame } = setup();
-    const pixels = new Uint8ClampedArray(new ArrayBuffer(24), 4, 16);
-    pixels.set(Array.from({ length: 16 }, (_, i) => i * 15));
-    frame.getContext = () => ({ getImageData: () => ({ data: pixels }) });
+  it('streams opaque image pixels directly without a canvas readback or an extra chunk copy', async () => {
+    const { X, PM, frame } = setup();
+    const captured = Uint8Array.from([120,135,150,255,180,195,210,255,0,15,30,255,60,75,90,255]);
+    PM.GL.renderToPixels.mockImplementation(() => captured);
+    frame.getContext = () => { throw new Error('The opaque encoder must not read a canvas'); };
     const slice = vi.spyOn(Uint8Array.prototype, 'slice');
     const write = vi.fn(async () => {});
     (window as any).powermove = { render: {
@@ -131,8 +141,67 @@ describe('export delivery', () => {
     } };
     expect(await X.run({ ...options, format: 'mp4' })).toEqual({ cancelled: false });
     expect(write).toHaveBeenCalledTimes(2);
-    expect(Array.from((write.mock.calls[0] as any)[1])).toEqual(Array.from(pixels));
-    expect(slice.mock.contexts.some(view => view instanceof Uint8Array && view.buffer === pixels.buffer && view.byteOffset === pixels.byteOffset)).toBe(true);
+    const bytes = (write.mock.calls[0] as any)[1] as Uint8Array;
+    expect([...bytes]).toEqual([120,135,150,255,180,195,210,255,0,15,30,255,60,75,90,255]);
+    expect(bytes.buffer).toBe(captured.buffer);
+    expect(bytes.byteLength).toBe(bytes.buffer.byteLength);
+    expect(slice.mock.contexts.some(view => view instanceof Uint8Array && view.buffer === bytes.buffer)).toBe(false);
+  });
+
+  it('keeps large-frame IPC chunks bounded and sequential, and cancels after the in-flight frame', async () => {
+    const { X, PM } = setup();
+    PM.proj.w = 1024; PM.proj.h = 1026;
+    const frameBytes = 1024 * 1026 * 4;
+    PM.GL.renderToPixels.mockImplementation(() => new Uint8Array(frameBytes));
+    const releases: Array<() => void> = [];
+    const write = vi.fn((_token: string, _bytes: Uint8Array) => new Promise<void>(resolve => releases.push(resolve)));
+    const finish = vi.fn(), cancel = vi.fn(async () => {});
+    (window as any).powermove = { render: { start: async () => 'render', write, finish, cancel } };
+    const pending = X.run({ ...options, format: 'mp4' });
+    await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+    expect(PM.GL.renderToPixels).toHaveBeenCalledOnce();
+    const first = write.mock.calls[0]![1];
+    expect(first.byteLength).toBe(4 * 1024 * 1024);
+    expect(first.buffer.byteLength).toBe(first.byteLength);
+    X.cancel = true;
+    releases.shift()!();
+    await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(2));
+    const second = write.mock.calls[1]![1];
+    expect(second.byteLength).toBe(frameBytes - first.byteLength);
+    expect(second.buffer.byteLength).toBe(second.byteLength);
+    expect(finish).not.toHaveBeenCalled();
+    expect(cancel).not.toHaveBeenCalled();
+    releases.shift()!();
+    expect(await pending).toEqual({ cancelled: true });
+    expect(PM.GL.renderToPixels).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledWith('render');
+    expect(finish).not.toHaveBeenCalled();
+    expect(X.busy).toBe(false);
+  });
+
+  it.each(['capture', 'write', 'finish'])('releases the native job and preview after a %s failure, then allows retry', async failure => {
+    const { X, PM } = setup();
+    PM.time = .25; PM.quality = .5;
+    PM.setTime = vi.fn();
+    let preview: HTMLCanvasElement | undefined;
+    vi.mocked(HTMLCanvasElement.prototype.getContext).mockImplementation(function (this: HTMLCanvasElement) {
+      if (this.width === 2 && this.height === 2) preview = this;
+      return { drawImage() {}, putImageData() {} } as any;
+    });
+    const write = vi.fn(async () => {}), finish = vi.fn(async () => ({ path: '/tmp/out.mp4' })), cancel = vi.fn(async () => {});
+    (window as any).powermove = { render: { start: async () => 'render', write, finish, cancel } };
+    if (failure === 'capture') PM.GL.renderToPixels.mockImplementationOnce(() => { throw new Error('Injected failure'); });
+    if (failure === 'write') write.mockRejectedValueOnce(new Error('Injected failure'));
+    if (failure === 'finish') finish.mockRejectedValueOnce(new Error('Injected failure'));
+    expect(await X.run({ ...options, format: 'mp4' })).toEqual({ error: 'Injected failure' });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(preview).toMatchObject({ width: 0, height: 0 });
+    expect(PM.quality).toBe(.5);
+    expect(PM.setTime).toHaveBeenCalledWith(.25, { force: true });
+    expect(X.busy).toBe(false);
+    expect(await X.run({ ...options, format: 'mp4' })).toEqual({ cancelled: false });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(preview).toMatchObject({ width: 0, height: 0 });
   });
   it('cancels PNG export when destination selection is cancelled, without opening frame saves', async () => {
     const { X, toast, download } = setup();

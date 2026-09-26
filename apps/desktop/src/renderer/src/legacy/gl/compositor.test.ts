@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { PMRegistry } from '../registry';
 import {
-  compositingLevel, continuousRasterScale, effectParamValue, groupContainsSolo,
+  compositingLayers, compositingLevel, continuousRasterScale, effectParamValue, groupContainsSolo,
   hasRenderableEffects, install, paramUniformName, svgRasterDimensions, trackPresentedVideoFrames,
 } from './compositor';
 
@@ -180,5 +180,43 @@ describe('compositor effect fast path', () => {
     expect(String(PM.GL.renderToPixels)).toContain('PM.beginEval(T)');
     expect(effectParamValue(PM, {}, { p: {} }, { k: 'amount', def: 12 }, 0)).toBe(12);
     expect(effectParamValue(PM, {}, { p: { amount: { v: 42 } } }, { k: 'amount', def: 12 }, 0)).toBe(42);
+  });
+});
+
+describe('linear compositing traversal', () => {
+  it('matches recursive stack order with nested boundaries, missing groups and edits', () => {
+    const layers: any[] = [
+      { id: 'top', type: 'shape' },
+      { id: 'outer', type: 'group' },
+      { id: 'a', type: 'shape', group: 'outer' },
+      { id: 'inner', type: 'group', group: 'outer' },
+      { id: 'b', type: 'shape', group: 'inner' },
+      { id: 'c', type: 'shape', group: 'outer' },
+      { id: 'orphan', type: 'shape', group: 'missing' },
+      { id: 'bottom', type: 'shape', group: '' },
+    ];
+    const reference = (parent: string | null, boundaries: Set<string>): any[] =>
+      compositingLevel(layers, parent).flatMap(layer => layer.type === 'group' && !boundaries.has(layer.id)
+        ? reference(layer.id, boundaries) : [layer]);
+    for (const edit of [() => {}, () => { layers[4].group = 'outer'; }, () => { layers.reverse(); }]) {
+      edit();
+      for (const parent of [null, 'outer', 'inner']) {
+        for (const isolated of [[], ['inner'], ['outer'], ['outer', 'inner']]) {
+          const boundaries = new Set(isolated);
+          expect(compositingLayers(layers, parent, layer => boundaries.has(layer.id))).toEqual(reference(parent, boundaries));
+        }
+      }
+    }
+  });
+
+  it('reads membership a linear number of times in a heavily grouped scene', () => {
+    let reads = 0;
+    const layers = Array.from({ length: 2000 }, (_, i) => [
+      { id: `group-${i}`, type: 'group', get group() { reads++; return null; } },
+      { id: `child-${i}`, type: 'shape', get group() { reads++; return `group-${i}`; } },
+    ]).flat();
+    const result = compositingLayers(layers, null, () => false);
+    expect(result.map(layer => layer.id)).toEqual(Array.from({ length: 2000 }, (_, i) => `child-${i}`));
+    expect(reads).toBeLessThanOrEqual(layers.length * 2);
   });
 });

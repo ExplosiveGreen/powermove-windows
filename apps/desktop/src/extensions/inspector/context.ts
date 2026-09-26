@@ -93,6 +93,10 @@ function createReactiveState(api: PowermoveAPI): Pick<InspectorContext, 'doc' | 
     history: 0
   };
   const signal = createInspectorSignal();
+  // Playback and scrubbing change evaluated values, not the document or
+  // selection. Keep structural derivations (especially parenting choices)
+  // asleep while the time-dependent controls continue updating every frame.
+  const timeSignal = createInspectorSignal();
   const subscriptions = [
     api.events.on('project:changed', ({ kind }) => {
       if (kind === 'replace') for (const key of Object.keys(counts) as TickKind[]) counts[key]++;
@@ -100,7 +104,7 @@ function createReactiveState(api: PowermoveAPI): Pick<InspectorContext, 'doc' | 
       signal.bump();
     }),
     api.events.on('selection', () => signal.bump()),
-    api.events.on('time', () => signal.bump()),
+    api.events.on('time', () => timeSignal.bump()),
     api.events.on('transport', () => signal.bump()),
     // Host UI invalidation (stopwatch toggles, reveal, restores) repaints panels.
     api.events.on('invalidate', (what) => { if (what === 'ui') signal.bump(); })
@@ -127,7 +131,7 @@ function createReactiveState(api: PowermoveAPI): Pick<InspectorContext, 'doc' | 
       get chan() { signal.version; return api.selection.chan(); }
     },
     transport: {
-      get time() { signal.version; return api.transport.time(); }
+      get time() { signal.version; timeSignal.version; return api.transport.time(); }
     }
   };
 }

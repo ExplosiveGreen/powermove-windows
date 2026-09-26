@@ -95,6 +95,14 @@ void main(){
 
 PM.FRAG_COPY = PRE + `void main(){ o = texture(u_tex, v_st); }`;
 
+// Fuse row orientation and opaque alpha into the existing RGBA8 capture pass.
+// Integer coordinates read each source pixel once without filtering neighbors.
+PM.FRAG_CAPTURE_OPAQUE = PRE + `void main(){
+  ivec2 at = ivec2(gl_FragCoord.xy);
+  at.y = textureSize(u_tex, 0).y - 1 - at.y;
+  o = vec4(texelFetch(u_tex, at, 0).rgb, 1.0);
+}`;
+
 PM.FRAG_SOLID = PRE + `uniform vec4 u_color; void main(){ o = u_color; }`;
 PM.FRAG_BACKGROUND_FILL = PRE + `
 uniform vec4 u_stops[8];

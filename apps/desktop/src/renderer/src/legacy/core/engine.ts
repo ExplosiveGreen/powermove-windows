@@ -5,6 +5,7 @@ import { cancelPreviewVideoSeek, seekPreviewVideo } from './video-seek';
 import { capturePlaybackVideoFrame, clearPlaybackVideoFrames, startPlaybackVideoFrames, stopPlaybackVideoFrames, playbackVideoFrameAt, type PlaybackVideoFrame } from './video-playback-frames';
 import { sequencePlaybackTime } from '../../../../shared/image-sequence';
 import { prepareFrame } from './frame-preparation';
+import { renderOpaqueFrame } from './frame-capture';
 import { installPreviewCache } from './preview-cache';
 import { sourceTime } from './retiming';
 import { viewerService } from './services';
@@ -429,30 +430,10 @@ window.document?.addEventListener?.('visibilitychange',resumeView);
 
 /* ── offscreen frame render (agent `look`, exporter, thumbnails) ── */
 PM.renderFrameTo = (T: any, w: any, h: any, options: any = {}) => {
-  const quality = PM.quality;
-  try {
-    PM.quality = 1;
-    const motionBlur = options.mblur !== false;
-    // Capture into an offscreen target. Resizing the visible canvas used to
-    // destroy its large preview buffers twice for every small thumbnail.
-    const pixels = PM.GL.renderToPixels(T, w, h, {
-      mblur: motionBlur, mbSamples: motionBlur ? Math.max(1, Number(options.mbSamples) || 16) : 1,
-      shutter: PM.proj.shutter || .5, opaque: true,
-    });
-    const out = window.document.createElement('canvas');
-    out.width = w; out.height = h;
-    const context = out.getContext('2d')!;
-    const image = context.createImageData(w, h);
-    for (let y = 0; y < h; y++) {
-      image.data.set(pixels.subarray((h - y - 1) * w * 4, (h - y) * w * 4), y * w * 4);
-    }
-    // The established capture API is opaque, with transparency over black,
-    // just like copying the alpha:false WebGL presentation canvas.
-    for (let i = 3; i < image.data.length; i += 4) image.data[i] = 255;
-    context.putImageData(image, 0, 0);
-    return out;
-  } finally {
-    PM.quality = quality;
-  }
+  const image = renderOpaqueFrame(PM, T, w, h, options);
+  const out = window.document.createElement('canvas');
+  out.width = w; out.height = h;
+  out.getContext('2d')!.putImageData(image, 0, 0);
+  return out;
 };
 }
