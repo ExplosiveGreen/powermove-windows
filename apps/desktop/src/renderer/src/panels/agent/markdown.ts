@@ -24,9 +24,10 @@ export type Block =
 
 type InlineFlags = { b?: boolean; i?: boolean };
 
-const SAFE_HREF = /^(https?:\/\/|mailto:)/i;
+// Only what main's openExternal will actually open; anything else stays text.
+const SAFE_HREF = /^https?:\/\//i;
 
-/** Inline spans: `code`, **bold**, *italic* / _italic_, [text](url), bare URLs. */
+/** Inline spans: `code`, **bold**, *italic* / _italic_, [text](url), ![alt](url), <url>, bare URLs. */
 export function inlineRuns(text: string, flags: InlineFlags = {}): Run[] {
   const runs: Run[] = [];
   let plain = '';
@@ -56,12 +57,18 @@ export function inlineRuns(text: string, flags: InlineFlags = {}): Run[] {
         flush(); runs.push(...inlineRuns(m[1]!, { ...flags, i: true })); i += m[0].length; continue;
       }
     }
-    // URLs may carry one level of parentheses (Wikimedia file names do).
-    if ((m = /^\[([^\]]+)\]\(((?:[^()\s]|\([^()\s]*\))+)\)/.exec(rest))) {
+    // URLs may carry one level of parentheses (Wikimedia file names do). An
+    // optional "title" is dropped. Images become links to the image: model
+    // output never loads remote content into the panel on its own.
+    if ((m = /^(!?)\[([^\]]*)\]\(<?((?:[^()\s<>]|\([^()\s]*\))+)>?(?:\s+"[^"]*")?\)/.exec(rest))) {
       flush();
-      const href = m[2]!;
-      runs.push(SAFE_HREF.test(href) ? { text: m[1]!, href, ...flags } : { text: m[1]!, ...flags });
+      const href = m[3]!;
+      const label = m[2] || (m[1] ? href.split('/').filter(Boolean).at(-1) || href : href);
+      runs.push(SAFE_HREF.test(href) ? { text: label, href, ...flags } : { text: label, ...flags });
       i += m[0].length; continue;
+    }
+    if ((m = /^<(https?:\/\/[^\s<>]+)>/i.exec(rest))) {
+      flush(); runs.push({ text: m[1]!, href: m[1]!, ...flags }); i += m[0].length; continue;
     }
     // A bare URL ends before trailing punctuation, so "see https://x.y." links x.y.
     if ((m = /^https?:\/\/(?:[^\s<>()]|\([^()\s]*\))*(?:[^\s<>().,;:!?'"]|\([^()\s]*\))/.exec(rest))) {

@@ -23,7 +23,7 @@ for (const accepted of [true, false]) {
         (window as any).__resolveReasoningSteer = null;
         (window as any).__reasoningRuns.at(-1).options.onTrace({ kind: 'thought', text: `Inspecting timing ${index}.` });
       }, index);
-      await expect(page.locator('.agent-trace.is-live .agent-tool-thought')).toContainText(`Inspecting timing ${index}.`);
+      await expect(page.locator('.agent-trace.is-live .agent-thought-prose')).toContainText(`Inspecting timing ${index}.`);
       await composer.fill(`Refine timing ${index}`);
       await composer.press('Enter');
       await page.waitForFunction(() => typeof (window as any).__resolveReasoningSteer === 'function');

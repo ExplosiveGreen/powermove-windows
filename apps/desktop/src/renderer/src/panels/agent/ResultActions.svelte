@@ -1,6 +1,6 @@
 <script lang="ts">
-  import Markdown from './Markdown.svelte';
   import Icon from '../Icon.svelte';
+  import Markdown from './Markdown.svelte';
   import { openImagePreview } from './attachments';
   import { agentState, describePanelAction } from './agent-state.svelte';
 
@@ -45,7 +45,9 @@
       <div class="agent-card-kicker">Rendered result</div>
       <h3>Review the actual result</h3>
     {/if}
-    {#if showReviewMessage}<Markdown text={reviewMessage || 'The rendered change is ready.'} />{/if}
+    {#if showReviewMessage}
+      <div class="agent-review-markdown"><Markdown text={reviewMessage || 'The rendered change is ready.'} /></div>
+    {/if}
     {#if run.review?.critique}<Markdown text={run.review.critique} />{/if}
     {#if reversible && !run.autonomous}<p>Powermove source changes from this run are one Command-Z Undo step.</p>{/if}
     {#if run.reviewError}
@@ -74,6 +76,7 @@
   .agent-run-details { flex: none; min-width: 0; display: flex; flex-direction: column; gap: 8px; color: var(--tx); font-size: var(--fs-md); line-height: 1.6; overflow-wrap: anywhere; }
   .agent-run-details:empty { display: none; }
   .agent-run-details p { margin: 0; white-space: pre-wrap; }
+  .agent-review-markdown { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
   .agent-run-details details { color: var(--tx-3); font-size: var(--fs-sm); }
   .agent-run-undo { align-self: flex-start; padding: 2px 0; color: var(--tx-3); font-size: var(--fs-sm); }
   .agent-run-undo:hover { color: var(--tx); }

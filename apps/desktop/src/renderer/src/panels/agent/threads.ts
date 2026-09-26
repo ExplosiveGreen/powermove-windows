@@ -1,4 +1,4 @@
-import type { AgentMessage } from './agent-state.svelte';
+import type { AgentMessage, TraceStep } from './agent-state.svelte';
 
 export interface AgentThread {
   id: string;
@@ -15,11 +15,22 @@ interface Store { get(key: string, fallback: unknown): unknown; set(key: string,
 const isRecord = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
 
 /** Streamed replies live inside trace entries; retain their prose in follow-ups. */
+/* Questions the agent asked stay in the history it sees on the next run, with
+   whatever the person answered, so it never asks the same thing twice. */
+function stepTranscript(step: TraceStep): string {
+  if (step.kind === 'text') return step.text || '';
+  if (step.kind !== 'question') return '';
+  return step.questions.map(item => {
+    const answer = step.answers?.[item.id];
+    return `You asked: ${item.question}${answer ? `\nUser answered: ${answer}` : step.status === 'closed' ? '\n(Unanswered)' : ''}`;
+  }).join('\n');
+}
+
 export function conversationForAgent(messages: AgentMessage[]): Array<{ role: string; text: string }> {
   const turns = messages.map(message => ({
     role: message.role === 'trace' ? 'assistant' : message.role,
     text: message.role === 'trace'
-      ? (message.steps || []).filter(step => step.kind === 'text').map(step => step.text || '').join('\n').trim()
+      ? (message.steps || []).map(stepTranscript).filter(Boolean).join('\n').trim()
       : message.text || '',
   })).filter(message => message.text).slice(-12);
   let remaining = 30_000;

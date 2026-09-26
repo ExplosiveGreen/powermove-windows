@@ -189,6 +189,7 @@ describe('registerCodexIpc', () => {
       IPC.compatibleConfigure,
       IPC.codexRun,
       IPC.codexSteer,
+      IPC.codexAnswer,
       IPC.codexCancel,
       IPC.codexFixPrompt,
       IPC.codexRebasePrompt,

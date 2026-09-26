@@ -1419,6 +1419,9 @@ select.pm-select-native{position:absolute!important;width:1px!important;height:1
 .agent-inline-attachment>span:last-child{line-height:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:3px}
 .agent-inline-attachment-type{display:inline-flex;align-items:center;justify-content:center;flex:none;box-sizing:border-box;min-width:1.5em;height:100%;padding:0 3px;border-radius:max(0px,calc(var(--attachment-radius) - var(--attachment-padding)));background:var(--ink-2);color:var(--tx-3);font-size:.7em;line-height:1}
 .agent-inline-attachment img{width:auto;height:100%;aspect-ratio:1;object-fit:cover;border-radius:max(0px,calc(var(--attachment-radius) - var(--attachment-padding)))}
+.agent-inline-attachment.is-sent{border:0;cursor:pointer;-webkit-user-select:none;user-select:none;background:var(--ink-2)}
+.agent-inline-attachment.is-sent:hover>span:last-child{color:var(--tx);text-decoration:underline;text-underline-offset:2px}
+.agent-inline-attachment.is-sent:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .agent-inline-attachment[draggable="true"]{cursor:grab}
 .agent-inline-attachment.is-range-selected,.agent-inline-attachment.is-selected{background:color-mix(in srgb,var(--accent) 24%,var(--ink-1));outline:1px solid var(--accent)}
 

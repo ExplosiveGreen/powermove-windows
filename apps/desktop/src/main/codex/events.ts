@@ -25,7 +25,9 @@ const TOOL_ITEM_TYPES = new Set([
   'web_search',
   'image_generation',
   'computer_use',
-  'mcp_tool_call'
+  'mcp_tool_call',
+  'collab_tool_call',
+  'context_compaction'
 ]);
 const TRACE_ITEM_ID_CHARS = 120;
 
@@ -93,6 +95,12 @@ function toolStart(item: Record<string, unknown>): CodexTraceEvent | null {
       return { kind: 'tool-start', itemId, toolName: 'image', label: 'Image' };
     case 'computer_use':
       return { kind: 'tool-start', itemId, toolName: 'computer', label: 'Computer' };
+    case 'context_compaction':
+      return { kind: 'tool-start', itemId, toolName: 'compact', label: 'Compacting context' };
+    case 'collab_tool_call': {
+      const detail = toolDetail('Task', { description: item.prompt });
+      return { kind: 'tool-start', itemId, toolName: 'agent', label: 'Subagent', ...(detail ? { detail } : {}) };
+    }
     case 'mcp_tool_call': {
       const toolName = typeof item.tool === 'string' && item.tool ? item.tool : 'mcp';
       const name = typeof item.name === 'string' && item.name ? item.name : toolName;
@@ -127,6 +135,10 @@ function toolOutput(item: Record<string, unknown>, isError: boolean): string {
       return outputExcerpt(item.query);
     case 'mcp_tool_call':
       return outputExcerpt(item.result ?? item.output);
+    case 'context_compaction':
+      return 'Earlier context summarized';
+    case 'collab_tool_call':
+      return '';
     default:
       return outputExcerpt(item.output);
   }
@@ -144,7 +156,15 @@ export function threadIdForCodexEvent(event: unknown): string | null {
  * shell commands can never leak into the progress stream.
  */
 export function progressForCodexEvent(event: unknown): string | null {
+  // `codex exec` reports stream retries ("Reconnecting... 2/5") as top-level
+  // errors and non-fatal problems as error items; neither ends the run.
+  if (isRecord(event) && event.type === 'error' && typeof event.message === 'string') {
+    return event.message.replace(/\s+/g, ' ').trim().slice(0, LIMITS.codexProgressChars) || null;
+  }
   if (!isRecord(event) || !isRecord(event.item)) return null;
+  if (event.type === 'item.completed' && event.item.type === 'error' && typeof event.item.message === 'string') {
+    return event.item.message.replace(/\s+/g, ' ').trim().slice(0, LIMITS.codexProgressChars) || null;
+  }
 
   const item = event.item;
   const itemType = item.type;

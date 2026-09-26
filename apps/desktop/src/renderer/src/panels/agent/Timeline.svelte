@@ -1,10 +1,12 @@
 <script lang="ts">
   import { agentState } from './agent-state.svelte';
   import { activityRows, type TraceStep } from './activity-rows';
+  import QuestionCard from './QuestionCard.svelte';
   import TextRow from './TextRow.svelte';
+  import ThoughtRow from './ThoughtRow.svelte';
   import ToolActivity from './ToolActivity.svelte';
 
-  let { PM: _PM }: { PM: Record<string, any> } = $props();
+  let { PM }: { PM: Record<string, any> } = $props();
 
   /* The live activity trail. Rows keep their stream order: prose streams with
      a caret; reasoning and tool calls share flat work groups that disclose
@@ -52,6 +54,10 @@
     {#each rows as row, index (row.renderKey)}
       {#if row.kind === 'text'}
         <TextRow text={row.text} streaming={index === streamingIndex} animated />
+      {:else if row.kind === 'thought'}
+        <ThoughtRow text={row.text} streaming={running && row.pulsing} animated />
+      {:else if row.kind === 'question'}
+        <QuestionCard {PM} step={row} />
       {:else}
         <ToolActivity {row} animated live={running && index === rows.length - 1} />
       {/if}

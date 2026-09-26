@@ -245,6 +245,18 @@ export function install(PM: PMRegistry): void {
             .catch(() => PM.CodexBridge.resolveSteer(replyId, false));
         }
       },
+      pmCodexAnswer: {
+        postMessage(body: any = {}) {
+          const replyId = String(body.replyId || '');
+          const answers: Record<string, string[]> = {};
+          for (const [id, list] of Object.entries(body.answers && typeof body.answers === 'object' ? body.answers : {})) {
+            if (Array.isArray(list)) answers[id] = list.map(String);
+          }
+          void bridge.codex.answer({ id: String(body.id || ''), itemId: String(body.itemId || ''), answers })
+            .then((result: any) => PM.CodexBridge.resolveSteer(replyId, result.accepted === true))
+            .catch(() => PM.CodexBridge.resolveSteer(replyId, false));
+        }
+      },
       pmAgentArtifact: {
         postMessage(body: any = {}) {
           const id = String(body.id || '');

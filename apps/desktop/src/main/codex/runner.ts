@@ -42,6 +42,7 @@ import {
   type AgentApiPackFile,
   type CodexAuthority
 } from './workspace';
+import { imageExtension } from '../image-extension';
 
 const MODES = ['editor', 'autonomous'] as const;
 const ACCESS = ['editor', 'project', 'computer'] as const;
@@ -312,7 +313,7 @@ async function writeEditorInputs(req: CodexRunRequest): Promise<{
   await writeFile(schemaPath, JSON.stringify(req.schema ?? { type: 'object' }, null, 2));
   const imagePaths: string[] = [];
   for (const [index, image] of req.images.entries()) {
-    const extension = image[0] === 0x89 && image[1] === 0x50 ? 'png' : 'jpg';
+    const extension = imageExtension(image);
     const imagePath = path.join(directory, `frame-${index}.${extension}`);
     await writeFile(imagePath, image);
     imagePaths.push(imagePath);

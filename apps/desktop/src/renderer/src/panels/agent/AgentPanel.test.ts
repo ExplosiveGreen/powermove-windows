@@ -706,6 +706,18 @@ describe('AgentPanel', () => {
     expect(PM.AgentUI.undoSceneRun).toHaveBeenCalledOnce();
     expect(PM.AgentUI.keepSceneRun).toHaveBeenCalledOnce();
   });
+
+  it('renders autonomous review notes as separate markdown blocks', () => {
+    renderPanel(snapshot({ legacyPhase: 'result', run: {
+      autonomous: true, changed: false,
+      review: { message: 'Callouts:\n- 01 Auto mode\n- 02 HEPA 13\n\nCheck the `marker`.' }
+    } }));
+    const review = target.querySelector('.agent-review-markdown')!;
+    expect(review.querySelectorAll('.agent-md-li')).toHaveLength(2);
+    expect(review.querySelector('.agent-md-p')?.textContent).toBe('Callouts:');
+    expect(review.querySelectorAll('.agent-md-li')[0]?.textContent?.trim()).toBe('01 Auto mode');
+    expect(review.querySelector('.agent-trace-code')?.textContent).toBe('marker');
+  });
 });
 
 describe('agent bridge', () => {

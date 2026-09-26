@@ -119,8 +119,9 @@ PM.CodexBridge = {
       };
       const abort: any = () => settle(codexAbortError(), signal?.reason === 'steering-replacement');
       const timeout: any = Math.max(30_000, Math.min(Number(options.timeoutMs) || 120_000, 3_600_000));
-      const timer: any = window.setTimeout(() => settle(new Error('The coding agent took too long to respond')), timeout);
-      pending.set(id, { resolve, reject, timer, signal, abort, onProgress: options.onProgress, onTrace: options.onTrace, mode: options.mode });
+      const tooLong: any = () => settle(new Error('The coding agent took too long to respond'));
+      const timer: any = window.setTimeout(tooLong, timeout);
+      pending.set(id, { resolve, reject, timer, tooLong, signal, abort, onProgress: options.onProgress, onTrace: options.onTrace, mode: options.mode });
       activeCodexRequestId = id;
       // Concurrent runs each steer their own turn, so the caller keeps the id.
       try { options.onStart?.(id); } catch { /* A bookkeeping failure must not sink the run. */ }
@@ -149,6 +150,16 @@ PM.CodexBridge = {
       }, 30_000);
       pendingSteering.set(replyId, { resolve, timer });
       bridge.postMessage({ replyId, id, prompt, images: images.slice(0, 6) });
+    });
+  },
+  async answer(requestId: any, itemId: string, answers: Record<string, string[]>) {
+    const bridge: any = (window as any).webkit?.messageHandlers?.pmCodexAnswer;
+    if (!requestId || !pending.has(requestId) || !bridge) return false;
+    return await new Promise((resolve: any) => {
+      const replyId: any = PM.uid('spatial-answer-');
+      const timer: any = window.setTimeout(() => { pendingSteering.delete(replyId); resolve(false); }, 30_000);
+      pendingSteering.set(replyId, { resolve, timer });
+      bridge.postMessage({ replyId, id: requestId, itemId, answers });
     });
   },
   resolve(id: any, result: any) {
@@ -181,6 +192,10 @@ PM.CodexBridge = {
   },
   trace(id: any, step: any) {
     const job: any = pending.get(id); if (!job || typeof job.onTrace !== 'function') return;
+    // Time spent waiting on the person is not the agent being slow.
+    if (step?.kind === 'question' && step.transport === 'reply') {
+      window.clearTimeout(job.timer); job.timer = window.setTimeout(job.tooLong, 3_600_000);
+    }
     try { job.onTrace(step); } catch (error) { window.console.warn('Agent activity could not be displayed', error); }
   },
 };
@@ -449,6 +464,7 @@ for (const field of RUN_FIELDS) {
 /* A background run must never steal the composer or repaint as if it were the
    thread you are reading; it still refreshes the picker so its progress shows. */
 function touch(session: any, options: any = {}): void {
+  closeSettledQuestions(session);
   if (session.threadId === threads.activeId) { PM.AgentUI?.update(options); return; }
   const { focusComposer, ...rest } = options;
   PM.AgentUI?.update(rest);
@@ -742,6 +758,7 @@ registerAgentPanel(PM, {
   applyPlan: () => { void applyPlan(); },
   addAttachments: addAttachmentFiles,
   removeAttachment,
+  answerQuestion: (id: string, answers: Record<string, string[]>) => { void answerQuestion(id, answers); },
   importArtifact: (artifact: any) => importAutonomousArtifact(
     S.run?.artifacts?.find((item: any) => item.path === artifact.path) || artifact,
   ),
@@ -1457,7 +1474,7 @@ function finishTraceThought(session: any = activeSession()) {
 
 function trimTrace(session: any = activeSession()) {
   while (session.trace.length > TRACE_STEP_LIMIT) {
-    const removable: any = session.trace.findIndex((step: any) => step.kind !== 'text');
+    const removable: any = session.trace.findIndex((step: any) => step.kind !== 'text' && step.kind !== 'question');
     session.trace.splice(removable >= 0 ? removable : 0, 1);
   }
 }
@@ -1498,6 +1515,20 @@ function reduceTrace(step: CodexTraceEvent, session: any = activeSession()) {
         session.activity = `Working on ${placement.label}…`;
       }
     }
+  } else if (step.kind === 'question') {
+    finishTraceThought(session);
+    if (!Array.isArray(step.questions) || !step.questions.length || findQuestion(session, step.itemId)) return;
+    const transport = step.transport === 'reply' ? 'reply' : 'message';
+    session.trace.push({
+      kind: 'question', id: step.itemId, questions: step.questions, transport,
+      blocking: transport === 'reply' && step.blocking === true, status: 'open',
+      ...(transport === 'reply' && session.codexRequestId ? { requestId: session.codexRequestId } : {}),
+    });
+    // A run that stopped to ask needs the person back, like a finished one.
+    if (transport === 'reply' && step.blocking) { session.activity = 'Waiting for your answer…'; notifyAgentFinished(); }
+  } else if (step.kind === 'question-closed') {
+    const question: any = findQuestion(session, step.itemId);
+    if (question?.status === 'open') question.status = 'closed';
   } else if (step.kind === 'tool-start') {
     finishTraceThought(session);
     const tool: any = session.trace.find((entry: any) => entry.kind === 'tool' && entry.id === step.itemId);
@@ -1520,6 +1551,62 @@ function reduceTrace(step: CodexTraceEvent, session: any = activeSession()) {
     }
   }
   trimTrace(session);
+}
+
+function findQuestion(session: any, id: string): any {
+  const inTrace = (steps: any[] = []) => steps.find((step: any) => step.kind === 'question' && step.id === id);
+  return inTrace(session.trace) ?? session.conversation
+    .flatMap((message: any) => message.role === 'trace' ? [inTrace(message.steps)] : [])
+    .find(Boolean);
+}
+
+function openQuestions(session: any): any[] {
+  return [...session.trace, ...session.conversation.flatMap((message: any) => message.role === 'trace' ? message.steps || [] : [])]
+    .filter((step: any) => step.kind === 'question' && step.status === 'open');
+}
+
+// A held question dies with its run: main settles it with no answer.
+function closeSettledQuestions(session: any) {
+  for (const question of openQuestions(session)) {
+    if (question.transport === 'reply' && !pending.has(question.requestId)) question.status = 'closed';
+  }
+}
+
+function shownAnswers(question: any, answers: Record<string, string[]>): Record<string, string> {
+  return Object.fromEntries(question.questions.map((item: any) => {
+    const answer = (answers[item.id] || []).map(String).filter(Boolean).join(', ');
+    return [item.id, item.secret && answer ? '••••••' : answer];
+  }));
+}
+
+async function answerQuestion(id: string, answers: Record<string, string[]>) {
+  const session: any = activeSession();
+  const question: any = findQuestion(session, id);
+  if (!question || question.status !== 'open') return;
+  question.status = 'answered';
+  question.answers = shownAnswers(question, answers);
+  if (question.transport === 'reply') {
+    if (question.blocking) session.activity = 'Continuing with your answer…';
+    touch(session, { flush: true });
+    const accepted: any = await PM.CodexBridge.answer(question.requestId, id, answers);
+    if (!accepted) {
+      question.status = 'closed'; delete question.answers;
+      PM.toast('The agent finished before your answer arrived.');
+    }
+    persistThreads(); touch(session, { focusComposer: true });
+    return;
+  }
+  /* A question posted without waiting is answered the way Codex expects: as
+     an ordinary follow-up message, which steers the run if it is still live.
+     The composer keeps whatever the person was drafting. */
+  const reply: string = question.questions.map((item: any) =>
+    `${item.question}\n→ ${item.secret ? '(answered privately)' : (answers[item.id] || []).join(', ') || 'No answer'}`).join('\n\n');
+  const draft: any = S.composerDraft, files: any = S.attachments;
+  S.attachments = [];
+  const sent: any = sendRequest({ value: `Answering your question${question.questions.length === 1 ? '' : 's'}:\n\n${reply}` });
+  S.composerDraft = draft; S.attachments = files;
+  touch(session, { flush: true });
+  await sent;
 }
 
 function sealTrace(session: any = activeSession()) {
@@ -1547,6 +1634,8 @@ function archiveTrace(preserveText = false, session: any = activeSession(), stee
 
 function normalizeAutonomousResult(raw: any, rawExtensions: any) {
   const text: any = (value: any) => String(value || '').replace(/\s+/g, ' ').trim();
+  const prose: any = (value: any) => String(value || '')
+    .replace(/\r\n?/g, '\n').replace(/[^\S\n]+/g, ' ').replace(/ *\n */g, '\n').trim();
   const projectId: any = text(raw?.projectId || PM.proj?.id).slice(0, 160);
   const extensionActions: any = new Set(['created', 'updated', 'removed']);
   const extensions: any = (Array.isArray(rawExtensions) ? rawExtensions : []).filter((item: any) => {
@@ -1560,7 +1649,7 @@ function normalizeAutonomousResult(raw: any, rawExtensions: any) {
     ...(item.summary === undefined ? {} : { summary: item.summary }),
   }));
   return {
-    summary: text(raw?.summary || 'The autonomous agent finished its run.').slice(0, 30_000),
+    summary: prose(raw?.summary || 'The autonomous agent finished its run.').slice(0, 30_000),
     commands: (Array.isArray(raw?.commands) ? raw.commands : [])
       .map(PM.AgentHarness.cleanCommand).filter(Boolean),
     artifacts: (Array.isArray(raw?.artifacts) ? raw.artifacts : []).map((item: any) => ({
@@ -1573,7 +1662,7 @@ function normalizeAutonomousResult(raw: any, rawExtensions: any) {
       imported: false,
     })).filter((item: any) => item.path),
     externalActions: (Array.isArray(raw?.externalActions) ? raw.externalActions : []).slice(0, 80).map(text).filter(Boolean),
-    notes: (Array.isArray(raw?.notes) ? raw.notes : []).slice(0, 80).map(text).filter(Boolean),
+    notes: (Array.isArray(raw?.notes) ? raw.notes : []).slice(0, 80).map(prose).filter(Boolean),
     extensions,
   };
 }
@@ -1967,7 +2056,7 @@ The user edited the project during the autonomous run. Return kind=scene and a c
       projectId: PM.proj.id,
       applied: appliedCommands, changed, artifacts: result.artifacts,
       externalActions: result.externalActions, extensions: result.extensions,
-      review: { message: result.notes.join(' ') || (changed ? 'The editable Powermove result is ready to review.' : 'The agent run completed without changing Powermove source.') },
+      review: { message: result.notes.join('\n\n') || (changed ? 'The editable Powermove result is ready to review.' : 'The agent run completed without changing Powermove source.') },
       frames: finalFrames, reviewError,
     };
     const runs = [...priorRuns, run];
@@ -2139,7 +2228,7 @@ function resumeHostRun(remote: any, session: any, record: any): void {
       autonomous: true, summary, checkpoint: null, projectId: PM.proj.id, applied: [], changed: false,
       extensionChangeSetId: raw.extensionChangeSetId,
       artifacts: [], externalActions: [], extensions: raw.extensions || [], undoRuns: [],
-      review: { message: notes.join(' ') || (raw.liveEditsApplied ? 'The result is in the project. It was made on the host, so Undo here does not cover it.' : 'The agent run completed.') },
+      review: { message: notes.join('\n\n') || (raw.liveEditsApplied ? 'The result is in the project. It was made on the host, so Undo here does not cover it.' : 'The agent run completed.') },
       frames: { state: {}, times: [], images: [] }, reviewError: '',
     };
     session.revision = Number(PM.proj?.revision || 0);
@@ -2168,6 +2257,15 @@ async function sendRequest(input: any) {
   const focus = panelFocusContext(S.scope, PM.WS?.current, PM.PANELS || {});
   const context = S.context ? JSON.parse(JSON.stringify(S.context)) : null;
   const steering: any = session.phase === 'working';
+  /* While the run waits on a question, what the person types is the answer —
+     sending it as steering would leave the question unanswered. */
+  const waiting: any = steering && typedRequest && !S.attachments.length
+    && openQuestions(session).find((question: any) => question.transport === 'reply' && question.blocking);
+  if (waiting) {
+    S.composerDraft = '';
+    void answerQuestion(waiting.id, Object.fromEntries(waiting.questions.map((item: any) => [item.id, [typedRequest]])));
+    return;
+  }
   if (steering) {
     /* The live trace normally sits after the whole conversation. Seal it now
        so everything the agent said before this steer stays chronologically

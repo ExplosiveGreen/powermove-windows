@@ -95,12 +95,13 @@ describe('activityRows', () => {
     ]);
 
     expect(new Set(rows.map((row) => row.renderKey)).size).toBe(rows.length);
-    // The thought folds into the group; only text splits it.
+    // Reasoning sits inline between calls, so it splits the group.
     expect(rows.map((row) => row.renderKey)).toEqual([
       'tools-replayed-call-0',
-      'separator-1'
+      'separator-1',
+      'tools-replayed-call-2',
+      'separator-3'
     ]);
-    expect(at(rows).details.map((detail: any) => detail.kind)).toEqual(['tool', 'thought', 'tool']);
   });
 
   it('only the newest active row can pulse when stale live flags remain', () => {
@@ -111,29 +112,33 @@ describe('activityRows', () => {
       { kind: 'thought', id: 'current-thought', label: 'Refining the result', live: true }
     ]);
 
-    expect(rows.map((row) => row.pulsing)).toEqual([false, false, true]);
+    expect(rows.map((row) => row.pulsing)).toEqual([false, false, false, true]);
   });
 
-  it('folds thinking into the work group as its own row', () => {
+  it('shows reasoning inline between calls instead of inside the tool group', () => {
     const rows = activityRows([
       tool({ id: '1', toolName: 'read' }),
       { kind: 'thought', id: 'thought', label: 'Checking the transition. Then the easing.', live: true, startedAt: 5 },
       tool({ id: '2', toolName: 'bash', status: 'running' })
     ]);
 
-    expect(rows).toHaveLength(1);
-    expect(at(rows)).toMatchObject({ label: '2 tool calls', summary: 'Read files and ran commands', status: 'running', pulsing: true, thoughtCount: 1 });
-    expect(at(rows).details[1]).toMatchObject({
-      kind: 'thought', label: 'Thinking', status: 'running', family: 'think',
-      detail: 'Checking the transition.', output: 'Checking the transition. Then the easing.'
-    });
+    expect(rows.map((row) => row.kind)).toEqual(['tools', 'thought', 'tools']);
+    expect(rows[1]).toMatchObject({ text: 'Checking the transition. Then the easing.', live: true });
+    expect(rows[2]).toMatchObject({ label: '1 tool call', status: 'running', pulsing: true });
+    expect(activityRows([{ kind: 'thought', id: 'empty', label: '  ', live: true }])).toEqual([]);
   });
 
-  it('titles reasoning alone by its duration and lists edited files', () => {
-    const alone = activityRows([{ kind: 'thought', id: 't', label: 'Weighing', live: false, startedAt: 0, endedAt: 4_000 }]);
-    expect(at(alone)).toMatchObject({ label: 'Thought for 4s', toolCount: 0, status: 'done' });
-    expect(at(alone).details[0]).toMatchObject({ label: 'Thought for 4s' });
+  it('keeps questions in stream order as their own rows', () => {
+    const question = {
+      kind: 'question' as const, id: 'q', transport: 'message' as const, blocking: false, status: 'open' as const,
+      questions: [{ id: 'q-0', header: '', question: 'Which clip?', options: [], allowOther: true, secret: false }]
+    };
+    const rows = activityRows([tool({ id: '1', toolName: 'read' }), question, tool({ id: '2', toolName: 'bash' })]);
+    expect(rows.map((row) => row.kind)).toEqual(['tools', 'question', 'tools']);
+    expect(rows[1]).toMatchObject({ id: 'q', renderKey: 'q-1' });
+  });
 
+  it('lists edited files', () => {
     const edits = activityRows([
       tool({ id: 'a', toolName: 'edit', label: 'Edit', detail: 'src/a.ts' }),
       tool({ id: 'b', toolName: 'write', label: 'Write', detail: 'src/deep/b.css, c.ts' }),
@@ -155,12 +160,13 @@ describe('activityRows', () => {
     ]);
 
     expect(rows.map((row) => `${row.kind}:${(row as any).text ?? (row as any).summary}`)).toEqual([
+      'thought:Inspecting the project',
       'tools:Read files',
       'text:I found the relevant file.',
+      'thought:Applying the change',
       'tools:Edited files',
       'text:The change is complete.'
     ]);
-    expect(at(rows, 0).details.map((detail: any) => detail.label)).toEqual(['Thought', 'Ran a command']);
   });
 
   it('distinguishes a partly failed batch from a wholly failed batch', () => {

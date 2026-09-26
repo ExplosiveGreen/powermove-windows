@@ -31,6 +31,16 @@ describe('inlineRuns', () => {
     expect(inlineRuns(`[Commons](${wiki}), CC BY`)).toEqual([{ text: 'Commons', href: wiki }, { text: ', CC BY' }]);
     expect(inlineRuns(`See ${wiki}.`)).toEqual([{ text: 'See ' }, { text: wiki, href: wiki }, { text: '.' }]);
   });
+
+  it('links autolinks, titled links, and images without stray markers', () => {
+    expect(inlineRuns('Docs: <https://x.y/a>.')).toEqual([{ text: 'Docs: ' }, { text: 'https://x.y/a', href: 'https://x.y/a' }, { text: '.' }]);
+    expect(inlineRuns('[Guide](https://x.y/g "The guide")')).toEqual([{ text: 'Guide', href: 'https://x.y/g' }]);
+    expect(inlineRuns('![Frame 12](https://x.y/f.png)')).toEqual([{ text: 'Frame 12', href: 'https://x.y/f.png' }]);
+    expect(inlineRuns('![](https://x.y/shots/f.png)')).toEqual([{ text: 'f.png', href: 'https://x.y/shots/f.png' }]);
+    // Targets main will not open (mail, local files) stay readable text.
+    expect(inlineRuns('[mail](mailto:a@b.c)')).toEqual([{ text: 'mail' }]);
+    expect(inlineRuns('[app.ts](/Users/me/app.ts:12)')).toEqual([{ text: 'app.ts' }]);
+  });
 });
 
 describe('blocksFromMarkdown', () => {

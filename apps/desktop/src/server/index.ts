@@ -285,6 +285,7 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
     return typeof request?.id === 'string' ? runs.owner(request.id) : null;
   };
   ipc.intercept(IPC.codexSteer, { sender: ownerFor });
+  ipc.intercept(IPC.codexAnswer, { sender: ownerFor });
   ipc.intercept(IPC.codexCancel, { sender: ownerFor });
   ipc.intercept(IPC.agentToolResponse, {
     sender: (_client, args) => {

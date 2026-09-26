@@ -303,6 +303,17 @@ it('normalizes only valid typed extension changes', () => {
   ]);
 });
 
+it('keeps markdown line breaks in autonomous summaries and notes', () => {
+  const { PM, assistant } = spatialHarness();
+  PM.proj = { id: 'project-1' };
+  const result = assistant.math.normalizeAutonomousResult({
+    summary: 'Updated callouts.\r\n\r\n**Seven** are ready.',
+    notes: ['Callouts:\r\n- 01 Auto mode\r\n- 02 HEPA 13', 'Check the timing.'],
+  }, []);
+  assert.equal(result.summary, 'Updated callouts.\n\n**Seven** are ready.');
+  assert.deepEqual(result.notes, ['Callouts:\n- 01 Auto mode\n- 02 HEPA 13', 'Check the timing.']);
+});
+
 it('caps normalized extension changes at 32 entries', () => {
   const { PM, assistant } = spatialHarness();
   PM.proj = { id: 'project-1' };

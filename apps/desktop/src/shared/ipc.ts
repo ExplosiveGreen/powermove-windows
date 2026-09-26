@@ -62,6 +62,7 @@ export const IPC = {
 
   codexRun: 'codex:run',
   codexSteer: 'codex:steer',
+  codexAnswer: 'codex:answer',
   codexCancel: 'codex:cancel',
   codexFixPrompt: 'codex:fix-prompt',
   codexRebasePrompt: 'codex:rebase-prompt',
@@ -341,6 +342,25 @@ export interface CodexSteerResult {
   accepted: boolean;
 }
 
+/** Replies to a question the agent is holding open, keyed by question id. */
+export interface CodexAnswerRequest {
+  id: string;
+  itemId: string;
+  answers: Record<string, string[]>;
+}
+
+export interface CodexQuestion {
+  id: string;
+  /** Short chip-sized topic, e.g. "Layout". May be empty. */
+  header: string;
+  question: string;
+  options: Array<{ label: string; description: string }>;
+  /** A typed answer is accepted alongside (or instead of) the options. */
+  allowOther: boolean;
+  /** The answer is sensitive and must not be echoed back into the transcript. */
+  secret: boolean;
+}
+
 export interface CodexFixPromptFile {
   path: string;
   text: string;
@@ -383,7 +403,20 @@ export type CodexTraceEvent =
       isError: boolean;
       /** Bounded excerpt of the tool result (first lines of output, diff stats, error text). ≤ LIMITS.codexToolOutputChars */
       output?: string;
-    };
+    }
+  /* A question from the agent. `reply` questions hold a request open until
+     `codex.answer` settles them (the run may keep working meanwhile unless
+     `blocking`); `message` questions were posted without waiting and are
+     answered with an ordinary follow-up message. */
+  | {
+      kind: 'question';
+      itemId: string;
+      questions: CodexQuestion[];
+      transport: 'reply' | 'message';
+      blocking: boolean;
+    }
+  /** The provider settled a held question itself (timeout, turn ended). */
+  | { kind: 'question-closed'; itemId: string };
 
 export type CodexProgressEvent =
   | {
@@ -656,6 +689,7 @@ export interface PowermoveBridge {
       onTrace?: (step: CodexTraceEvent) => void
     ): Promise<CodexRunResult>;
     steer(req: CodexSteerRequest): Promise<CodexSteerResult>;
+    answer(req: CodexAnswerRequest): Promise<CodexSteerResult>;
     cancel(id: string, preserveChanges?: boolean): Promise<void>;
     fixPrompt(req: CodexFixPromptRequest): Promise<string>;
     rebasePrompt(req: CodexRebasePromptRequest): Promise<string>;

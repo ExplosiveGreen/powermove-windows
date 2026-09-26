@@ -203,3 +203,26 @@ describe('Claude stream parser', () => {
     expect(parser.output).toBeUndefined();
   });
 });
+
+describe('Claude housekeeping events', () => {
+  it('shows automatic compaction as one step and retries as progress', () => {
+    const onProgress = vi.fn();
+    const onTrace = vi.fn();
+    const parser = new ClaudeEventParser({ onProgress, onTrace });
+    feed(parser, [
+      { type: 'system', subtype: 'status', status: 'compacting', session_id: SESSION_ID },
+      { type: 'system', subtype: 'status', status: 'compacting', session_id: SESSION_ID },
+      { type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 180_000 }, session_id: SESSION_ID },
+      { type: 'system', subtype: 'compact_boundary', session_id: SESSION_ID },
+      { type: 'system', subtype: 'api_retry', attempt: 2, max_retries: 10, retry_delay_ms: 1_000, session_id: SESSION_ID }
+    ]);
+    expect(onTrace.mock.calls.map(([step]) => step)).toEqual([
+      { kind: 'tool-start', itemId: 'claude-compact-1', toolName: 'compact', label: 'Compacting context' },
+      { kind: 'tool-end', itemId: 'claude-compact-1', isError: false, output: 'Earlier context summarized' },
+      // A boundary without a preceding status still reads as a finished step.
+      { kind: 'tool-start', itemId: 'claude-compact-2', toolName: 'compact', label: 'Compacting context' },
+      { kind: 'tool-end', itemId: 'claude-compact-2', isError: false, output: 'Earlier context summarized' }
+    ]);
+    expect(onProgress).toHaveBeenCalledWith('Retrying the request (2 of 10)…');
+  });
+});

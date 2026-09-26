@@ -5,6 +5,8 @@ import path from 'node:path';
 import readline from 'node:readline';
 
 import type {
+  CodexAnswerRequest,
+  CodexQuestion,
   CodexRunRequest,
   CodexRunResult,
   CodexSteerRequest,
@@ -18,6 +20,7 @@ import {
   type NativeMcpServerConfig
 } from '../agent-tools/spec';
 import { fragmentText, humanLabel, outputExcerpt, toolDetail } from '../agent-tools/trace-format';
+import { imageExtension } from '../image-extension';
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const TURN_TIMEOUT_MS = 3_600_000;
@@ -43,6 +46,8 @@ interface ActiveTurn extends RunCallbacks {
   cancelRequested: boolean;
   agentMessageDeltaItemIds: Set<string>;
   sawUnscopedAgentMessageDelta: boolean;
+  /** Held `request_user_input` calls: trace item id → App Server request id. */
+  questions: Map<string, string | number>;
   resolve(result: CodexRunResult): void;
   timer: NodeJS.Timeout;
 }
@@ -66,11 +71,21 @@ interface AppServerRunnerDependencies {
 }
 
 function appServerError(value: unknown, fallback: string): string {
+  // Codex compacts automatically; this only arrives once that could not help.
+  if (isRecord(value) && isRecord(value.error) && value.error.codexErrorInfo === 'contextWindowExceeded') {
+    return 'This conversation is too long for the model, even after compacting it. Start a new thread to continue.';
+  }
   if (isRecord(value) && isRecord(value.error) && isString(value.error.message, 4_000)) {
     return value.error.message;
   }
   return fallback;
 }
+
+const COLLAB_LABELS: Readonly<Record<string, string>> = {
+  spawnAgent: 'Start subagent', sendInput: 'Message subagent', sendMessage: 'Message subagent',
+  followupTask: 'Message subagent', resumeAgent: 'Resume subagent', wait: 'Wait for subagents',
+  closeAgent: 'Close subagent', interruptAgent: 'Stop subagent', listAgents: 'List subagents'
+};
 
 function liveInspectionConfig(nativeTools: NativeMcpServerConfig): Record<string, unknown> {
   return {
@@ -133,7 +148,26 @@ function appServerToolStart(item: Record<string, unknown>): CodexTraceEvent | nu
   if (type === 'computeruse') {
     return { kind: 'tool-start', itemId, toolName: 'computer', label: 'Computer' };
   }
-  if (type === 'mcptoolcall') {
+  if (type === 'contextcompaction') {
+    return { kind: 'tool-start', itemId, toolName: 'compact', label: 'Compacting context' };
+  }
+  if (type === 'imageview') {
+    const detail = basename(item.path);
+    return { kind: 'tool-start', itemId, toolName: 'view_image', label: 'View image', ...(detail ? { detail } : {}) };
+  }
+  if (type === 'sleep') {
+    const seconds = typeof item.durationMs === 'number' ? Math.round(item.durationMs / 1000) : 0;
+    return { kind: 'tool-start', itemId, toolName: 'wait', label: 'Wait', ...(seconds > 0 ? { detail: `${seconds}s` } : {}) };
+  }
+  if (type === 'collabagenttoolcall') {
+    const detail = toolDetail('Task', { description: item.prompt });
+    return {
+      kind: 'tool-start', itemId, toolName: 'agent',
+      label: (typeof item.tool === 'string' && COLLAB_LABELS[item.tool]) || 'Subagent',
+      ...(detail ? { detail } : {})
+    };
+  }
+  if (type === 'mcptoolcall' || type === 'dynamictoolcall') {
     const rawTool = typeof item.tool === 'string' && item.tool ? item.tool : 'mcp';
     const detail = toolDetail(rawTool, { tool: rawTool });
     return {
@@ -154,7 +188,10 @@ function appServerToolEnd(item: Record<string, unknown>): CodexTraceEvent | null
   const itemId = traceItemId(item);
   if (!itemId) return null;
   const type = normalizedItemType(item.type);
-  if (!['commandexecution', 'filechange', 'mcptoolcall', 'websearch', 'imagegeneration', 'computeruse'].includes(type)) {
+  if (![
+    'commandexecution', 'filechange', 'mcptoolcall', 'dynamictoolcall', 'websearch', 'imagegeneration', 'computeruse',
+    'contextcompaction', 'imageview', 'sleep', 'collabagenttoolcall'
+  ].includes(type)) {
     return null;
   }
   const status = typeof item.status === 'string' ? item.status.toLowerCase() : '';
@@ -167,9 +204,59 @@ function appServerToolEnd(item: Record<string, unknown>): CodexTraceEvent | null
     rawOutput = files.length > 3 ? `${files.length} files changed` : files.join(', ');
   } else if (type === 'websearch') rawOutput = item.query;
   else if (type === 'mcptoolcall') rawOutput = item.result ?? item.output;
+  else if (type === 'dynamictoolcall') rawOutput = Array.isArray(item.contentItems)
+    ? item.contentItems.map((part) => isRecord(part) && typeof part.text === 'string' ? part.text : '').join('\n')
+    : undefined;
+  else if (type === 'contextcompaction') rawOutput = 'Earlier context summarized';
+  else if (type === 'imageview' || type === 'sleep' || type === 'collabagenttoolcall') rawOutput = undefined;
   else rawOutput = item.output;
   const output = outputExcerpt(rawOutput);
   return { kind: 'tool-end', itemId, isError, ...(output ? { output } : {}) };
+}
+
+const QUESTION_LIMITS = { questions: 6, options: 8, header: 80, question: 1_000, label: 160, description: 400 } as const;
+
+function clip(value: unknown, limit: number): string {
+  return typeof value === 'string' ? value.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim().slice(0, limit) : '';
+}
+
+/** `item/tool/requestUserInput` questions, bounded for the renderer. */
+function replyQuestions(value: unknown): CodexQuestion[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, QUESTION_LIMITS.questions).flatMap((entry): CodexQuestion[] => {
+    if (!isRecord(entry) || !isString(entry.id, 200)) return [];
+    const question = clip(entry.question, QUESTION_LIMITS.question);
+    if (!question) return [];
+    const options = (Array.isArray(entry.options) ? entry.options : []).slice(0, QUESTION_LIMITS.options).flatMap((option) => {
+      const label = isRecord(option) ? clip(option.label, QUESTION_LIMITS.label) : '';
+      return label ? [{ label, description: clip((option as Record<string, unknown>).description, QUESTION_LIMITS.description) }] : [];
+    });
+    return [{
+      id: entry.id,
+      header: clip(entry.header, QUESTION_LIMITS.header),
+      question,
+      options,
+      // With no options a typed answer is the only possible answer.
+      allowOther: entry.isOther === true || options.length === 0,
+      secret: entry.isSecret === true
+    }];
+  });
+}
+
+/** Questions posted on an async agent message (`title` + plain options). */
+function messageQuestions(itemId: string, value: unknown): CodexQuestion[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, QUESTION_LIMITS.questions).flatMap((entry, index): CodexQuestion[] => {
+    const question = isRecord(entry) ? clip(entry.title, QUESTION_LIMITS.question) : '';
+    if (!question) return [];
+    const options = (Array.isArray((entry as Record<string, unknown>).options) ? (entry as Record<string, unknown>).options as unknown[] : [])
+      .slice(0, QUESTION_LIMITS.options)
+      .map((option) => clip(option, QUESTION_LIMITS.label))
+      .filter(Boolean)
+      .map((label) => ({ label, description: '' }));
+    // The async question tool always accepts a typed answer.
+    return [{ id: `${itemId}-${index}`, header: '', question, options, allowOther: true, secret: false }];
+  });
 }
 
 function methodIs(method: string, suffix: string): boolean {
@@ -218,7 +305,7 @@ export class CodexAppServerRunner {
       directory = await mkdtemp(path.join(tmpdir(), 'powermove-codex-app-'));
       const input: Array<Record<string, string>> = [{ type: 'text', text: req.prompt }];
       for (const [index, image] of req.images.entries()) {
-        const extension = image[0] === 0x89 && image[1] === 0x50 ? 'png' : 'jpg';
+        const extension = imageExtension(image);
         const imagePath = path.join(directory, `frame-${index}.${extension}`);
         await writeFile(imagePath, image);
         input.push({ type: 'localImage', path: imagePath });
@@ -264,6 +351,7 @@ export class CodexAppServerRunner {
           cancelRequested: false,
           agentMessageDeltaItemIds: new Set(),
           sawUnscopedAgentMessageDelta: false,
+          questions: new Map(),
           resolve,
           timer,
           onProgress: options.onProgress,
@@ -316,6 +404,18 @@ export class CodexAppServerRunner {
     return true;
   }
 
+  /** Settles a held `request_user_input` call with the user's answers. */
+  answer(req: CodexAnswerRequest): boolean {
+    const turn = this.active.get(req.id);
+    const rpcId = turn?.questions.get(req.itemId);
+    if (!turn || rpcId === undefined) return false;
+    turn.questions.delete(req.itemId);
+    this.respond(rpcId, {
+      answers: Object.fromEntries(Object.entries(req.answers).map(([id, answers]) => [id, { answers }]))
+    });
+    return true;
+  }
+
   async cancel(id: string): Promise<boolean> {
     const preparation = this.preparing.get(id);
     if (preparation) preparation.cancelled = true;
@@ -350,7 +450,7 @@ export class CodexAppServerRunner {
     if (turn.turnId === null) return;
     const input: Array<Record<string, string>> = [{ type: 'text', text: req.prompt }];
     for (const [index, image] of req.images.entries()) {
-      const extension = image[0] === 0x89 && image[1] === 0x50 ? 'png' : 'jpg';
+      const extension = imageExtension(image);
       const imagePath = path.join(turn.directory, `steer-${Date.now()}-${index}.${extension}`);
       await writeFile(imagePath, image);
       input.push({ type: 'localImage', path: imagePath });
@@ -366,6 +466,9 @@ export class CodexAppServerRunner {
     if (this.active.get(turn.requestId) !== turn) return;
     this.active.delete(turn.requestId);
     clearTimeout(turn.timer);
+    // An unanswered question must not keep App Server waiting on this client.
+    for (const rpcId of turn.questions.values()) this.respond(rpcId, { answers: {} });
+    turn.questions.clear();
     turn.resolve(result);
   }
 
@@ -404,7 +507,10 @@ export class CodexAppServerRunner {
     });
     try {
       await this.requestStarted('initialize', {
-        clientInfo: { name: 'powermove_agent', title: 'Powermove Agent', version: '1.0.0' }
+        clientInfo: { name: 'powermove_agent', title: 'Powermove Agent', version: '1.0.0' },
+        // Agent questions (`request_user_input`, async message questions) are
+        // experimental App Server surface and are withheld without this opt-in.
+        capabilities: { experimentalApi: true, requestAttestation: false }
       });
       this.notify('initialized', {});
     } catch (error) {
@@ -438,10 +544,60 @@ export class CodexAppServerRunner {
     if (child && !child.killed && child.stdin.writable) child.stdin.write(`${JSON.stringify({ method, params })}\n`);
   }
 
+  private respond(id: string | number, result: unknown): void {
+    const child = this.child;
+    if (child && !child.killed && child.stdin.writable) child.stdin.write(`${JSON.stringify({ id, result })}\n`);
+  }
+
+  private respondError(id: string | number, message: string): void {
+    const child = this.child;
+    if (child && !child.killed && child.stdin.writable) {
+      child.stdin.write(`${JSON.stringify({ id, error: { code: -32601, message } })}\n`);
+    }
+  }
+
+  private turnFor(threadId: string | null, turnId: string | null): ActiveTurn | undefined {
+    if (threadId === null) return undefined;
+    return [...this.active.values()].find((candidate) =>
+      candidate.threadId === threadId && (turnId === null || candidate.turnId === null || candidate.turnId === turnId));
+  }
+
+  /* App Server asks the client things mid-turn. Every request gets a reply —
+     an unanswered one stalls the turn until it times out. */
+  private handleServerRequest(id: string | number, method: string, params: Record<string, unknown>): void {
+    const turn = this.turnFor(
+      isString(params.threadId, 200) ? params.threadId : null,
+      isString(params.turnId, 200) ? params.turnId : null
+    );
+    if (methodIs(method, 'item/tool/requestUserInput')) {
+      const questions = replyQuestions(params.questions);
+      const itemId = isString(params.itemId, TRACE_ITEM_ID_CHARS * 2) ? params.itemId.slice(0, TRACE_ITEM_ID_CHARS) : null;
+      if (!turn || !itemId || !questions.length) {
+        this.respond(id, { answers: {} });
+        return;
+      }
+      turn.questions.set(itemId, id);
+      turn.onTrace?.({ kind: 'question', itemId, questions, transport: 'reply', blocking: params.isBlocking !== false });
+      return;
+    }
+    if (methodIs(method, 'mcpServer/elicitation/request')) {
+      this.respond(id, { action: 'decline', content: null, _meta: null });
+      return;
+    }
+    // Approvals cannot arrive under `approvalPolicy: never`; anything else is
+    // a capability this client does not offer.
+    this.respondError(id, `Powermove does not handle ${method}.`);
+  }
+
   private receive(line: string): void {
     let message: unknown;
     try { message = JSON.parse(line); } catch { return; }
     if (!isRecord(message)) return;
+    // A server request carries an id too; it must never settle one of ours.
+    if ((typeof message.id === 'number' || isString(message.id, 200)) && isString(message.method, 200)) {
+      this.handleServerRequest(message.id, message.method, isRecord(message.params) ? message.params : {});
+      return;
+    }
     if (typeof message.id === 'number') {
       const pending = this.pending.get(message.id);
       if (!pending) return;
@@ -455,16 +611,45 @@ export class CodexAppServerRunner {
     const method = message.method;
     const params = message.params;
     const threadId = isString(params.threadId, 200) ? params.threadId : null;
+    if (methodIs(method, 'warning') && isString(params.message, 2_000)) {
+      const text = params.message.replace(/\s+/g, ' ').trim().slice(0, 320);
+      for (const candidate of this.active.values()) {
+        if (text && (threadId === null || candidate.threadId === threadId)) candidate.onProgress?.(text);
+      }
+      return;
+    }
+    if (methodIs(method, 'serverRequest/resolved')) {
+      const requestId = params.requestId;
+      for (const candidate of this.active.values()) {
+        if (candidate.threadId !== threadId) continue;
+        for (const [itemId, rpcId] of candidate.questions) {
+          if (rpcId !== requestId) continue;
+          candidate.questions.delete(itemId);
+          candidate.onTrace?.({ kind: 'question-closed', itemId });
+        }
+      }
+      return;
+    }
     const topLevelTurnId = isString(params.turnId, 200) ? params.turnId : null;
     const turnId = topLevelTurnId ?? (methodIs(method, 'turn/completed') && isRecord(params.turn) && isString(params.turn.id, 200)
       ? params.turn.id
       : null);
     if (threadId === null || turnId === null) return;
-    const turn = [...this.active.values()].find((candidate) =>
-      candidate.threadId === threadId && (candidate.turnId === null || candidate.turnId === turnId));
+    const turn = this.turnFor(threadId, turnId);
     if (!turn) return;
 
     if (methodIs(method, 'item/commandExecution/outputDelta')) return;
+
+    /* Provider housekeeping the person should see without it being mistaken
+       for the agent's own words: retries, model reroutes, warnings. */
+    if (methodIs(method, 'error') && isRecord(params.error)) {
+      if (params.willRetry === true) turn.onProgress?.('Connection interrupted. Retrying…');
+      return;
+    }
+    if (methodIs(method, 'model/rerouted') && isString(params.toModel, 120)) {
+      turn.onProgress?.(`Continuing on ${params.toModel}`);
+      return;
+    }
 
     if (methodIs(method, 'item/started') && isRecord(params.item)) {
       const trace = appServerToolStart(params.item);
@@ -498,12 +683,19 @@ export class CodexAppServerRunner {
         return;
       }
       if (normalizedItemType(item.type) === 'agentmessage' && isString(item.text)) {
-        turn.finalText = item.text;
         const itemId = traceItemId(item);
+        const questions = itemId ? messageQuestions(itemId, item.questions) : [];
+        /* An async message (a mid-run update or question) is never the
+           structured final answer, even when it lands last before the JSON. */
+        const interim = item.delivery === 'async' || questions.length > 0;
+        if (!interim) turn.finalText = item.text;
         const alreadyStreamed = turn.sawUnscopedAgentMessageDelta || (itemId !== null && turn.agentMessageDeltaItemIds.has(itemId));
         if (!alreadyStreamed) {
           const text = fragmentText(item.text);
           if (text) turn.onTrace?.({ kind: 'answer', text });
+        }
+        if (itemId && questions.length) {
+          turn.onTrace?.({ kind: 'question', itemId, questions, transport: 'message', blocking: false });
         }
       }
       return;

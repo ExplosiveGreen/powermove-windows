@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, it, vi } from 'vitest';
-import { InlinePrompt, displayPromptText } from './inline-prompt';
+import { InlinePrompt, displayPromptText, promptSegments } from './inline-prompt';
 const file = { id: 'file', name: 'reference.png', type: 'image/png', size: 1, promptOffset: 6 };
 function setup(text = 'hello world') {
   const element = document.createElement('div'); element.contentEditable = 'true'; document.body.append(element);
@@ -148,4 +148,11 @@ it('drops the model-facing attachment markers from what the transcript shows', (
   expect(displayPromptText('before [Attachment: a.png] after')).toBe('before after');
   expect(displayPromptText('hello [Attachment: a.png]world')).toBe('hello world');
   expect(displayPromptText('[Attachment: a.png]')).toBe('');
+});
+
+it('splits a sent prompt so each file renders where it was placed', () => {
+  const a = { name: 'a.png' }, b = { name: 'b.png' }, old = { name: 'old.png' };
+  expect(promptSegments('hello [Attachment: a.png] there', [a])).toEqual({ segments: [{ text: 'hello ' }, { attachment: a }, { text: ' there' }], loose: [] });
+  expect(promptSegments('[Attachment: b.png]then[Attachment: a.png]', [a, b]).segments).toEqual([{ attachment: b }, { text: 'then' }, { attachment: a }]);
+  expect(promptSegments('Attached 1 file', [old])).toEqual({ segments: [{ text: 'Attached 1 file' }], loose: [old] });
 });

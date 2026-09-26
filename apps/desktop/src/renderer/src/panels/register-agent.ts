@@ -34,6 +34,7 @@ export interface AgentLegacyBridge {
   applyPlan(): void;
   addAttachments(files: File[]): Promise<void>;
   removeAttachment(id: string): void;
+  answerQuestion?(id: string, answers: Record<string, string[]>): void;
   importArtifact(artifact: Record<string, any>): Promise<void>;
   revealArtifact(artifact: Record<string, any>): void;
   undoPanelRun(): void;
@@ -111,6 +112,7 @@ export function registerAgentPanel(PM: LegacyPM, bridge: AgentLegacyBridge): voi
     applyPlan: bridge.applyPlan,
     addAttachments: bridge.addAttachments,
     removeAttachment: bridge.removeAttachment,
+    answerQuestion: bridge.answerQuestion,
     importArtifact: bridge.importArtifact,
     revealArtifact: bridge.revealArtifact,
     undoPanelRun: bridge.undoPanelRun,

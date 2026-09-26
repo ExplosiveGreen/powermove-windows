@@ -9,6 +9,29 @@ export function displayPromptText(text: string): string {
   return text.replace(/[ \t]*\[Attachment: [^\]\n]*\][ \t]*/g, ' ').replace(/ {2,}/g, ' ').trim();
 }
 
+export type PromptSegment<T> = { text: string } | { attachment: T };
+
+/** Splits a sent prompt at its attachment marks so the transcript can show each
+    file where it was placed. Files without a mark are returned as `loose`. */
+export function promptSegments<T extends { name: string }>(text: string, attachments: T[]): { segments: PromptSegment<T>[]; loose: T[] } {
+  const remaining = [...attachments];
+  const segments: PromptSegment<T>[] = [];
+  let cursor = 0;
+  const push = (value: string) => { if (value) segments.push({ text: value }); };
+  for (const match of text.matchAll(/\[Attachment: ([^\]\n]*)\]/g)) {
+    const index = remaining.findIndex(item => item.name === match[1]);
+    if (index < 0) continue;
+    push(text.slice(cursor, match.index));
+    segments.push({ attachment: remaining.splice(index, 1)[0]! });
+    cursor = match.index! + match[0].length;
+  }
+  push(text.slice(cursor));
+  const first = segments[0], last = segments.at(-1);
+  if (first && 'text' in first) first.text = first.text.trimStart();
+  if (last && 'text' in last) last.text = last.text.trimEnd();
+  return { segments: segments.filter(segment => !('text' in segment) || segment.text), loose: remaining };
+}
+
 /** Owns the editable DOM so reactive renders never interrupt the caret or IME. */
 export class InlinePrompt {
   private items = new Map<string, InlineAttachment>();

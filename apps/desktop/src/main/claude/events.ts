@@ -64,6 +64,8 @@ export class ClaudeEventParser {
      may also split one message into several `assistant` events (one per
      block, same message id), so dedupe on the mode, not per message. */
   private streamingMode = false;
+  private compactionId: string | null = null;
+  private compactions = 0;
 
   constructor(private readonly callbacks: ClaudeEventCallbacks = {}) {}
 
@@ -125,12 +127,41 @@ export class ClaudeEventParser {
       for (const block of event.message.content) this.toolResult(block);
       return;
     }
+    if (event.type === 'system') {
+      this.systemEvent(event);
+      return;
+    }
     if (event.type === 'result') {
       this.structuredOutput = event.structured_output;
       this.resultText = isString(event.result) ? event.result : '';
       if (event.is_error === true || event.subtype === 'error') {
         this.resultError = normalizedText(event.result, 4_000) || 'Claude generation failed.';
       }
+    }
+  }
+
+  /* Housekeeping the CLI reports as system messages: automatic compaction
+     (a `compacting` status, then a boundary once the summary replaces the
+     transcript) and API retries. Neither is the model's own output. */
+  private systemEvent(event: Record<string, unknown>): void {
+    if (event.subtype === 'status' && event.status === 'compacting' && this.compactionId === null) {
+      this.compactionId = `claude-compact-${++this.compactions}`;
+      this.callbacks.onTrace?.({ kind: 'tool-start', itemId: this.compactionId, toolName: 'compact', label: 'Compacting context' });
+      return;
+    }
+    if (event.subtype === 'compact_boundary') {
+      const itemId = this.compactionId ?? `claude-compact-${++this.compactions}`;
+      if (this.compactionId === null) {
+        this.callbacks.onTrace?.({ kind: 'tool-start', itemId, toolName: 'compact', label: 'Compacting context' });
+      }
+      this.compactionId = null;
+      this.callbacks.onTrace?.({ kind: 'tool-end', itemId, isError: false, output: 'Earlier context summarized' });
+      return;
+    }
+    if (event.subtype === 'api_retry') {
+      const attempt = typeof event.attempt === 'number' ? event.attempt : 0;
+      const max = typeof event.max_retries === 'number' ? event.max_retries : 0;
+      this.callbacks.onProgress?.(attempt && max ? `Retrying the request (${attempt} of ${max})…` : 'Retrying the request…');
     }
   }
 

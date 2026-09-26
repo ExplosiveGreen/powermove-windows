@@ -86,19 +86,18 @@ describe('Timeline', () => {
 
     const rows = [...target.querySelectorAll('.agent-trace > *')] as HTMLElement[];
     const at = (index: number): HTMLElement => rows[index]!;
-    // Reasoning and the calls that follow it share one work group.
-    expect(rows).toHaveLength(2);
-    expect(at(0).matches('details.agent-trace-tool')).toBe(true);
-    expect((at(0) as HTMLDetailsElement).open).toBe(false);
-    expect(at(0).querySelector('summary')?.textContent?.trim()).toBe('2 tool calls');
-    expect(at(0).getAttribute('title')).toContain('Ran commands and edited files');
-    const work = [...at(0).querySelectorAll('.agent-tool-details > div')];
-    expect(work).toHaveLength(3);
-    expect(work[0]!.className).toContain('is-thought');
-    expect(work[0]!.querySelector('span')?.textContent).toBe('Thought');
-    expect(work[0]!.querySelector('.agent-tool-chip')?.textContent).toBe('Reading the composition');
-    expect(at(1).className).toContain('agent-trace-prose');
-    expect(at(1).querySelector('.agent-trace-text')?.textContent).toBe('The layout is fixed.');
+    // Reasoning reads inline, as Codex and Claude Code show it; calls group.
+    expect(rows).toHaveLength(3);
+    expect(at(0).className).toContain('agent-thought-prose');
+    expect(at(0).textContent).toBe('Reading the composition');
+    expect(at(1).matches('details.agent-trace-tool')).toBe(true);
+    expect((at(1) as HTMLDetailsElement).open).toBe(false);
+    expect(at(1).querySelector('summary')?.textContent?.trim()).toBe('2 tool calls');
+    expect(at(1).getAttribute('title')).toContain('Ran commands and edited files');
+    expect(at(1).querySelectorAll('.agent-tool-details > div')).toHaveLength(2);
+    expect(at(1).querySelector('.is-thought')).toBeNull();
+    expect(at(2).className).toContain('agent-trace-prose');
+    expect(at(2).querySelector('.agent-trace-text')?.textContent).toBe('The layout is fixed.');
     expect(target.querySelector('.shimmer-text')).toBeNull();
   });
 
@@ -118,14 +117,13 @@ describe('Timeline', () => {
     expect(target.querySelector('.agent-trace-text')?.className).not.toContain('is-streaming');
   });
 
-  it('renders reasoning alone as a headerless row titled with how long it took', () => {
-    render(trace([{ kind: 'thought', id: 't0', label: 'Weighing options', live: false, startedAt: 10_000, endedAt: 14_200 }]));
-    const group = target.querySelector('.agent-tool-activity')!;
-    expect(group.tagName).toBe('DIV');
-    expect(group.className).toContain('is-headerless');
-    expect(group.querySelector('summary')).toBeNull();
-    expect(group.querySelector('.agent-tool-row span')?.textContent).toBe('Thought for 4s');
-    expect(group.querySelector('.agent-tool-chip')?.textContent).toBe('Weighing options');
+  it('renders reasoning alone as inline prose, not a tool group', () => {
+    render(trace([{ kind: 'thought', id: 't0', label: 'Weighing **options**', live: false, startedAt: 10_000, endedAt: 14_200 }]));
+    expect(target.querySelector('.agent-tool-activity')).toBeNull();
+    const thought = target.querySelector('.agent-thought-prose')!;
+    expect(thought.textContent).toBe('Weighing options');
+    expect(thought.querySelector('.is-bold')?.textContent).toBe('options');
+    expect(target.textContent).not.toContain('Thought for');
   });
 
   it('shows each call as icon, label, and a mono argument chip, and expands its output', () => {
@@ -274,27 +272,17 @@ describe('Timeline', () => {
     expect(target.querySelector('.agent-trace .shimmer-text')?.parentElement?.tagName).toBe('SUMMARY');
   });
 
-  it('keeps a live thought open under a shimmering Thinking label and streams its prose', () => {
+  it('streams a live thought inline and settles it when reasoning ends', () => {
     render(trace([{ kind: 'thought', id: 't0', label: 'Thinking it through', live: true }]));
-    const row = target.querySelector('.agent-tool-details > div')!;
-    expect(row.className).toContain('is-thought');
-    expect(row.className).toContain('is-open');
-    const toggle = row.querySelector('button.agent-tool-row')!;
-    expect(toggle.getAttribute('aria-expanded')).toBe('true');
-    expect(toggle.querySelector('span')?.textContent).toBe('Thinking');
-    expect(toggle.querySelector('span')?.className).toContain('shimmer-text');
-    // While open the chip steps aside for the full text.
-    expect(row.querySelector('.agent-tool-chip')).toBeNull();
-    expect(row.querySelector('.agent-tool-thought')?.textContent).toBe('Thinking it through');
+    expect(target.querySelector('.agent-thought-prose .agent-trace-text')?.className).toContain('is-streaming');
 
     Object.assign(agentState, {
       trace: [{ kind: 'thought', id: 't0', label: 'Thinking it through. Now editing the file.', live: false, startedAt: 0, endedAt: 3_000 }]
     });
     flushSync();
-    const settled = target.querySelector('.agent-tool-details > div')!;
-    expect(settled.className).not.toContain('is-open');
-    expect(settled.querySelector('span')?.textContent).toBe('Thought for 3s');
-    expect(settled.querySelector('.agent-tool-chip')?.textContent).toBe('Thinking it through.');
+    const settled = target.querySelector('.agent-thought-prose .agent-trace-text')!;
+    expect(settled.className).not.toContain('is-streaming');
+    expect(settled.textContent).toBe('Thinking it through. Now editing the file.');
   });
 
   it('renders inline code spans as code chips', () => {
@@ -311,7 +299,7 @@ describe('Timeline', () => {
       ...trace([{ kind: 'thought', id: 't0', label: 'Working', live: true }])
     });
     expect(target.querySelector('.agent-step')).toBeNull();
-    expect(target.querySelector('.agent-tool-activity.is-headerless')).toBeTruthy();
+    expect(target.querySelector('.agent-thought-prose')).toBeTruthy();
     expect(target.querySelector('.agent-trace')?.className).toContain('is-live');
 
     Object.assign(agentState, { phase: 'preview' });

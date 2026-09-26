@@ -3,6 +3,7 @@ import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promise
 import path from 'node:path';
 
 import { LIMITS, type AgentProviderId, type CodexRunRequest } from '../../shared/ipc';
+import { imageExtension } from '../image-extension';
 import { prepareExtensionStage, type ExtensionStage } from './change-history';
 
 export type CodexAuthority = 'project' | 'computer';
@@ -80,13 +81,6 @@ export async function writeSession(sessionPath: string, threadId: string): Promi
   const temporaryPath = `${sessionPath}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(temporaryPath, threadId.trim(), { encoding: 'utf8', mode: 0o600 });
   await rename(temporaryPath, sessionPath);
-}
-
-function imageExtension(bytes: Uint8Array): 'png' | 'jpg' {
-  const png = bytes.length >= 8
-    && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
-    && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a;
-  return png ? 'png' : 'jpg';
 }
 
 export async function prepareAgentWorkspace(

@@ -30,6 +30,7 @@ import { discoverClaudeBinary } from './env';
 import { ClaudeEventParser } from './events';
 import { isolatedClaudeEnvironment, prepareIsolatedClaudeHome } from './isolation';
 import type { NativeMcpServerConfig } from '../agent-tools/spec';
+import { imageExtension } from '../image-extension';
 
 const DEFAULT_TIMEOUT_MS = 3_600_000;
 const MAX_DIAGNOSTIC_BYTES = 2 * 1024 * 1024;
@@ -115,7 +116,7 @@ async function writeEditorImages(req: CodexRunRequest): Promise<{ directory: str
   const directory = await mkdtemp(path.join(tmpdir(), 'powermove-claude-'));
   const imagePaths: string[] = [];
   for (const [index, image] of req.images.entries()) {
-    const extension = image[0] === 0x89 && image[1] === 0x50 ? 'png' : 'jpg';
+    const extension = imageExtension(image);
     const file = path.join(directory, `reference-${index}.${extension}`);
     await writeFile(file, image);
     imagePaths.push(file);

@@ -197,6 +197,7 @@ const bridge: PowermoveBridge = {
       }
     },
     steer: (req) => ipcRenderer.invoke(IPC.codexSteer, req),
+    answer: (req) => ipcRenderer.invoke(IPC.codexAnswer, req),
     cancel: (id, preserveChanges = false) => ipcRenderer.invoke(IPC.codexCancel, { id, preserveChanges }) as Promise<void>,
     fixPrompt: (req) => ipcRenderer.invoke(IPC.codexFixPrompt, req) as Promise<string>,
     rebasePrompt: (req) => ipcRenderer.invoke(IPC.codexRebasePrompt, req) as Promise<string>,

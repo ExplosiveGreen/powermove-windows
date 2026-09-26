@@ -1,3 +1,4 @@
+import type { CodexQuestion } from '../../../../shared/ipc';
 import type { NoticeKind } from '../../errors/presentation';
 import type { AgentModResult } from './mod-result';
 import type { UIPlacement } from './ui-placement';
@@ -57,6 +58,19 @@ export type TraceStep =
       output?: string;
       startedAt?: number;
       endedAt?: number;
+    }
+  | {
+      kind: 'question';
+      id: string;
+      questions: CodexQuestion[];
+      /** 'reply' holds the run's request open; 'message' is answered by a follow-up message. */
+      transport: 'reply' | 'message';
+      blocking: boolean;
+      /** The run that holds a 'reply' question open. */
+      requestId?: string;
+      status: 'open' | 'answered' | 'closed';
+      /** What the person answered, by question id; secret answers are masked. */
+      answers?: Record<string, string>;
     };
 
 export interface AgentSnapshot {

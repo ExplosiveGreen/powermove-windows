@@ -30,6 +30,7 @@ import {
   type CodexFixPromptRequest,
   type CodexRebasePromptRequest,
   type CodexRunRequest,
+  type CodexAnswerRequest,
   type CodexSteerRequest,
   type ConsentRequest
 } from '../../shared/ipc';
@@ -120,6 +121,19 @@ function requireSteerRequest(value: unknown): CodexSteerRequest {
     value.images.some((image) => !(image instanceof Uint8Array) || image.byteLength > 4 * 1024 * 1024)
   ) throw new IpcValidationError(IPC.codexSteer, 'invalid steering request');
   return { id: value.id, prompt: value.prompt, images: value.images as Uint8Array[] };
+}
+
+function requireAnswerRequest(value: unknown): CodexAnswerRequest {
+  const answers = isRecord(value) && isRecord(value.answers) ? Object.entries(value.answers) : null;
+  if (
+    !isRecord(value) ||
+    !isString(value.id) || !REQUEST_ID.test(value.id) ||
+    !isString(value.itemId, 240) || value.itemId.length === 0 ||
+    answers === null || answers.length > 12 ||
+    answers.some(([id, list]) => id.length > 200 || !Array.isArray(list) || list.length > 12 ||
+      list.some((answer) => !isString(answer, 8_000)))
+  ) throw new IpcValidationError(IPC.codexAnswer, 'invalid answer');
+  return { id: value.id, itemId: value.itemId, answers: Object.fromEntries(answers) as Record<string, string[]> };
 }
 
 function requireRestoreRequest(value: unknown): AgentChangeSetRestoreRequest {
@@ -484,6 +498,13 @@ export function registerCodexIpc(
     const req = requireSteerRequest(rawRequest);
     if (owners.get(req.id) !== event.sender) return { accepted: false };
     return { accepted: await appServerRunner.steer(req) };
+  });
+
+  ipcMain.handle(IPC.codexAnswer, async (event, rawRequest: unknown) => {
+    requireTrusted(event, ctx);
+    const req = requireAnswerRequest(rawRequest);
+    if (owners.get(req.id) !== event.sender) return { accepted: false };
+    return { accepted: appServerRunner.answer(req) };
   });
 
   ipcMain.handle(IPC.codexCancel, async (event, rawRequest: unknown) => {

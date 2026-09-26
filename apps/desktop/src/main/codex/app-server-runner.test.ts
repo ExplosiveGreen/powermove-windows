@@ -34,6 +34,11 @@ class FakeAppServer extends EventEmitter {
     this.stdout.write(`${JSON.stringify({ method, params })}\n`);
   }
 
+  /** A request initiated by App Server, which the client must answer. */
+  ask(id: number | string, method: string, params: Record<string, unknown>): void {
+    this.stdout.write(`${JSON.stringify({ id, method, params })}\n`);
+  }
+
   private receive(chunk: string): void {
     this.buffered += chunk;
     const lines = this.buffered.split('\n');
@@ -367,4 +372,143 @@ it('terminates an unresponsive startup before launching another process', async 
     await runner.cancel(request().id);
     await expect(run).resolves.toMatchObject({ cancelled: true });
   } finally { await runner.shutdown(); }
+});
+
+describe('CodexAppServerRunner questions', () => {
+  function start() {
+    const child = new FakeAppServer();
+    const runner = new CodexAppServerRunner({
+      discoverBinary: async () => '/fake/codex',
+      prepareHome: async () => '/tmp/powermove-app-server-test',
+      spawnProcess: () => child as unknown as ChildProcessWithoutNullStreams,
+      requestTimeoutMs: 500,
+      turnTimeoutMs: 5_000
+    });
+    const traces: any[] = [];
+    const progress: string[] = [];
+    const run = runner.run(request(), {
+      userData: '/tmp/powermove-app-server-test',
+      onTrace: (step) => traces.push(step),
+      onProgress: (text) => progress.push(text)
+    });
+    return { child, runner, traces, progress, run };
+  }
+  const scope = { threadId: 'thr_123', turnId: 'turn_456' };
+  const complete = (child: FakeAppServer) => {
+    child.notify('item/completed', { ...scope, item: { type: 'agentMessage', id: 'msg_final', text: '{"kind":"done"}' } });
+    child.notify('turn/completed', { threadId: 'thr_123', turn: { id: 'turn_456', status: 'completed' } });
+  };
+
+  it('opts into the experimental API that carries agent questions', async () => {
+    const { child, runner, run } = start();
+    await vi.waitFor(() => expect(child.messages.some((message) => message.method === 'turn/start')).toBe(true));
+    expect(child.messages.find((message) => message.method === 'initialize')?.params.capabilities)
+      .toEqual({ experimentalApi: true, requestAttestation: false });
+    await runner.cancel(request().id);
+    await run;
+    await runner.shutdown();
+  });
+
+  it('surfaces request_user_input and answers it with the reply', async () => {
+    const { child, runner, traces, run } = start();
+    await vi.waitFor(() => expect(child.messages.some((message) => message.method === 'turn/start')).toBe(true));
+    // Our own requests used ids 1-3; a server request reusing one must not settle it.
+    child.ask(3, 'item/tool/requestUserInput', {
+      ...scope, itemId: 'call_q', isBlocking: true, autoResolutionMs: null,
+      questions: [
+        { id: 'layout', header: 'Layout', question: 'Stack or grid?', isOther: false, isSecret: false,
+          options: [{ label: 'Stack', description: 'One column' }, { label: 'Grid', description: '' }] },
+        { id: 'bad', question: '' }
+      ]
+    });
+    await vi.waitFor(() => expect(traces.some((step) => step.kind === 'question')).toBe(true));
+    expect(traces.find((step) => step.kind === 'question')).toEqual({
+      kind: 'question', itemId: 'call_q', transport: 'reply', blocking: true,
+      questions: [{ id: 'layout', header: 'Layout', question: 'Stack or grid?', allowOther: false, secret: false,
+        options: [{ label: 'Stack', description: 'One column' }, { label: 'Grid', description: '' }] }]
+    });
+
+    expect(runner.answer({ id: request().id, itemId: 'call_q', answers: { layout: ['Grid'] } })).toBe(true);
+    expect(runner.answer({ id: request().id, itemId: 'call_q', answers: { layout: ['Grid'] } })).toBe(false);
+    await vi.waitFor(() => expect(child.messages).toContainEqual({ id: 3, result: { answers: { layout: { answers: ['Grid'] } } } }));
+
+    complete(child);
+    await expect(run).resolves.toMatchObject({ ok: true, text: '{"kind":"done"}' });
+    await runner.shutdown();
+  });
+
+  it('releases an unanswered question when the turn ends and reports provider resolution', async () => {
+    const { child, runner, traces, run } = start();
+    await vi.waitFor(() => expect(child.messages.some((message) => message.method === 'turn/start')).toBe(true));
+    child.ask('q-a', 'item/tool/requestUserInput', { ...scope, itemId: 'call_a', isBlocking: false, questions: [{ id: 'x', question: 'Why?' }] });
+    child.ask('q-b', 'item/tool/requestUserInput', { ...scope, itemId: 'call_b', isBlocking: false, questions: [{ id: 'y', question: 'How?' }] });
+    await vi.waitFor(() => expect(traces.filter((step) => step.kind === 'question')).toHaveLength(2));
+    expect(traces.find((step) => step.itemId === 'call_a')).toMatchObject({ blocking: false, questions: [{ allowOther: true }] });
+
+    child.notify('serverRequest/resolved', { threadId: 'thr_123', requestId: 'q-a' });
+    await vi.waitFor(() => expect(traces).toContainEqual({ kind: 'question-closed', itemId: 'call_a' }));
+
+    complete(child);
+    await run;
+    expect(child.messages).toContainEqual({ id: 'q-b', result: { answers: {} } });
+    expect(child.messages).not.toContainEqual({ id: 'q-a', result: { answers: {} } });
+    await runner.shutdown();
+  });
+
+  it('shows async message questions without mistaking them for the final answer', async () => {
+    const { child, runner, traces, run } = start();
+    await vi.waitFor(() => expect(child.messages.some((message) => message.method === 'turn/start')).toBe(true));
+    child.notify('item/completed', { ...scope, item: {
+      type: 'agentMessage', id: 'msg_q', text: 'Quick check while I keep going.', delivery: 'async',
+      questions: [{ title: 'Keep the logo?', options: ['Yes', 'No'] }, { title: 'Any deadline?', options: null }]
+    } });
+    await vi.waitFor(() => expect(traces.some((step) => step.kind === 'question')).toBe(true));
+    expect(traces).toContainEqual({ kind: 'answer', text: 'Quick check while I keep going.' });
+    expect(traces.find((step) => step.kind === 'question')).toEqual({
+      kind: 'question', itemId: 'msg_q', transport: 'message', blocking: false,
+      questions: [
+        { id: 'msg_q-0', header: '', question: 'Keep the logo?', allowOther: true, secret: false,
+          options: [{ label: 'Yes', description: '' }, { label: 'No', description: '' }] },
+        { id: 'msg_q-1', header: '', question: 'Any deadline?', allowOther: true, secret: false, options: [] }
+      ]
+    });
+
+    child.notify('turn/completed', { threadId: 'thr_123', turn: { id: 'turn_456', status: 'completed' } });
+    await expect(run).resolves.toMatchObject({ ok: false });
+    await runner.shutdown();
+  });
+
+  it('answers requests it does not support instead of stalling the turn', async () => {
+    const { child, runner, run } = start();
+    await vi.waitFor(() => expect(child.messages.some((message) => message.method === 'turn/start')).toBe(true));
+    child.ask(90, 'mcpServer/elicitation/request', { threadId: 'thr_123', turnId: 'turn_456', serverName: 'powermove', mode: 'form' });
+    child.ask(91, 'item/commandExecution/requestApproval', { ...scope, itemId: 'cmd' });
+    await vi.waitFor(() => expect(child.messages).toContainEqual({ id: 90, result: { action: 'decline', content: null, _meta: null } }));
+    await vi.waitFor(() => expect(child.messages.find((message) => message.id === 91 && message.error)).toBeDefined());
+    complete(child);
+    await expect(run).resolves.toMatchObject({ ok: true });
+    await runner.shutdown();
+  });
+
+  it('shows compaction, reroutes, and retries without treating them as the answer', async () => {
+    const { child, runner, traces, progress, run } = start();
+    await vi.waitFor(() => expect(child.messages.some((message) => message.method === 'turn/start')).toBe(true));
+    child.notify('item/started', { ...scope, item: { type: 'contextCompaction', id: 'cmp' } });
+    child.notify('item/completed', { ...scope, item: { type: 'contextCompaction', id: 'cmp' } });
+    child.notify('error', { ...scope, willRetry: true, error: { message: 'stream disconnected', codexErrorInfo: null } });
+    child.notify('model/rerouted', { ...scope, fromModel: 'gpt-6', toModel: 'gpt-6-mini', reason: 'highRiskCyberActivity' });
+    child.notify('warning', { threadId: null, message: 'Usage is nearly exhausted.' });
+    await vi.waitFor(() => expect(progress).toEqual([
+      'Connection interrupted. Retrying…', 'Continuing on gpt-6-mini', 'Usage is nearly exhausted.'
+    ]));
+    expect(traces).toEqual([
+      { kind: 'tool-start', itemId: 'cmp', toolName: 'compact', label: 'Compacting context' },
+      { kind: 'tool-end', itemId: 'cmp', isError: false, output: 'Earlier context summarized' }
+    ]);
+
+    child.notify('turn/completed', { threadId: 'thr_123', turn: { id: 'turn_456', status: 'failed',
+      error: { message: 'context_length_exceeded', codexErrorInfo: 'contextWindowExceeded' } } });
+    await expect(run).resolves.toMatchObject({ ok: false, error: expect.stringContaining('even after compacting') });
+    await runner.shutdown();
+  });
 });

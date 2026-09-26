@@ -338,3 +338,17 @@ describe('threadIdForCodexEvent', () => {
     expect(threadIdForCodexEvent({ type: 'item.started', thread_id: 'abc-123' })).toBeNull();
   });
 });
+
+describe('Codex exec housekeeping', () => {
+  it('traces compaction and subagents, and reports retries as progress', () => {
+    expect(traceForCodexEvent({ type: 'item.started', item: { id: 'c1', type: 'context_compaction' } }))
+      .toEqual({ kind: 'tool-start', itemId: 'c1', toolName: 'compact', label: 'Compacting context' });
+    expect(traceForCodexEvent({ type: 'item.completed', item: { id: 'c1', type: 'context_compaction' } }))
+      .toEqual({ kind: 'tool-end', itemId: 'c1', isError: false, output: 'Earlier context summarized' });
+    expect(traceForCodexEvent({ type: 'item.started', item: { id: 'a1', type: 'collab_tool_call', prompt: 'Audit the cut' } }))
+      .toEqual({ kind: 'tool-start', itemId: 'a1', toolName: 'agent', label: 'Subagent', detail: 'Audit the cut' });
+    expect(progressForCodexEvent({ type: 'error', message: 'Reconnecting... 2/5' })).toBe('Reconnecting... 2/5');
+    expect(progressForCodexEvent({ type: 'item.completed', item: { id: 'e', type: 'error', message: 'Model  metadata missing' } }))
+      .toBe('Model metadata missing');
+  });
+});

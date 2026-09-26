@@ -11,10 +11,13 @@
   import { glowFade } from './motion';
   import ModResult from './ModResult.svelte';
   import { modResultForMessage } from './mod-result';
+  import QuestionCard from './QuestionCard.svelte';
   import TextRow from './TextRow.svelte';
+  import ThoughtRow from './ThoughtRow.svelte';
   import ToolActivity from './ToolActivity.svelte';
   import { splitUIPlacementText } from './ui-placement';
-  import { displayPromptText } from './inline-prompt';
+  import { displayPromptText, promptSegments } from './inline-prompt';
+  import { activatePromptAttachment } from './attachments';
 
   let {
     PM,
@@ -32,6 +35,10 @@
     void modRevision;
     return modResultForMessage(message, PM.Kernel?.panels?.entries?.() || []);
   });
+  // Sent files sit where they were placed in the composer, not in a rail above.
+  const prompt = $derived(message.role === 'user'
+    ? promptSegments(message.text || '', (message.attachments ?? []) as Array<Record<string, any> & { name: string }>)
+    : { segments: [], loose: [] });
   function promptSignal(node: HTMLElement) { return { destroy: mountPromptGlow(node) }; }
 
   /* A turn that failed is not automatically the editor's error. Messages
@@ -45,13 +52,15 @@
   // completed reply whose earlier work belongs behind a disclosure.
   const replyIndex = $derived(message.steering ? -1 : steps.reduce((last, step, index) => step.kind === 'text' && step.text.trim() ? index : last, -1));
   const reply = $derived(replyIndex >= 0 ? steps[replyIndex] : undefined);
-  const traceRows = $derived(activityRows(steps.filter((_, index) => index !== replyIndex).map(step =>
-    step.kind === 'thought' ? { kind: 'text' as const, id: step.id, text: step.label } : step)));
+  // A question must never hide behind the collapsed work log.
+  const questions = $derived(message.steering ? [] : steps.filter(step => step.kind === 'question'));
+  const traceRows = $derived(activityRows(steps.filter((step, index) =>
+    index !== replyIndex && (message.steering || step.kind !== 'question'))));
   const workedFor = $derived.by(() => {
     if (Number.isFinite(message.durationMs) && message.durationMs! >= 0) return durationLabel(message.durationMs!);
     // Older saved conversations only have timestamps on their tool/thought steps.
-    const starts = steps.flatMap(step => step.kind !== 'text' && Number.isFinite(step.startedAt) ? [step.startedAt!] : []);
-    const ends = steps.flatMap(step => step.kind !== 'text' && Number.isFinite(step.endedAt) ? [step.endedAt!] : []);
+    const starts = steps.flatMap(step => (step.kind === 'tool' || step.kind === 'thought') && Number.isFinite(step.startedAt) ? [step.startedAt!] : []);
+    const ends = steps.flatMap(step => (step.kind === 'tool' || step.kind === 'thought') && Number.isFinite(step.endedAt) ? [step.endedAt!] : []);
     return starts.length && ends.length ? durationLabel(Math.max(...ends) - Math.min(...starts)) : '';
   });
 </script>
@@ -60,6 +69,10 @@
   {#each traceRows as row (row.renderKey)}
     {#if row.kind === 'text'}
       <TextRow text={row.text} />
+    {:else if row.kind === 'thought'}
+      <ThoughtRow text={row.text} />
+    {:else if row.kind === 'question'}
+      <QuestionCard {PM} step={row} />
     {:else if row.kind === 'tools'}
       <ToolActivity {row} />
     {/if}
@@ -78,17 +91,23 @@
         </div>
       </details>
     {/if}
+    {#each questions as step (step.id)}<QuestionCard {PM} {step} />{/each}
     {#if reply?.kind === 'text'}<TextRow text={reply.text} />{/if}
   </div>
 {:else if message.role === 'user'}
   <div class="agent-msg user" class:is-entering={message.entering} class:is-steering={message.steering}>
     {#if message.focusLabels?.length}<div class="agent-message-focus">Focus · {message.focusLabels.join(', ')}</div>{/if}
-    {#if message.attachments?.length}
-      <div class="agent-msg-files"><AttachmentChips {PM} items={message.attachments} /></div>
+    {#if prompt.loose.length}
+      <div class="agent-msg-files"><AttachmentChips {PM} items={prompt.loose} /></div>
     {/if}
     <div class="agent-prompt" class:is-answering={answering}>
       {#if answering}<div class="agent-prompt-signal" data-prompt-halo aria-hidden="true" use:promptSignal out:glowFade={{duration: 220}}></div>{/if}
-      <div class="agent-bubble"><Markdown text={displayPromptText(message.text || '') || (message.attachments?.length ? `Attached ${message.attachments.length} file${message.attachments.length === 1 ? '' : 's'}` : '')} /></div>
+      <div class="agent-bubble">{#if prompt.segments.some(segment => 'attachment' in segment)}{#each prompt.segments as segment, index (index)}{#if 'text' in segment}{segment.text}{:else}<button
+        type="button" class="agent-inline-attachment is-sent"
+        aria-label={segment.attachment.dataUrl ? `View ${segment.attachment.name}` : `Reveal ${segment.attachment.name} in Finder`}
+        title={segment.attachment.name}
+        onclick={() => void activatePromptAttachment(PM, segment.attachment)}
+      >{#if segment.attachment.dataUrl}<img src={segment.attachment.dataUrl} alt="" />{:else}<span class="agent-inline-attachment-type" aria-hidden="true">{(segment.attachment.name.split('.').pop() || 'file').slice(0, 5).toUpperCase()}</span>{/if}<span>{segment.attachment.name.replace(/\.[^.]+$/, '') || segment.attachment.name}</span></button>{/if}{/each}{:else}<Markdown text={displayPromptText(message.text || '') || (message.attachments?.length ? `Attached ${message.attachments.length} file${message.attachments.length === 1 ? '' : 's'}` : '')} />{/if}</div>
     </div>
   </div>
 {:else}

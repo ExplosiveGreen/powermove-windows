@@ -61,6 +61,7 @@ const FAMILY_RULES: Array<[RegExp, ToolFamily]> = [
   [/^(bash|command|shell|terminal|exec|run|process)/, 'run'],
   [/^(edit|write|create|patch|apply|delete|move|multiedit|notebook)|file_change/, 'edit'],
   [/^(read|view|cat)/, 'read'],
+  [/^(compact|wait$)/, 'think'],
   [/^(image|render|draw|screenshot)/, 'image'],
   [/^computer/, 'computer'],
   [/^(agent|task|todo|plan)/, 'think']
@@ -90,14 +91,24 @@ export function durationLabel(ms: number): string {
 
 type RowMeta = { renderKey: string; pulsing: boolean };
 
+/** Reasoning the model narrated, shown inline between calls as Codex and
+    Claude Code do, rather than folded into a tool group. */
+export interface ThoughtRow { kind: 'thought'; id: string; text: string; live: boolean }
+
 export type ActivityRow =
   | (Extract<TraceStep, { kind: 'text' }> & RowMeta)
+  | (ThoughtRow & RowMeta)
+  | (Extract<TraceStep, { kind: 'question' }> & RowMeta)
   | (ToolsRow & RowMeta);
 
 /* Tool names come from wildly different providers (`bash`, `str_replace_edit`,
    `mcp__github__search_issues`). Match on the FAMILY, not the exact name, so a
    new tool still produces a sentence instead of a raw identifier. */
 const ACTION_RULES: Array<[RegExp, string]> = [
+  [/^compact/, 'compacted the conversation'],
+  [/^view_image$/, 'viewed images'],
+  [/^wait$/, 'waited'],
+  [/^(agent|task)$/, 'worked with subagents'],
   [/^get_project_state$/, 'inspected the project'],
   [/^get_panel_layout$/, 'checked the panel layout'],
   [/^open_panel$/, 'opened a panel'],
@@ -236,7 +247,7 @@ export function groupedToolRow(work: WorkStep[]): ToolsRow {
 }
 
 export function activityRows(steps: TraceStep[] = []): ActivityRow[] {
-  const rows: Array<TraceStep | ToolsRow> = [];
+  const rows: Array<TraceStep | ThoughtRow | ToolsRow> = [];
   let work: WorkStep[] = [];
   const flushWork = (): void => {
     if (!work.length) return;
@@ -244,8 +255,8 @@ export function activityRows(steps: TraceStep[] = []): ActivityRow[] {
     work = [];
   };
 
-  // Reasoning and calls share one group; only model prose breaks it, so the
-  // trail reads text → work → text in stream order.
+  // Calls share one group; prose, reasoning, and questions break it, so the
+  // trail reads text → reasoning → work → text in stream order.
   for (const step of steps) {
     if (step?.kind === 'text') {
       const text = splitUIPlacementText(step.text).text;
@@ -254,7 +265,18 @@ export function activityRows(steps: TraceStep[] = []): ActivityRow[] {
       rows.push({ ...step, text });
       continue;
     }
-    if (step?.kind === 'tool' || step?.kind === 'thought') {
+    if (step?.kind === 'thought') {
+      if (!String(step.label ?? '').trim()) continue;
+      flushWork();
+      rows.push({ kind: 'thought', id: step.id, text: step.label, live: step.live });
+      continue;
+    }
+    if (step?.kind === 'question') {
+      flushWork();
+      rows.push(step);
+      continue;
+    }
+    if (step?.kind === 'tool') {
       work.push(step);
     } else {
       flushWork();
@@ -269,7 +291,7 @@ export function activityRows(steps: TraceStep[] = []): ActivityRow[] {
   let pulsingIndex = -1;
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index] as any;
-    if (row.kind === 'tools' && row.status === 'running') {
+    if ((row.kind === 'tools' && row.status === 'running') || (row.kind === 'thought' && row.live)) {
       pulsingIndex = index;
     }
   }
