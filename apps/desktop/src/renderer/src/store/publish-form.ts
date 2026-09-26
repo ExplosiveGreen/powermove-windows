@@ -43,12 +43,7 @@ export type PublishProblems = {
 };
 
 export const LICENCE_LABEL: Record<PublishLicence, string> = {
-  MIT: 'MIT',
-  'Apache-2.0': 'Apache 2.0',
-  'BSD-3-Clause': 'BSD 3-Clause',
-  'GPL-3.0-or-later': 'GPL 3.0 or later',
-  'AGPL-3.0-or-later': 'AGPL 3.0 or later',
-  Unlicense: 'Unlicense'
+  MIT: 'MIT'
 };
 
 export function isLicence(value: string): value is PublishLicence {
