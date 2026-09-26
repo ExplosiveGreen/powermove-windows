@@ -27,8 +27,7 @@
   $effect(() => { untrack(() => void start()); });
 </script>
 
-<!-- svelte-ignore a11y_autofocus -->
-<div class="pub-sheet" tabindex="-1" autofocus>
+<div class="pub-sheet" tabindex="-1" data-autofocus>
   <header class="acct-head">
     <h2>Sandbox compatibility check: {name}</h2>
     <p>Runs a short check with the permissions in its manifest to find compatibility issues before publishing.</p>

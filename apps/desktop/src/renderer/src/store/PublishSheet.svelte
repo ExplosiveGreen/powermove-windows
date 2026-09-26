@@ -147,8 +147,7 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_autofocus -->
-<div class="pub-sheet" tabindex="-1" autofocus>
+<div class="pub-sheet" tabindex="-1" data-autofocus>
   {#if published}
     <header class="acct-head">
       <h2>Published {published.coordinate} {published.version}</h2>

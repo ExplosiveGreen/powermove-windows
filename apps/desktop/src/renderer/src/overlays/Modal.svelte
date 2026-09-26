@@ -42,7 +42,10 @@
 
   export function focusInitial(): void {
     const focusable = focusables();
-    const autofocus = dialog.querySelector<HTMLElement>('[autofocus]');
+    /* Sheets mark their target with data-autofocus, not autofocus: Svelte
+       focuses an [autofocus] element itself on mount, without preventScroll,
+       and the body scrolls to it before this runs. */
+    const autofocus = dialog.querySelector<HTMLElement>('[autofocus], [data-autofocus]');
     (autofocus ?? focusable[0] ?? dialog).focus({ preventScroll: true });
   }
 
