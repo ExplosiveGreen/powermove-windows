@@ -25,7 +25,7 @@ export function openPublishSheet(
   let component: ReturnType<typeof mount> | null = null;
   const handle = modal({
     body,
-    width: 520,
+    width: 580,
     actions: [],
     onClose: () => {
       if (component) void unmount(component);
@@ -33,7 +33,7 @@ export function openPublishSheet(
       if (open === current) open = null;
     }
   });
-  handle.el.classList.add('account-modal', 'publish-modal');
+  handle.el.classList.add('publish-modal');
   const current = { localId: plan.localId, close: () => handle.close() };
   open = current;
   component = mount(PublishSheet, {

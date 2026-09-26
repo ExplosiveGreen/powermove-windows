@@ -28,11 +28,11 @@
 </script>
 
 <div class="pub-sheet" tabindex="-1" data-autofocus>
-  <header class="acct-head">
-    <h2>Sandbox compatibility check: {name}</h2>
-    <p>Runs a short check with the permissions in its manifest to find compatibility issues before publishing.</p>
+  <header class="pub-head">
+    <h2>Check {name} in the sandbox</h2>
+    <p>Runs it with only the permissions in its manifest, the way it runs for people who install it.</p>
   </header>
-  <div class="pub-form">
+  <div class="pub-form sg-column">
     <SandboxCheckStatus {state} onretry={() => void start()} />
   </div>
   <footer class="pub-foot">

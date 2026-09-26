@@ -17,7 +17,7 @@ export function openSandboxCheckSheet(PM: StorePM, localId: string, name: string
   let component: ReturnType<typeof mount> | null = null;
   const handle = modal({
     body,
-    width: 480,
+    width: 520,
     actions: [],
     onClose: () => {
       if (component) void unmount(component);
@@ -25,7 +25,7 @@ export function openSandboxCheckSheet(PM: StorePM, localId: string, name: string
       if (open === current) open = null;
     }
   });
-  handle.el.classList.add('account-modal', 'publish-modal');
+  handle.el.classList.add('publish-modal');
   const current = { close: () => handle.close() };
   open = current;
   component = mount(SandboxCheckSheet, {
