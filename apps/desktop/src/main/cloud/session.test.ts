@@ -9,7 +9,7 @@ import { createCloudSession } from './session';
 const ORIGIN = 'https://cloud.example.test';
 const ME = {
   user: { id: '3f1c9b1e-8f55-4d8f-9d0a-6f1d1c1b2a3e', name: 'Jude', email: 'jude@example.test', image: null },
-  publisher: { id: '7d2a0b6e-1c3f-4a5b-8c9d-0e1f2a3b4c5d', handle: 'jude', tombstoned: false },
+  publisher: { id: '7d2a0b6e-1c3f-4a5b-8c9d-0e1f2a3b4c5d', handle: 'jude', tombstoned: false, verified: false },
   settings: { rememberInstalls: true }
 };
 
@@ -44,6 +44,15 @@ const future = () => new Date(Date.now() + 86_400_000).toISOString();
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
 describe('cloud session', () => {
+  it('does not request Keychain access when no session exists', async () => {
+    const { dir } = await harness();
+    const storage = vi.fn(() => safeStorage);
+    const session = createCloudSession({ dir, safeStorage: storage, origin: () => ORIGIN, appVersion: '1.0.0' });
+    await session.load();
+    expect(storage).not.toHaveBeenCalled();
+    expect(session.currentToken()).toBeNull();
+  });
+
   it('seals the token with safeStorage and reads it back', async () => {
     const { dir, make } = await harness();
     const session = make();

@@ -1,7 +1,10 @@
 {
   "compilerOptions": {
     "target": "es2022",
-    "lib": ["es2022", "dom"],
+    "lib": [
+      "es2022",
+      "dom"
+    ],
     "module": "es2022",
     "moduleResolution": "Bundler",
     "noEmit": true,
@@ -9,7 +12,15 @@
     "strict": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["./worker-configuration.d.ts", "../../node_modules/.bun/@cloudflare+workers-types@5.20260921.1/node_modules/@cloudflare/workers-types", "bun"]
+    "types": [
+      "./worker-configuration.d.ts",
+      "bun"
+    ]
   },
-  "include": ["worker-configuration.d.ts", "src/**/*.ts", "scripts/**/*.ts", "test/**/*.ts"]
+  "include": [
+    "worker-configuration.d.ts",
+    "src/**/*.ts",
+    "scripts/**/*.ts",
+    "test/**/*.ts"
+  ]
 }

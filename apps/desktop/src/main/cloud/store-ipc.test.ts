@@ -30,7 +30,7 @@ describe('store IPC schemas', () => {
       localId: 'glass-blur',
       form: {
         version: '1.0.0', notes: 'First.', visibility: 'unlisted', iconPng: 'iVBORw0KGgo=',
-        listing: { name: 'Glass blur', tagline: 'Frosted glass.', category: 'effects', licence: 'Apache-2.0' },
+        listing: { name: 'Glass blur', tagline: 'Frosted glass.', category: 'effects', licence: 'MIT' },
         waivers: [{ path: 'index.ts', line: 3, reason: 'test fixture' }]
       }
     }).success).toBe(true);
@@ -68,6 +68,7 @@ describe('store IPC schemas', () => {
       ['store:publish', { localId: 'glass-blur', form: { version: '1.2.0', waivers: [], iconPng: 'A'.repeat(400_000) } }],
       ['store:publish', { localId: 'glass-blur', form: { version: '1.2.0', waivers: [], listing: { name: 'x', tagline: 't'.repeat(161), category: 'effects', licence: 'MIT' } } }],
       ['store:publish', { localId: 'glass-blur', form: { version: '1.2.0', waivers: [], listing: { name: 'x', tagline: '', category: 'effects', licence: 'WTFPL' } } }],
+      ['store:publish', { localId: 'glass-blur', form: { version: '1.2.0', waivers: [], listing: { name: 'x', tagline: '', category: 'effects', licence: 'Apache-2.0' } } }],
       ['store:publish', { localId: 'glass-blur', form: { version: '1.2.0', waivers: [], listing: { name: ' ', tagline: '', category: 'effects', licence: 'MIT' } } }],
       ['store:yank', { repoId: 'x', version: '1.0.0' }],
       ['store:yank', { repoId: REPO, version: 'latest' }]
@@ -220,7 +221,7 @@ describe('library', () => {
   });
   const me = (publisherId: string | null): MeDto => ({
     user: { id: '55555555-5555-4555-8555-555555555555', name: null, email: 'j@example.com', image: null },
-    publisher: publisherId ? { id: publisherId, handle: 'jude', tombstoned: false } : null,
+    publisher: publisherId ? { id: publisherId, handle: 'jude', tombstoned: false, verified: false } : null,
     settings: { rememberInstalls: true }
   });
   const origin = (owner: string) => ({ repoId: REPO, releaseId: R1, coordinate: 'mara/glass-blur', version: '1.0.0', treeSha: 't', commitSha: 'c', ownerPublisherId: owner });

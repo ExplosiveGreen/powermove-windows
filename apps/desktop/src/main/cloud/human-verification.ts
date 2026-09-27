@@ -26,8 +26,9 @@ async function run(origin: string, ticket: string, scope: string): Promise<strin
   const dir = path.join(app.getPath('userData'), 'cloud', 'human');
   const file = path.join(dir, `${createHash('sha256').update(`${origin}\n${scope}`).digest('hex')}.bin`);
   try {
+    const sealed = await readFile(file);
     if (safeStorage.isEncryptionAvailable()) {
-      const cached = JSON.parse(safeStorage.decryptString(await readFile(file))) as Saved;
+      const cached = JSON.parse(safeStorage.decryptString(sealed)) as Saved;
       if (cached.origin === origin && cached.scope === scope && cached.expires > Date.now() + 60_000 && typeof cached.clearance === 'string') return cached.clearance;
     }
   } catch { /* New device, expired or unavailable secure storage: verify again. */ }

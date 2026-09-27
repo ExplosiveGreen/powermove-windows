@@ -9,7 +9,7 @@
    squircles (settings/squircle.ts); keyboard focus is drawn as SVG. Group
    and control fills carry the hierarchy without resting outlines. */
 
-#settings-screen,.export-modal,.account-modal{
+#settings-screen,.export-modal,.account-modal,.publish-modal{
   --ctl-h:30px;
   --sg-group-radius:var(--r-xl);
   --sg-row-padding:var(--gut);
@@ -45,8 +45,8 @@ body:has(#settings-screen.on) #body,body:has(#settings-screen.on) #status,body:h
 .sg-navbtn{height:32px;width:100%;display:flex;align-items:center;gap:9px;padding:0 9px;border:0;border-radius:var(--r-md);color:var(--tx-2);font-size:var(--fs-md);font-weight:var(--fw-medium);text-align:left;transition:background var(--dur-1),color var(--dur-1)}
 .sg-navbtn svg{width:15px;height:15px;flex:none;color:var(--tx-3);transition:color var(--dur-1)}
 .sg-navbtn span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sg-navbtn:hover{color:var(--tx)}
-.sg-navbtn.on{color:var(--tx)}
+.sg-navbtn:hover{background:var(--ink-1);color:var(--tx)}
+.sg-navbtn.on{background:var(--ink-2);color:var(--tx)}
 .sg-navbtn.on::after{display:none}
 .sg-navbtn.on svg{color:var(--tx)}
 .sg-navbtn:focus-visible{outline:0}
@@ -201,3 +201,5 @@ body:has(#settings-screen.on) #body,body:has(#settings-screen.on) #status,body:h
 }
 
 @media (prefers-reduced-motion:reduce){}
+
+.sg-column .settings-background-control>.color-field{width:100%;height:30px;padding:0 10px 0 6px;border:0;border-radius:var(--sg-control-radius);background:var(--bg-float);box-shadow:none}

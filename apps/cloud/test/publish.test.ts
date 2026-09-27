@@ -7,6 +7,7 @@ import { createApp } from '../src/app';
 import { presentShas } from '../src/objects/presence';
 import { withData } from './db';
 import { makeEnv } from './env';
+import { seedAdmin } from './helpers';
 import { files, publisher, publishRequest, uploadTree } from './publish-fixture';
 const txt = (s: string) => new TextEncoder().encode(s);
 test('rejects a reserved extension slug at publish', () =>
@@ -187,11 +188,12 @@ test('yank, patch, tombstone, moderation and reports', () =>
       json({ action: 'hide', reason: 'review' }),
       env,
     );
-    expect(r.status).toBe(401);
-    env.ADMIN_TOKEN = 'test-admin-token';
+    // The owner is signed in but not an admin.
+    expect(r.status).toBe(403);
+    const operator = await seedAdmin(data, env);
     const admin = (action: string, reason: string) => ({
       method: 'POST',
-      headers: { 'X-Admin-Token': 'test-admin-token', 'Content-Type': 'application/json' },
+      headers: { ...operator.headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, reason }),
     });
     r = await app.request('/v1/admin/repos/' + initial.repo.repoId + '/moderation', admin('hide', 'review'), env);

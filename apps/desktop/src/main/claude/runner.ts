@@ -199,6 +199,7 @@ export class ClaudeRunner {
             projectName: req.projectName,
             artifactPath: `artifacts/${layout.runId}`,
             access: authority,
+            context: req.context,
             extensionsDir: layout.extensionsDir
           }),
           nativeTools: options.nativeTools
@@ -230,6 +231,10 @@ export class ClaudeRunner {
         })();
         if (!isRecord(output)) throw new AgentResultValidationError('Claude returned an invalid autonomous result. Return a JSON object matching the result schema.');
         const parsed: Record<string, unknown> = { ...output };
+        if (req.context === 'app' && (Array.isArray(parsed.commands) && parsed.commands.length
+          || Array.isArray(parsed.artifacts) && parsed.artifacts.some((item: any) => item?.importToTimeline === true))) {
+          throw new AgentResultValidationError('No project is attached. Return commands: [] and do not import artifacts to a timeline.');
+        }
         parsed.artifacts = await collectArtifacts(
           layout.runDirectory,
           layout.runId,

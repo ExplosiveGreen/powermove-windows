@@ -28,8 +28,17 @@ const GAP = 4;
 const EDGE = 8;
 
 let current: PopoverMenuHandle | null = null;
+let currentAnchor: HTMLElement | null = null;
 
 export function openPopoverMenu(req: PopoverMenuRequest): PopoverMenuHandle {
+  // A second activation of the same trigger is a toggle, not a replacement.
+  // Pointerdown deliberately leaves trigger presses to this click handler.
+  if (current && currentAnchor === req.anchor) {
+    const previous = current;
+    previous.close();
+    req.anchor.focus({ preventScroll: true });
+    return previous;
+  }
   current?.close();
 
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -156,7 +165,8 @@ export function openPopoverMenu(req: PopoverMenuRequest): PopoverMenuHandle {
   function close(): void {
     if (closed) return;
     closed = true;
-    if (current === handle) current = null;
+    if (current === handle) { current = null; currentAnchor = null; }
+    req.anchor.setAttribute('aria-expanded', 'false');
     document.removeEventListener('pointerdown', onPointerDown, true);
     window.removeEventListener('resize', close);
     window.removeEventListener('blur', close);
@@ -172,6 +182,9 @@ export function openPopoverMenu(req: PopoverMenuRequest): PopoverMenuHandle {
 
   const handle: PopoverMenuHandle = { close, el };
   current = handle;
+  currentAnchor = req.anchor;
+  req.anchor.setAttribute('aria-haspopup', 'menu');
+  req.anchor.setAttribute('aria-expanded', 'true');
 
   document.body.append(el);
   place();

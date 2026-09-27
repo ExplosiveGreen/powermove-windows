@@ -1,11 +1,9 @@
 import { Hono } from 'hono';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
-import { ApiError, Admin, Publish, Store } from '@powermove/registry/wire';
+import { ApiError, Publish, Store } from '@powermove/registry/wire';
 import { storeIcon } from '../objects/icon';
-import { constantTimeEqual } from '../constant-time';
 import type { Env } from '../env';
 import { extensions, moderationLog, publishers, releases, repos, reports } from '../db/schema';
-import { user } from '../db/auth-schema';
 import { lineageFor, toListing, toRelease } from '../dto';
 import { requirePublisher, rateAuth } from './session';
 import { canViewDetail } from '../lifecycle';
@@ -19,7 +17,7 @@ async function owned(c: import('hono').Context<Env>, handle: string, slug: strin
   if (repo.tombstonedAt) throw new ApiError({error:'gone',reason:'tombstoned'});
   return {owner,repo};
 }
-async function listing(c: import('hono').Context<Env>, repo: typeof repos.$inferSelect, owner: typeof publishers.$inferSelect) {
+export async function listing(c: import('hono').Context<Env>, repo: typeof repos.$inferSelect, owner: typeof publishers.$inferSelect) {
   const [extension]=await c.var.data.db.select().from(extensions).where(eq(extensions.repoId,repo.id)).limit(1);
   if (!extension) throw new ApiError({error:'internal'});
   const [latest]=extension.latestReleaseId ? await c.var.data.db.select().from(releases).where(eq(releases.id,extension.latestReleaseId)).limit(1) : [];
@@ -60,58 +58,6 @@ export const repoManagement = new Hono<Env>()
    return c.body(null,204);
  });
 
-function requireAdmin(c: { env: Env['Bindings']; req: { header(name: string): string | undefined } }): void {
-  if (!c.env.ADMIN_TOKEN || !constantTimeEqual(c.req.header('X-Admin-Token') ?? '', c.env.ADMIN_TOKEN)) {
-    throw new ApiError({ error: 'unauthorized' });
-  }
-}
-
-export const adminRoutes = new Hono<Env>()
- /* Reserved handles (src/handles.ts) can only be claimed here, by an operator
-    with the admin token, for an existing user: this is how `powermove` gets
-    its publisher before the built-ins are published. */
- .post('/publishers', async c => {
-   await rateAuth(c);
-   await enforce(c, 'admin_ip', clientIp(c));
-   requireAdmin(c);
-   const body = Admin.SeedPublisher.Req.shape.body.parse(await c.req.json().catch(() => null));
-   try {
-     const publisher = await c.var.data.tx(async tx => {
-       const [account] = await tx.select({ id: user.id }).from(user).where(eq(user.id, body.userId)).limit(1);
-       if (!account) throw new ApiError({ error: 'not_found' });
-       const [existing] = await tx.select().from(publishers).where(eq(publishers.userId, body.userId)).limit(1);
-       if (existing) throw new ApiError({ error: 'handle_already_set' });
-       const [p] = await tx.insert(publishers).values({ handle: body.handle, userId: body.userId }).returning();
-       await tx.update(user).set({ username: body.handle, displayUsername: body.handle }).where(eq(user.id, body.userId));
-       return p!;
-     });
-     console.log('admin seeded publisher', { handle: body.handle, userId: body.userId });
-     return c.json({ publisher: { id: publisher.id, handle: publisher.handle, tombstoned: false } }, 201);
-   } catch (e) {
-     if (e instanceof ApiError) throw e;
-     const code = (e as { code?: string; cause?: { code?: string } }).code ?? (e as { cause?: { code?: string } }).cause?.code;
-     if (code === '23505') throw new ApiError({ error: 'handle_taken' });
-     throw e;
-   }
- })
- .post('/repos/:repoId/moderation',async c=>{
-  await rateAuth(c);
-  await enforce(c, 'admin_ip', clientIp(c));
-  if (!c.env.ADMIN_TOKEN || !constantTimeEqual(c.req.header('X-Admin-Token')??'',c.env.ADMIN_TOKEN)) throw new ApiError({error:'unauthorized'});
-  const {repoId}=Admin.Moderate.Req.shape.params.parse(c.req.param());
-  const body=Admin.Moderate.Req.shape.body.parse(await c.req.json().catch(()=>null));
-  const repo=await c.var.data.tx(async tx=>{
-    const [previous]=await tx.select().from(repos).where(eq(repos.id,repoId)).for('update').limit(1);
-    if (!previous) throw new ApiError({error:'not_found'});
-    if (body.action==='unhide' && previous.moderation==='removed') throw new ApiError({error:'bad_request'});
-    const [updated]=await tx.update(repos).set({moderation:body.action==='unhide'?'none':body.action==='hide'?'hidden':'removed',updatedAt:new Date()}).where(eq(repos.id,repoId)).returning();
-    if (!updated) throw new ApiError({error:'not_found'});
-    await tx.insert(moderationLog).values({repoId,action:body.action,reason:body.reason,actor:'admin'});
-    return updated;
-  });
-  const [owner]=await c.var.data.db.select().from(publishers).where(eq(publishers.id,repo.ownerId)).limit(1);
-  return c.json(await listing(c,repo,owner!));
-});
 export const storeUtility = new Hono<Env>()
  .get('/icons/:key',async c=>{
    const {key}=Store.Icon.Req.shape.params.parse(c.req.param());

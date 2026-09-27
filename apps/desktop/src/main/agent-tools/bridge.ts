@@ -15,7 +15,7 @@ import {
 import { isRecord, isString } from '../../shared/guards';
 import { EXTENSION_ID } from '../../shared/extensions';
 import { forkBuiltinExtension } from '../extensions/fork';
-import { POWERMOVE_AGENT_TOOLS, type NativeMcpServerConfig } from './spec';
+import { POWERMOVE_AGENT_TOOLS, POWERMOVE_APP_AGENT_TOOLS, type NativeMcpServerConfig } from './spec';
 
 const TOOL_TIMEOUT_MS = 120_000;
 const MAX_SOCKET_REQUEST_BYTES = 2 * 1024 * 1024;
@@ -60,6 +60,7 @@ export class PowermoveAgentToolSession {
     readonly owner: WebContents,
     readonly baseRevision: number,
     readonly token: string,
+    readonly context: 'app' | 'project',
     private readonly bridge: PowermoveAgentToolBridge,
     mcpConfig: NativeMcpServerConfig,
     private readonly resolveStagingDirectory?: (forkId: string) => Promise<string>
@@ -143,6 +144,7 @@ export class PowermoveAgentToolBridge {
     runId: string;
     owner: WebContents;
     baseRevision: number;
+    context?: 'app' | 'project';
     resolveStagingDirectory?: (forkId: string) => Promise<string>;
   }): Promise<PowermoveAgentToolSession> {
     if (!REQUEST_ID.test(options.runId)) throw new Error('Invalid agent tool run id.');
@@ -165,6 +167,7 @@ export class PowermoveAgentToolBridge {
       options.owner,
       Math.max(0, Math.trunc(options.baseRevision)),
       token,
+      options.context ?? 'project',
       this,
       mcpConfig,
       options.resolveStagingDirectory
@@ -357,7 +360,7 @@ export class PowermoveAgentToolBridge {
       throw new Error('Powermove tool session is not active.');
     }
     if (request.tool === '__list_tools') {
-      return { id: request.id, ok: true, tools: POWERMOVE_AGENT_TOOLS };
+      return { id: request.id, ok: true, tools: session.context === 'app' ? POWERMOVE_APP_AGENT_TOOLS : POWERMOVE_AGENT_TOOLS };
     }
     if (!POWERMOVE_AGENT_TOOLS.some((tool) => tool.name === request.tool)) {
       throw new Error(`Unknown Powermove tool: ${request.tool}`);
@@ -378,6 +381,9 @@ export class PowermoveAgentToolBridge {
   async callTool(session: PowermoveAgentToolSession, tool: string, args: Record<string, unknown>, workspace = ''): Promise<AgentToolResponseEvent> {
     if (session.isClosed() || session.owner.isDestroyed()) throw new Error('Powermove tool session is not active.');
     if (!POWERMOVE_AGENT_TOOLS.some(spec => spec.name === tool)) throw new Error(`Unknown Powermove tool: ${tool}`);
+    if (session.context === 'app' && !POWERMOVE_APP_AGENT_TOOLS.some(spec => spec.name === tool)) {
+      throw new Error('This agent has no project attached. Open a project to use composition tools.');
+    }
     if (tool === 'fork_builtin_extension') {
       const request: ToolSocketRequest = { token: session.token, runId: session.runId, id: null, tool, arguments: args, workspace };
       const result = await this.forkBuiltinExtension(session, request);

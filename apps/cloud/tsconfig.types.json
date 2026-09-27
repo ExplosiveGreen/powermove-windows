@@ -7,8 +7,15 @@
     "emitDeclarationOnly": true,
     "outDir": "dist/types",
     "rootDir": "src",
-    "types": ["./worker-configuration.d.ts", "../../node_modules/.bun/@cloudflare+workers-types@5.20260921.1/node_modules/@cloudflare/workers-types"]
+    "types": [
+      "./worker-configuration.d.ts"
+    ]
   },
-  "include": ["worker-configuration.d.ts", "src/**/*.ts"],
-  "exclude": ["**/*.test.ts"]
+  "include": [
+    "worker-configuration.d.ts",
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "**/*.test.ts"
+  ]
 }

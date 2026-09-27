@@ -37,7 +37,7 @@ const text = (value: string): Uint8Array => new TextEncoder().encode(value);
 
 const me: MeDto = {
   user: { id: '55555555-5555-4555-8555-555555555555', name: 'Jude', email: 'jude@example.com', image: null },
-  publisher: { id: MINE, handle: 'jude', tombstoned: false },
+  publisher: { id: MINE, handle: 'jude', tombstoned: false, verified: false },
   settings: { rememberInstalls: true }
 };
 
@@ -53,7 +53,7 @@ function files(body = 'export default {}\n'): Record<string, string> {
 
 function listing(repoId: string): ListingDto {
   return {
-    repoId, owner: { id: MINE, handle: 'jude', tombstoned: false }, slug: 'glass-blur', name: 'Glass blur', tagline: 'Frosted glass.',
+    repoId, owner: { id: MINE, handle: 'jude', tombstoned: false, verified: false }, slug: 'glass-blur', name: 'Glass blur', tagline: 'Frosted glass.',
     category: 'effects', iconUrl: null, visibility: 'public', permissions: [], latest: null, installCount: 0, forkCount: 0, licence: 'MIT',
     forkedFrom: null, createdAt: '2026-09-23T12:00:00.000Z', updatedAt: '2026-09-23T12:00:00.000Z'
   };

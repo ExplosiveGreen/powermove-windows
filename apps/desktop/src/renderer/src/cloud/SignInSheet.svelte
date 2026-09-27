@@ -280,8 +280,7 @@ import googleMark from './google.svg';
 
 <!-- The sheet itself takes focus on open, so nothing is lit before you act.
      Later steps move focus to their one field. -->
-<!-- svelte-ignore a11y_autofocus -->
-<div class="acct-sheet" bind:this={root} tabindex="-1" autofocus>
+<div class="acct-sheet" bind:this={root} tabindex="-1" data-autofocus>
   {#key step}
     <div class="acct-step" in:fly={slide}>
       {#if step === 'start'}

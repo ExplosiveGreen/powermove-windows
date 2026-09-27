@@ -15,7 +15,8 @@ import type { z } from 'zod';
 
 import { EXTENSION_VERSION } from './extensions';
 
-export const PUBLISH_LICENCES = ['MIT', 'Apache-2.0', 'BSD-3-Clause', 'GPL-3.0-or-later', 'AGPL-3.0-or-later', 'Unlicense'] as const;
+/* MIT only for now, to keep the store simple. Main validates against this list. */
+export const PUBLISH_LICENCES = ['MIT'] as const;
 export type PublishLicence = (typeof PUBLISH_LICENCES)[number];
 
 export const PUBLISH_LIMITS = {
@@ -28,7 +29,7 @@ export const PUBLISH_LIMITS = {
 } as const;
 
 /** P0 decision Q3: shown above the Publish button. */
-export const PUBLISH_TERMS = 'By publishing you grant Powermove the right to host and distribute this extension under the licence you chose, and you confirm you have the right to publish its contents.';
+export const PUBLISH_TERMS = 'By publishing you grant Powermove the right to host and distribute this extension under the MIT licence, and you confirm you have the right to publish its contents.';
 
 /** Commit identities use the handle at this mail domain (P0 Q4); the registry checks it. */
 export const HANDLE_MAIL_DOMAIN = 'users.trypowermove.com';

@@ -2,7 +2,7 @@
   import type { ToolDetail, ToolsRow } from './activity-rows';
   import { durationLabel } from './activity-rows';
   import { toolGlyph, type ToolGlyph } from './tool-icons';
-  import { revealText } from './text-reveal';
+  import Markdown from './Markdown.svelte';
 
   /* One stretch of agent work, in the beautiful-ui ToolChips grammar: a quiet
      header ("4 tool calls · 1 failed · 21s"), then flat rows
@@ -102,7 +102,7 @@
           <div class="agent-tool-output" class:is-open={open}>
             <div>
               {#if detail.kind === 'thought'}
-                <p class="agent-tool-thought">{#each String(detail.output).split(/(\s+)/) as word, wi (wi)}<span use:revealText={animated && detail.status === 'running' && Boolean(word.trim())}>{word}</span>{/each}</p>
+                <div class="agent-tool-thought"><Markdown text={String(detail.output)} streaming={detail.status === 'running'} {animated} /></div>
               {:else}
                 <pre>{detail.output}</pre>
               {/if}

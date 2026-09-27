@@ -417,6 +417,7 @@ export function registerCodexIpc(
           runId: req.id,
           owner,
           baseRevision: projectRevision(req.projectJSON),
+          context: req.context ?? 'project',
           // Fork rebases stage into the run's extension staging dir, which only
           // autonomous runs own. The resolver snapshots the staging root now and
           // finishes its lookup lazily, so opening the session is not delayed.

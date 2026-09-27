@@ -88,13 +88,13 @@
     {/if}
     <div class="agent-prompt" class:is-answering={answering}>
       {#if answering}<div class="agent-prompt-signal" data-prompt-halo aria-hidden="true" use:promptSignal out:glowFade={{duration: 220}}></div>{/if}
-      <div class="agent-bubble">{displayPromptText(message.text || '') || (message.attachments?.length ? `Attached ${message.attachments.length} file${message.attachments.length === 1 ? '' : 's'}` : '')}</div>
+      <div class="agent-bubble"><Markdown text={displayPromptText(message.text || '') || (message.attachments?.length ? `Attached ${message.attachments.length} file${message.attachments.length === 1 ? '' : 's'}` : '')} /></div>
     </div>
   </div>
 {:else}
   <div class="agent-msg assistant" class:is-error={message.error && notice === 'error'}>
     {#if message.error && notice !== 'plain'}
-      <ErrorNotice error={message.text} live={Boolean(message.entering)} kind={notice}>
+      <ErrorNotice markdown error={message.text} live={Boolean(message.entering)} kind={notice}>
         {#snippet actions()}
           <button type="button" class="btn" disabled={agentState.phase === 'running'} onclick={() => PM.AgentUI?.retry?.(messageIndex)}>Try again</button>
         {/snippet}

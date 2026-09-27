@@ -1,17 +1,23 @@
 /* ── Store ──────────────────────────────────────────────────
    One section of the Projects home: its sidebar row opens the Store in the
-   home's main pane. The page follows Claude's Customize screen: a large
-   title; one toolbar with Discover | Library, search and Publish; a
-   carousel of collections; then shelves of cards. Cards and the carousel
-   are fills, not outlines. Corners are Lisse squircles
-   (settings/squircle.ts). Views inside slide the way you moved
-   (StoreScreen.svelte). */
+   home's main pane. It speaks Settings' language (settings.css): a 22px
+   medium page title, 13px medium names over 12px hints, 30px controls whose
+   corners are the card's radius less its padding, 32px between sections.
+
+   One text edge: fills (cards, the carousel) span the column, and every
+   line of text outside them is inset by --st-inset, the same 14px the text
+   inside a card sits in. Headings, notes, row labels and card icons all
+   share that edge, as a Settings page's text does. The page title is the
+   exception: it starts where the toolbar's pill does. Corners are
+   Lisse squircles (settings/squircle.ts). Views inside slide the way you
+   moved (StoreScreen.svelte). */
 
 /* The home's bar and grid step aside while its Store section is up. */
 #projects-screen .ps-main>[hidden]{display:none}
 .ps-store{min-height:0;flex:1;display:flex}
 #store-screen{
   --ctl-h:30px;
+  --st-inset:14px;
   --sg-group-radius:var(--r-xl);
   --sg-row-padding:var(--gut);
   --sg-control-radius:max(0px,calc(var(--sg-group-radius) - var(--sg-row-padding)));
@@ -22,36 +28,48 @@
   --sg-row:var(--bg-panel);
   min-width:0;min-height:0;flex:1;display:flex;flex-direction:column}
 
+/* The screen takes focus after a view change (StoreScreen keepFocus); it is not a control. */
+#store-screen:focus{outline:0}
+
 /* The pane is a column; only the scroll area moves. */
 .st-main{min-width:0;min-height:0;flex:1;display:flex;flex-direction:column}
 
 /* ── header ── */
-.st-head{width:960px;max-width:100%;margin:0 auto 28px;display:flex;flex-direction:column;gap:22px}
-.st-title{font-size:34px;line-height:40px;font-weight:var(--fw-semibold);letter-spacing:-.025em;color:var(--tx)}
+/* The title over the pill's edge, then one 32px toolbar: where you are,
+   search, Publish. */
+.st-head{width:960px;max-width:100%;margin:0 auto 32px;display:flex;flex-direction:column;gap:16px}
+.st-title{font-size:22px;line-height:28px;font-weight:var(--fw-medium);letter-spacing:-.015em;color:var(--tx)}
+/* On a kind page the title is Back: the chevron grows its own width so the
+   word slides over as it rolls from Store to Discover, on the roll's clock. */
+.st-title-inner{display:inline-flex;align-items:center;vertical-align:top;border-radius:var(--r-sm);transition:color var(--dur-1) var(--ease)}
+.st-title-chev{display:inline-flex;align-items:center;width:0;height:28px;overflow:hidden;opacity:0;color:var(--tx-3);transition:width 550ms cubic-bezier(.32,.72,0,1),opacity 300ms var(--ease),color var(--dur-1) var(--ease)}
+.st-title-chev svg{flex:none;width:17px;height:17px;transform:rotate(180deg)}
+.st-title.is-back .st-title-chev{width:22px;opacity:1}
+.st-title.is-back .st-title-inner{cursor:default;user-select:none;-webkit-user-select:none}
+.st-title.is-back .st-title-inner:hover,.st-title.is-back .st-title-inner:hover .st-title-chev{color:var(--tx-2)}
+.st-title.is-back .st-title-inner:focus-visible{outline:0;box-shadow:0 0 0 3px var(--ink-2)}
+@media (prefers-reduced-motion:reduce){.st-title-chev{transition:none}}
 .st-toolbar{display:flex;align-items:center;gap:8px}
 #store-screen .segmented{--segment-inset:3px;flex:none;gap:2px;margin-right:auto;padding:var(--segment-inset);background:var(--bg-field);border-radius:var(--r-md);box-shadow:none}
-#store-screen .segmented button{height:28px;padding:0 14px;border-radius:calc(var(--r-md) - var(--segment-inset));color:var(--tx-3);font-size:var(--fs-md);transition:background var(--dur-1),color var(--dur-1)}
+#store-screen .segmented button{height:26px;padding:0 14px;border-radius:calc(var(--r-md) - var(--segment-inset));color:var(--tx-3);font-size:var(--fs-md);font-weight:var(--fw-medium);transition:background var(--dur-1),color var(--dur-1)}
 #store-screen .segmented button:hover{color:var(--tx)}
 #store-screen .segmented button.on{background:var(--bg-float);color:var(--tx);box-shadow:none}
-#store-screen .segmented button:focus-visible{outline:0;box-shadow:inset 0 0 0 2px var(--accent)}
-.st-search{width:min(280px,36cqi);height:34px;display:flex;align-items:center;gap:8px;padding:0 11px;border-radius:var(--r-md);background:var(--bg-field);color:var(--tx-3)}
+#store-screen .segmented button:focus-visible{outline:0;box-shadow:inset 0 0 0 2px var(--ink-3)}
+/* The Settings sidebar's search field. */
+.st-search{width:min(280px,36cqi);height:32px;display:flex;align-items:center;gap:8px;padding:0 10px;border-radius:var(--r-md);background:var(--bg-float);color:var(--tx-3);transition:box-shadow var(--dur-1)}
 .st-search svg{width:14px;height:14px;flex:none}
 .st-search input{min-width:0;flex:1;font-size:var(--fs-md);color:var(--tx)}
 .st-search input::placeholder{color:var(--tx-3)}
-.st-search:focus-within{box-shadow:0 0 0 2px var(--accent)}
-.st-add{flex:none;display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 14px 0 12px;border:0;border-radius:var(--r-md);background:var(--tx);color:var(--bg-content);font-size:var(--fs-md);font-weight:var(--fw-medium);transition:opacity var(--dur-1)}
-.st-add svg{width:13px;height:13px}
-.st-add:hover{background:color-mix(in srgb,var(--tx) 86%,var(--bg-content))}
-.st-add:focus-visible{outline:0;box-shadow:0 0 0 2px var(--bg-content),0 0 0 4px var(--accent)}
+.st-search:focus-within{box-shadow:0 0 0 3px var(--ink-2)}
+/* Publish is a quiet fill like every other button in the app, not a slab. */
+.st-add{flex:none;display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px 0 10px;border:0;border-radius:var(--r-md);background:var(--ink-1);color:var(--tx);font-size:var(--fs-md);font-weight:var(--fw-medium)}
+.st-add svg{width:13px;height:13px;color:var(--tx-2)}
+.st-add:hover{background:var(--ink-2)}
+.st-add:focus-visible{outline:0;box-shadow:0 0 0 3px var(--ink-2)}
 @container (max-width:40rem){.st-search{flex:1;width:auto}}
 
-.st-scroll{position:relative;min-height:0;flex:1;overflow:auto;scrollbar-gutter:stable both-edges;padding:40px clamp(20px,3vw,28px) 96px;container-type:inline-size}
-.st-column{width:960px;max-width:100%;margin:0 auto;display:flex;flex-direction:column;gap:40px}
-
-/* ── heading ── */
-.st-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:16px}
-.st-heading h2{font-size:28px;line-height:34px;font-weight:var(--fw-semibold);letter-spacing:-.02em;color:var(--tx)}
-.st-heading p{margin-top:4px;font-size:var(--fs-md);line-height:18px;color:var(--tx-3);text-wrap:pretty}
+.st-scroll{position:relative;min-height:0;flex:1;overflow:auto;scrollbar-gutter:stable both-edges;padding:48px clamp(20px,3vw,28px) 96px;container-type:inline-size}
+.st-column{width:960px;max-width:100%;margin:0 auto;display:flex;flex-direction:column;gap:32px}
 
 /* ── artwork ── */
 /* Stand-ins until the registry ships preview renders: two hues per extension. */
@@ -61,30 +79,14 @@
     radial-gradient(90% 120% at 12% 100%, color-mix(in oklch, var(--art-a) 70%, black) 0%, transparent 65%),
     linear-gradient(135deg, var(--art-a), color-mix(in oklch, var(--art-b) 60%, var(--art-a)))}
 .st-thumb{position:relative;display:block;flex:none;width:44px;height:44px;border-radius:var(--r-lg);overflow:hidden}
-.st-thumb.is-hero{width:96px;height:96px;border-radius:var(--r-xl)}
+.st-thumb.is-hero{width:80px;height:80px;border-radius:20px}
 
-/* Banners: wide artwork every extension carries. Until the registry serves
-   uploaded ones, the same two hues make a looser field than the icon's. */
-.st-banner{position:relative;display:grid;place-items:center;overflow:hidden;background:var(--bg-float)}
-.st-banner>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
-.st-banner-art{
-  background:
-    radial-gradient(55% 80% at 72% 22%, color-mix(in oklch, var(--art-b) 80%, white) 0%, transparent 70%),
-    radial-gradient(70% 110% at 22% 108%, var(--art-a) 0%, transparent 72%),
-    radial-gradient(80% 70% at 88% 100%, color-mix(in oklch, var(--art-a) 45%, black) 0%, transparent 75%),
-    linear-gradient(160deg, color-mix(in oklch, var(--art-b) 70%, var(--art-a)), color-mix(in oklch, var(--art-a) 70%, black))}
-.st-banner-art::after{content:"";position:absolute;inset:0;background:repeating-linear-gradient(115deg, rgb(255 255 255 / .05) 0 1px, transparent 1px 14px);pointer-events:none}
-/* The icon is squircle-clipped, so its lift is a filter on a wrapper. */
-.st-banner-mark{position:relative;z-index:1;display:block;filter:drop-shadow(0 14px 22px rgb(0 0 0 / .32)) drop-shadow(0 2px 4px rgb(0 0 0 / .18))}
-.st-banner-mark>.st-thumb{width:96px;height:96px;border-radius:24px}
-.st-detail-banner{height:220px;border-radius:var(--r-xl)}
-.st-detail-banner+.st-detail-head{margin-top:-16px}
 
 /* ── carousel ── */
 /* One collection at a time on a card that deepens into the tint of its first
    extension: label, title and line centred over a staggered row of icons,
    Explore under them. Arrows ride the sides; dots sit under the card. */
-.st-carousel{display:flex;flex-direction:column;align-items:center;gap:16px}
+.st-carousel{display:flex;flex-direction:column;align-items:center;gap:14px}
 /* Light: a white card that warms into a pale wash of the collection's
    lighter hue, glowing up from under the icons; controls are white chips on
    soft shadows. Dark: the card deepens into the collection's darker hue and
@@ -94,7 +96,7 @@
   --slide-chip-hover:color-mix(in srgb, var(--bg-float) 90%, black);
   --slide-chip-shadow:0 1px 2px rgb(0 0 0 / .07), 0 6px 16px -6px rgb(0 0 0 / .16);
   --slide-icon-shadow:drop-shadow(0 10px 14px rgb(40 30 60 / .16)) drop-shadow(0 1px 2px rgb(0 0 0 / .1));
-  position:relative;isolation:isolate;width:100%;min-height:340px;display:grid;place-items:center;padding:48px 88px 40px;border-radius:var(--r-xl);background:var(--bg-panel);overflow:hidden}
+  position:relative;isolation:isolate;width:100%;min-height:312px;display:grid;place-items:center;padding:40px 80px 32px;border-radius:var(--r-xl);background:var(--bg-panel);overflow:hidden}
 :root[data-theme="dark"] .st-slide{
   --slide-chip:color-mix(in oklch, var(--bg-content) 82%, transparent);
   --slide-chip-hover:var(--bg-content);
@@ -107,29 +109,29 @@
     linear-gradient(180deg, var(--bg-panel) 18%, color-mix(in oklch, var(--art-a) 22%, var(--bg-panel)) 100%)}
 :root[data-theme="dark"] .st-slide-bg{background:linear-gradient(180deg, var(--bg-panel) 8%, color-mix(in oklch, var(--art-a) 34%, var(--bg-panel)) 100%)}
 /* Outgoing and incoming collections share one cell while they crossfade. */
-.st-slide-body{grid-area:1/1;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}
+.st-slide-body{grid-area:1/1;display:flex;flex-direction:column;align-items:center;gap:4px;text-align:center}
 .st-eyebrow{font-size:var(--fs-xs);line-height:14px;font-weight:var(--fw-medium);letter-spacing:.06em;text-transform:uppercase;color:var(--tx-3)}
-.st-slide-title{margin-top:4px;font-size:26px;line-height:32px;font-weight:var(--fw-medium);letter-spacing:-.02em;color:var(--tx);text-wrap:balance}
-.st-slide-blurb{max-width:52ch;font-size:var(--fs-lg);line-height:22px;color:var(--tx-2);text-wrap:balance}
-.st-slide-icons{display:flex;align-items:center;justify-content:center;gap:clamp(14px,3cqi,30px);height:120px;margin:22px 0 18px}
+.st-slide-title{margin-top:4px;font-size:22px;line-height:28px;font-weight:var(--fw-medium);letter-spacing:-.015em;color:var(--tx);text-wrap:balance}
+.st-slide-blurb{max-width:48ch;font-size:var(--fs-md);line-height:18px;color:var(--tx-2);text-wrap:balance}
+.st-slide-icons{display:flex;align-items:center;justify-content:center;gap:clamp(14px,3cqi,28px);height:112px;margin:20px 0 16px}
 .st-slide-icon{flex:none;padding:0;border:0;border-radius:calc(var(--size) * .26);background:transparent;transform:translateY(var(--lift));filter:var(--slide-icon-shadow);transition:transform var(--dur-2) var(--ease)}
 .st-slide-icon .st-thumb{width:var(--size);height:var(--size);border-radius:calc(var(--size) * .26)}
-.st-slide-icon:focus-visible{outline:0;box-shadow:0 0 0 2px var(--accent)}
-.st-explore{height:38px;padding:0 20px;border:0;border-radius:var(--r-md);background:var(--slide-chip);box-shadow:var(--slide-chip-shadow);color:var(--tx);font-size:var(--fs-lg);font-weight:var(--fw-medium);transition:background var(--dur-1)}
+.st-slide-icon:focus-visible{outline:0;box-shadow:0 0 0 3px var(--ink-3)}
+.st-explore{height:32px;padding:0 16px;border:0;border-radius:var(--r-md);background:var(--slide-chip);box-shadow:var(--slide-chip-shadow);color:var(--tx);font-size:var(--fs-md);font-weight:var(--fw-medium);transition:background var(--dur-1)}
 .st-explore:hover{background:var(--slide-chip-hover)}
-.st-explore:focus-visible{outline:0;box-shadow:0 0 0 2px var(--accent)}
-.st-arrow{position:absolute;top:50%;z-index:1;display:grid;place-items:center;width:40px;height:40px;margin-top:-20px;padding:0;border:0;border-radius:50%;background:var(--slide-chip);box-shadow:var(--slide-chip-shadow);color:var(--tx);transition:background var(--dur-1)}
-.st-arrow svg{width:15px;height:15px}
-.st-arrow.is-prev{left:18px}
+.st-explore:focus-visible{outline:0;box-shadow:0 0 0 3px var(--ink-3)}
+.st-arrow{position:absolute;top:50%;z-index:1;display:grid;place-items:center;width:32px;height:32px;margin-top:-16px;padding:0;border:0;border-radius:50%;background:var(--slide-chip);box-shadow:var(--slide-chip-shadow);color:var(--tx-2);transition:background var(--dur-1),color var(--dur-1)}
+.st-arrow svg{width:13px;height:13px}
+.st-arrow.is-prev{left:16px}
 .st-arrow.is-prev svg{transform:rotate(180deg)}
-.st-arrow.is-next{right:18px}
-.st-arrow:hover{background:var(--slide-chip-hover)}
-.st-arrow:focus-visible{outline:0;box-shadow:0 0 0 2px var(--accent)}
-.st-dots{display:flex;align-items:center;gap:8px}
-.st-dots button{width:7px;height:7px;padding:0;border:0;border-radius:var(--r-pill);background:var(--tx-4);transition:width var(--dur-2) var(--ease),background var(--dur-2)}
-.st-dots button[aria-selected="true"]{width:30px;background:var(--tx)}
+.st-arrow.is-next{right:16px}
+.st-arrow:hover{background:var(--slide-chip-hover);color:var(--tx)}
+.st-arrow:focus-visible{outline:0;box-shadow:0 0 0 3px var(--ink-3)}
+.st-dots{display:flex;align-items:center;gap:6px}
+.st-dots button{width:6px;height:6px;padding:0;border:0;border-radius:var(--r-pill);background:var(--tx-4);transition:width var(--dur-2) var(--ease),background var(--dur-2)}
+.st-dots button[aria-selected="true"]{width:22px;background:var(--tx-2)}
 .st-dots button:hover:not([aria-selected="true"]){background:var(--tx-3)}
-.st-dots button:focus-visible{outline:0;box-shadow:0 0 0 2px var(--accent)}
+.st-dots button:focus-visible{outline:0;box-shadow:0 0 0 3px var(--ink-3)}
 .st-slide.is-skeleton{pointer-events:none}
 .st-slide.is-skeleton .st-skel-lines{align-items:center;width:40%;flex:none}
 @container (max-width:40rem){
@@ -140,44 +142,67 @@
 }
 
 /* ── sections ── */
+/* A shelf's name on the text edge, 8px over its cards; a count reads as
+   quiet text beside it, never a chip. */
 .st-sec{display:flex;flex-direction:column}
-.st-sec-head{display:flex;align-items:center;gap:10px;height:32px;margin-bottom:12px}
-.st-sec-head h3{font-size:var(--fs-xl);line-height:24px;font-weight:var(--fw-semibold);letter-spacing:-.014em;color:var(--tx)}
-.st-sec-head .btn{height:28px;margin-left:auto;margin-right:-10px;padding:0 10px;color:var(--tx-3)}
-.st-count{padding:1px 7px;border-radius:var(--r-sm);background:var(--ink-1);color:var(--tx-2);font-size:var(--fs-sm);line-height:18px;font-variant-numeric:tabular-nums}
-.st-show-all{display:inline-flex;align-items:center;gap:6px;height:28px;margin-left:auto;margin-right:-8px;padding:0 8px;border:0;border-radius:var(--r-sm);color:var(--tx-2);font-size:var(--fs-md);font-weight:var(--fw-medium);transition:color var(--dur-1),background var(--dur-1)}
+.st-sec-head{display:flex;align-items:center;gap:8px;height:28px;margin-bottom:8px;padding:0 var(--st-inset)}
+/* A kind or search page puts its head straight in the column: pull its
+   cards back up to the 8px a section gives them. */
+.st-column>.st-sec-head{margin-bottom:-24px}
+.st-sec-head h3{font-size:var(--fs-lg);line-height:20px;font-weight:var(--fw-medium);letter-spacing:-.01em;color:var(--tx)}
+.st-sec-head .btn{height:24px;margin-left:auto;margin-right:-8px;padding:0 8px;border-radius:var(--r-sm);font-size:var(--fs-sm);color:var(--tx-3)}
+.st-count{color:var(--tx-4);font-size:var(--fs-md);line-height:20px;font-variant-numeric:tabular-nums}
+.st-show-all{display:inline-flex;align-items:center;gap:5px;height:24px;margin-left:auto;margin-right:-8px;padding:0 8px;border:0;border-radius:var(--r-sm);color:var(--tx-3);font-size:var(--fs-sm);font-weight:var(--fw-medium);transition:color var(--dur-1),background var(--dur-1)}
 .st-show-all:hover{color:var(--tx);background:var(--ink-1)}
-.st-show-all:focus-visible{outline:0;box-shadow:inset 0 0 0 2px var(--accent)}
-.st-sec-title{height:20px;padding:0 0 8px;box-sizing:content-box;font-size:var(--fs-sm);line-height:16px;font-weight:var(--fw-medium);color:var(--tx-3)}
+.st-show-all:focus-visible{outline:0;box-shadow:inset 0 0 0 2px var(--ink-3)}
+/* Section labels are Settings' own: 12px medium, 8px over the card. */
+.st-sec-title{height:20px;padding:0 var(--st-inset) 8px;box-sizing:content-box;font-size:var(--fs-sm);line-height:16px;font-weight:var(--fw-medium);color:var(--tx-3);display:flex;align-items:center}
+/* An extension's page reads as a Settings page: every section head is the
+   small label, and its one action a quiet text button at the right edge. */
+.st-column.is-detail .st-sec-head{height:20px;margin-bottom:8px}
+.st-column.is-detail .st-sec-head h3{display:flex;align-items:baseline;font-size:var(--fs-sm);line-height:16px;font-weight:var(--fw-medium);letter-spacing:0;color:var(--tx-3)}
 
 /* ── cards ── */
-/* Icon on a tile, name, what it does, who made it; the corner button is the
-   one other target. The card itself is the destination. */
-.st-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+/* A Settings row with an icon: the tile on the text edge, name over what it
+   does and who made it, the one action centred at the right. The card
+   itself is the destination. */
+.st-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
 @container (max-width:40rem){.st-cards{grid-template-columns:minmax(0,1fr)}}
-.st-item{position:relative;display:flex;align-items:flex-start;gap:14px;min-height:112px;padding:16px;border-radius:var(--r-xl);background:var(--bg-panel);transition:background var(--dur-1)}
+.st-item{position:relative;display:flex;align-items:center;gap:12px;min-height:80px;padding:14px;border-radius:var(--r-xl);background:var(--bg-panel);transition:background var(--dur-1)}
 .st-item:hover{background:var(--bg-row)}
 .st-item-open{position:absolute;inset:0;z-index:1;padding:0;border:0;border-radius:inherit;background:transparent}
-.st-item-open:focus-visible{outline:0;box-shadow:inset 0 0 0 2px var(--accent)}
-.st-item-icon{flex:none;display:grid;place-items:center;width:52px;height:52px;border-radius:var(--r-lg);background:var(--bg-float)}
-.st-item-icon .st-thumb{width:34px;height:34px;border-radius:9px}
-.st-item-copy{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;padding-top:1px}
-.st-item-copy b{font-size:var(--fs-lg);line-height:20px;font-weight:var(--fw-medium);color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.st-item-line{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;font-size:var(--fs-md);line-height:19px;color:var(--tx-2);text-wrap:pretty}
-.st-item-by{margin-top:2px;font-size:var(--fs-md);line-height:18px;color:var(--tx-3)}
-.st-item-action{position:relative;z-index:2;flex:none;display:flex}
-.st-item-action .st-install{margin-top:0;height:30px}
-.st-item-action .st-installed{margin-top:6px}
-.st-plus{display:grid;place-items:center;width:30px;height:30px;padding:0;border:0;border-radius:var(--r-md);background:var(--bg-float);color:var(--tx);transition:background var(--dur-1)}
-.st-plus svg{width:14px;height:14px}
-button.st-plus:hover{background:var(--bg-row-hi)}
-.st-plus:focus-visible{outline:0;box-shadow:0 0 0 2px var(--accent)}
-.st-plus.is-done{background:transparent;color:var(--tx-3)}
+.st-item-open:focus-visible{outline:0;box-shadow:inset 0 0 0 2px var(--ink-3)}
+.st-item-icon{flex:none;display:grid;place-items:center;width:44px;height:44px;border-radius:var(--r-lg);background:var(--bg-float)}
+.st-item-icon .st-thumb{width:30px;height:30px;border-radius:8px}
+.st-item-copy{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.st-item-copy b{font-size:var(--fs-md);line-height:18px;font-weight:var(--fw-medium);color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.st-item-line{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--fs-sm);line-height:16px;color:var(--tx-3)}
+/* The facts line: the quietest ink, parts joined by a dot. */
+.st-item-meta{display:flex;min-width:0;margin-top:3px;font-size:var(--fs-sm);line-height:16px;color:var(--tx-4);white-space:nowrap}
+/* Short of room, the lineage gives way first; the state is the last thing cut. */
+.st-item-meta{overflow:hidden}
+.st-item-meta>*{flex:0 0 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.st-item-meta>.st-item-lineage,.st-item-meta:not(:has(>.st-item-lineage))>:last-child{flex-shrink:1}
+.st-item-meta>*+*::before{content:"·";margin:0 5px;color:var(--tx-4);font-weight:var(--fw-regular)}
+/* Who made it opens their page: a link above the card's own target, quiet
+   until pointed at. */
+.st-item-dev{position:relative;z-index:2;padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;white-space:nowrap;transition:color var(--dur-1)}
+.st-item-dev:hover{color:var(--tx-2)}
+.st-item-dev:focus-visible{outline:0;border-radius:2px;box-shadow:0 0 0 2px var(--ink-2)}
+.st-item-action{position:relative;z-index:2;flex:none;display:flex;align-items:center;gap:4px}
+.st-plus{display:grid;place-items:center;width:30px;height:30px;padding:0;border:0;border-radius:var(--sg-control-radius);background:var(--bg-float);color:var(--tx-2);transition:background var(--dur-1),color var(--dur-1)}
+.st-plus svg{width:13px;height:13px}
+button.st-plus:hover{background:var(--bg-row-hi);color:var(--tx)}
+.st-plus:focus-visible{outline:0;box-shadow:0 0 0 3px var(--ink-2)}
+.st-plus.is-done{background:transparent;color:var(--tx-4)}
+.st-plus.is-done svg{width:14px;height:14px}
 .st-item.is-skeleton{pointer-events:none}
 .st-item.is-skeleton .st-item-icon{background:var(--ink-1)}
 
-.st-install{flex:none;min-width:68px;margin-top:12px;border-radius:var(--r-pill)}
-.st-installed{flex:none;min-width:68px;margin-top:18px;text-align:center;font-size:var(--fs-sm);font-weight:var(--fw-medium);color:var(--tx-4)}
+/* The one action: a Settings button, 30px with the card's inner corner. */
+.st-install{flex:none;height:30px;padding:0 12px;border-radius:var(--sg-control-radius)}
+.st-installed{flex:none;font-size:var(--fs-sm);font-weight:var(--fw-medium);color:var(--tx-4);white-space:nowrap}
+.st-item-action .st-installed{padding:0 6px}
 
 /* ── installed (hosted Settings › Extensions control) ── */
 .st-installed-host{width:auto;margin:-8px 0 0}
@@ -187,65 +212,83 @@ button.st-plus:hover{background:var(--bg-row-hi)}
 .st-installed-host .sg-group{margin:0}
 
 /* ── detail ── */
-.st-back{align-self:flex-start;display:inline-flex;align-items:center;gap:2px;height:22px;margin:-4px 0 -28px -6px;padding:0 8px 0 3px;border:0;border-radius:var(--r-sm);color:var(--tx-3);font-size:var(--fs-sm);font-weight:var(--fw-medium);transition:color var(--dur-1),background var(--dur-1)}
+.st-back{align-self:flex-start;display:inline-flex;align-items:center;gap:2px;height:22px;margin:-6px 0 -8px calc(var(--st-inset) - 6px);padding:0 8px 0 3px;border:0;border-radius:var(--r-sm);color:var(--tx-3);font-size:var(--fs-sm);font-weight:var(--fw-medium);transition:color var(--dur-1),background var(--dur-1)}
 .st-back svg{width:12px;height:12px;transform:rotate(180deg)}
 .st-back:hover{color:var(--tx);background:var(--ink-1)}
-.st-detail-head{display:flex;align-items:flex-start;gap:20px}
-.st-detail-copy{flex:1;min-width:0;display:flex;flex-direction:column;padding-top:4px}
-.st-detail-title{display:flex;align-items:center;gap:9px}
-.st-detail-title h2{font-size:22px;line-height:28px;font-weight:var(--fw-medium);letter-spacing:-.015em;color:var(--tx)}
-.st-tag{flex:none;margin-top:2px;padding:0 5px;border-radius:var(--r-xs);background:var(--ink-1);color:var(--tx-3);font-size:var(--fs-xs);line-height:16px}
-.st-byline{margin-top:2px;font-size:var(--fs-sm);line-height:16px;color:var(--tx-4)}
+.st-back:focus-visible{outline:0;box-shadow:0 0 0 2px var(--ink-2)}
+.st-detail-head{display:flex;align-items:center;gap:16px;padding:0 var(--st-inset)}
+.st-detail-copy{flex:1;min-width:0;display:flex;flex-direction:column}
+.st-detail-title{display:flex;align-items:center;gap:8px}
+.st-detail-title h2{min-width:0;font-size:22px;line-height:28px;font-weight:var(--fw-medium);letter-spacing:-.015em;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The header is the name and what it does; the facts are in Details. */
 .st-lede{margin-top:2px;font-size:var(--fs-md);line-height:18px;color:var(--tx-2);text-wrap:pretty;max-width:64ch}
+
+.st-access{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:6px;font-size:var(--fs-sm);line-height:16px;color:var(--tx-3)}
+.st-access>span{display:inline-flex;align-items:center;gap:4px}
+.st-access .is-warn{color:var(--warning)}
+.st-access svg{width:12px;height:12px}
+.st-access-sep{color:var(--tx-4)}
 /* The head's actions, on one line at its right edge: the main action or
    what state it is in, then anything secondary. */
-.st-detail-actions{flex:none;display:flex;align-items:center;gap:8px;padding-top:4px}
-.st-detail-actions .btn{height:32px;padding:0 14px;border-radius:var(--r-pill)}
-.st-about{margin-top:-8px;max-width:68ch;font-size:var(--fs-md);line-height:20px;color:var(--tx-2);text-wrap:pretty}
+.st-detail-actions{flex:none;display:flex;align-items:center;gap:8px;align-self:flex-start;padding-top:8px}
+.st-detail-actions .btn{height:30px;padding:0 12px;border-radius:var(--sg-control-radius)}
+.st-update-note{margin-top:-16px;padding:0 var(--st-inset);max-width:calc(68ch + 2 * var(--st-inset));font-size:var(--fs-md);line-height:18px;color:var(--tx-2);text-wrap:pretty}
+.st-update-note.is-warn{color:var(--tx)}
+.st-update-note .st-link{margin-left:4px}
+.st-about{padding:0 var(--st-inset);max-width:calc(68ch + 2 * var(--st-inset));font-size:var(--fs-md);line-height:20px;color:var(--tx-2);text-wrap:pretty}
 .st-card{display:flex;flex-direction:column;border-radius:var(--r-xl);background:var(--bg-panel);overflow:hidden}
-.st-kv{display:flex;align-items:baseline;gap:16px;min-height:44px;padding:12px 14px}
-.st-kv>span{flex:none;width:120px;font-size:var(--fs-sm);line-height:16px;color:var(--tx-3)}
+/* Label and value: the same size on one baseline, the label on the text
+   edge, values on one column. */
+.st-kv{display:flex;align-items:baseline;gap:16px;min-height:44px;padding:13px var(--st-inset)}
+.st-kv>span{flex:none;width:136px;font-size:var(--fs-md);line-height:18px;color:var(--tx-3)}
 .st-kv>span>i{margin-left:6px;font-style:normal;color:var(--tx-4)}
-.st-kv>b{min-width:0;font-size:var(--fs-md);line-height:16px;font-weight:var(--fw-regular);color:var(--tx);overflow-wrap:anywhere}
+.st-kv>b{min-width:0;font-size:var(--fs-md);line-height:18px;font-weight:var(--fw-regular);color:var(--tx);overflow-wrap:anywhere}
 .st-kv.is-version>b{color:var(--tx-2)}
-.st-file{display:flex;align-items:center;justify-content:space-between;gap:12px;height:40px;padding:0 12px 0 14px;border:0;text-align:left;color:var(--tx);font:var(--fs-sm)/16px var(--f-mono);transition:background var(--dur-1)}
+.st-kv-aside{margin-left:8px;color:var(--tx-3)}
+.st-file{display:flex;align-items:center;justify-content:space-between;gap:12px;height:40px;padding:0 12px 0 var(--st-inset);border:0;text-align:left;color:var(--tx);font:var(--fs-sm)/16px var(--f-mono);transition:background var(--dur-1)}
 .st-file:hover{background:var(--ink-1)}
 .st-file svg{width:12px;height:12px;color:var(--tx-4)}
-.st-note{margin-top:8px;font-size:var(--fs-sm);line-height:16px;color:var(--tx-4);text-wrap:pretty}
+.st-note{margin-top:8px;padding:0 var(--st-inset);font-size:var(--fs-sm);line-height:16px;color:var(--tx-4);text-wrap:pretty}
 
 /* Lineage reads as a sentence with the origin as a link, GitHub style. */
 .st-lineage{margin-top:6px;font-size:var(--fs-sm);line-height:16px;color:var(--tx-3)}
+.st-lineage-sep{margin:0 4px;color:var(--tx-4)}
 .st-link{padding:0;border:0;color:var(--tx-2);font:inherit;font-weight:var(--fw-medium);text-decoration:underline;text-decoration-color:var(--tx-4);text-underline-offset:2px;transition:color var(--dur-1)}
 .st-link:hover{color:var(--tx)}
+.st-link:focus-visible{outline:0;border-radius:2px;box-shadow:0 0 0 2px var(--ink-2)}
 
-/* Setup: one row per variable, field on the right, like a Settings row. */
-.st-var{display:flex;align-items:center;gap:12px;min-height:52px;padding:10px 14px}
+/* Made by, in Details: the value's own ink, underlined only when pointed at. */
+.st-link.st-dev-link{color:var(--tx);font-weight:var(--fw-regular);text-decoration-color:transparent}
+.st-link.st-dev-link:hover{text-decoration-color:var(--tx-4)}
+
+/* ── developer ── */
+/* Their avatar (the account's flat ink, never a hue) and handle, on the
+   text edge, the way an extension's page opens on its icon and name. */
+.st-dev-head{display:flex;align-items:center;gap:16px;padding:0 var(--st-inset)}
+.acct-avatar.st-dev-avatar{--size:56px;font-size:20px;font-weight:var(--fw-medium)}
+.st-dev-head h2{min-width:0;font-size:22px;line-height:28px;font-weight:var(--fw-medium);letter-spacing:-.015em;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Setup: one row per variable, like a Settings row. */
+.st-var{display:flex;align-items:center;gap:12px;min-height:52px;padding:10px var(--st-inset)}
 .st-var-copy{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
 .st-var-copy>b{font-size:var(--fs-md);line-height:18px;font-weight:var(--fw-medium);color:var(--tx)}
 .st-var-copy>span{font-size:var(--fs-sm);line-height:16px;color:var(--tx-3);text-wrap:pretty}
 .st-var-copy code{margin-left:4px;font:var(--fs-xs)/16px var(--f-mono);color:var(--tx-4)}
 .st-var-req{margin-left:6px;padding:0 5px;border-radius:var(--r-xs);background:var(--ink-1);color:var(--tx-3);font-size:var(--fs-xs);font-weight:var(--fw-regular);line-height:16px;vertical-align:1px}
-#store-screen .st-var-input{width:220px;height:30px;flex:none;padding:0 10px;border:0;border-radius:var(--r-md);background:var(--bg-float);color:var(--tx);font-size:var(--fs-md)}
+#store-screen .st-var-input{width:220px;height:30px;flex:none;padding:0 10px;border:0;border-radius:var(--sg-control-radius);background:var(--bg-float);color:var(--tx);font-size:var(--fs-md)}
 #store-screen .st-var-input::placeholder{color:var(--tx-4)}
 #store-screen .st-var-input:focus-visible{outline:0;box-shadow:0 0 0 3px var(--ink-2)}
 
-/* Facts: four quiet label/value pairs in one line, no rules. */
-.st-facts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin:-8px 0}
-.st-facts>div{min-width:0;display:flex;flex-direction:column;gap:2px}
-.st-facts dt{font-size:var(--fs-xs);line-height:14px;font-weight:var(--fw-medium);color:var(--tx-4)}
-.st-facts dd{font-size:var(--fs-md);line-height:18px;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .st-sec-sub{margin-left:6px;font-weight:var(--fw-regular);color:var(--tx-4)}
-.st-whatsnew{font-size:var(--fs-md);line-height:20px;color:var(--tx-2);text-wrap:pretty;max-width:68ch}
 
 /* ── empty ── */
-.st-empty{display:flex;flex-direction:column;align-items:flex-start;gap:6px;padding:24px 0}
-.st-empty b{font-size:var(--fs-md);font-weight:var(--fw-medium);color:var(--tx)}
-.st-empty span{max-width:52ch;font-size:var(--fs-md);line-height:18px;color:var(--tx-3);text-wrap:pretty}
-.st-empty .btn{margin-top:10px}
+.st-empty{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:4px var(--st-inset)}
+.st-empty b{font-size:var(--fs-md);line-height:18px;font-weight:var(--fw-medium);color:var(--tx)}
+.st-empty span{max-width:56ch;font-size:var(--fs-sm);line-height:16px;color:var(--tx-3);text-wrap:pretty}
+.st-empty .btn{margin-top:12px}
 .st-empty .st-coord{font:var(--fs-sm)/18px var(--f-mono);color:var(--tx-2)}
 
-#store-screen .btn:not(.pri){box-shadow:none}
-#store-screen .st-item,#store-screen .st-carousel,#store-screen .st-banner,#store-screen .st-head,#store-screen .st-facts{user-select:none;-webkit-user-select:none}
+#store-screen .st-item,#store-screen .st-carousel,#store-screen .st-head,#store-screen .st-empty-card{user-select:none;-webkit-user-select:none}
 
 /* ── live data: loading, failure, row controls ── */
 /* Skeleton rows hold the shape of what is coming; a slow breath says it is
@@ -257,19 +300,20 @@ button.st-plus:hover{background:var(--bg-row-hi)}
 .is-skeleton .st-skel,.is-skeleton .st-skel-lines{animation:st-breathe 1.6s ease-in-out infinite alternate}
 @keyframes st-breathe{from{opacity:1}to{opacity:.55}}
 @media (prefers-reduced-motion:reduce){.is-skeleton .st-skel,.is-skeleton .st-skel-lines{animation:none}}
-.st-failure{display:flex;align-items:baseline;gap:8px;padding:4px 2px;font-size:var(--fs-md);line-height:18px;color:var(--tx-2)}
-.st-more{align-self:flex-start;margin-top:-16px}
+.st-failure{display:flex;align-items:baseline;gap:8px;padding:0 var(--st-inset);font-size:var(--fs-md);line-height:18px;color:var(--tx-2)}
+.st-source-error{padding:10px var(--st-inset)}
+.st-more{align-self:flex-start;margin:-16px 0 0 calc(var(--st-inset) - 12px)}
 /* On/Off: quiet until you point at it, then it reads as the switch it is. */
-.st-toggle{flex:none;min-width:68px;height:28px;padding:0 10px;border:0;border-radius:var(--r-pill);background:transparent;color:var(--tx-4);font-size:var(--fs-sm);font-weight:var(--fw-medium);transition:background var(--dur-1),color var(--dur-1)}
+.st-toggle{flex:none;min-width:56px;height:28px;padding:0 10px;border:0;border-radius:var(--sg-control-radius);background:transparent;color:var(--tx-4);font-size:var(--fs-sm);font-weight:var(--fw-medium);transition:background var(--dur-1),color var(--dur-1)}
 .st-toggle[aria-pressed="true"]{color:var(--tx-3)}
 .st-toggle:hover{background:var(--ink-1);color:var(--tx)}
-.st-toggle:focus-visible{outline:0;box-shadow:0 0 0 2px var(--accent)}
+.st-toggle:focus-visible{outline:0;box-shadow:0 0 0 3px var(--ink-2)}
 /* Installed: a status with a tick, unfilled, so it never reads as a button. */
-.st-detail-actions .st-installed{display:inline-flex;align-items:center;gap:6px;min-width:0;height:32px;margin:0 4px 0 0;padding:0;background:transparent;color:var(--tx-3);font-size:var(--fs-sm);font-weight:var(--fw-medium)}
+.st-detail-actions .st-installed{display:inline-flex;align-items:center;gap:6px;height:30px;margin:0 4px 0 0;padding:0;color:var(--tx-3)}
 .st-detail-actions .st-installed::before{content:"";width:12px;height:12px;background:currentColor;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-6' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-6' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/contain no-repeat}
 #store-screen .st-detail-secondary{color:var(--tx-2)}
 #store-screen .st-detail-secondary:hover{color:var(--tx)}
-.st-kv.is-file{align-items:center;justify-content:space-between;min-height:36px;padding:8px 14px}
+.st-kv.is-file{align-items:center;justify-content:space-between;min-height:36px;padding:8px var(--st-inset)}
 .st-kv.is-file>b{font:var(--fs-sm)/16px var(--f-mono)}
 .st-change{flex:none;font-size:var(--fs-xs);font-weight:var(--fw-medium);color:var(--tx-3)}
 .st-change.is-added{color:var(--tx-2)}
@@ -277,43 +321,39 @@ button.st-plus:hover{background:var(--bg-row-hi)}
 .st-kv.is-withdrawn>span,.st-kv.is-withdrawn>b{color:var(--tx-4)}
 .st-file.is-open svg{transform:rotate(90deg)}
 .st-file svg{transition:transform var(--dur-1)}
-.st-source{max-height:320px;margin:0;padding:10px 14px 14px;overflow:auto;background:var(--bg-float);color:var(--tx-2);font:var(--fs-xs)/16px var(--f-mono);white-space:pre;tab-size:2;user-select:text;-webkit-user-select:text}
+.st-source{max-height:320px;margin:0;padding:10px var(--st-inset) 14px;overflow:auto;background:var(--bg-float);color:var(--tx-2);font:var(--fs-xs)/16px var(--f-mono);white-space:pre;tab-size:2;user-select:text;-webkit-user-select:text}
 .st-source[aria-busy="true"]{min-height:48px}
-.st-source-error{padding:10px 14px}
 
-
-/* The live Store retains its installation and library controls in the home pane. */
+/* Buttons are the app's flat tonal fills; the primary is one ink step up,
+   never the accent. */
 #store-screen .btn:not(.pri){box-shadow:none}
-#store-screen .btn.pri{background:var(--ink-1);color:var(--tx);box-shadow:none}
-#store-screen .btn.pri:hover{background:var(--ink-2)}
+#store-screen .btn.pri{background:var(--ink-2);color:var(--tx);box-shadow:none}
+#store-screen .btn.pri:hover{background:var(--ink-3)}
 #store-screen .btn.pri:disabled{opacity:.55}
+#store-screen .btn:focus-visible{outline:0;box-shadow:0 0 0 3px var(--ink-2)}
 @media (max-width:760px){.st-scroll{padding:24px 20px 64px}}
 
 /* ── Library ── */
-.st-stack{display:flex;flex-direction:column;gap:40px}
-.st-item.is-library{min-height:124px}
-.st-item-status{margin-top:4px;font-size:var(--fs-sm);line-height:16px;color:var(--tx-3)}
+.st-stack{display:flex;flex-direction:column;gap:32px}
 .st-item-status.is-hot{color:var(--accent-tx);font-weight:var(--fw-medium)}
 .st-item.is-off .st-item-icon .st-thumb{opacity:.45;filter:saturate(.4)}
 .st-item.is-off .st-item-copy b{color:var(--tx-2)}
-.st-item-action{align-items:center;gap:4px}
-.st-item-more{display:grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:var(--r-md);background:transparent;color:var(--tx-3)}
+.st-item-more{display:grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:var(--sg-control-radius);background:transparent;color:var(--tx-3);transition:background var(--dur-1),color var(--dur-1)}
 .st-item-more svg{width:15px;height:15px}
 .st-item-more:hover{background:var(--ink-1);color:var(--tx)}
-.st-item-more:focus-visible{outline:0;box-shadow:0 0 0 2px var(--accent)}
+.st-item-more:focus-visible{outline:0;box-shadow:0 0 0 3px var(--ink-2)}
 /* The switch reads as Settings' does: ink when on, not accent. */
 #store-screen .st-item-action .toggle{margin:0 6px 0 2px}
 #store-screen .toggle.on{background:var(--tx)}
 #store-screen .toggle.on i{background:var(--bg-panel)}
-#store-screen .toggle:focus-visible{outline:0;box-shadow:0 0 0 2px var(--accent)}
-/* An empty section is still a card: what goes here, and a way to fill it. */
-.st-empty-card{display:flex;align-items:center;gap:16px;padding:20px;border-radius:var(--r-xl);background:var(--bg-panel)}
-.st-empty-mark{flex:none;display:grid;place-items:center;width:52px;height:52px;border-radius:var(--r-lg);background:var(--bg-float);color:var(--tx-3)}
-.st-empty-mark svg{width:20px;height:20px}
-.st-empty-copy{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
-.st-empty-copy b{font-size:var(--fs-lg);line-height:20px;font-weight:var(--fw-medium);color:var(--tx)}
-.st-empty-copy span{max-width:60ch;font-size:var(--fs-md);line-height:19px;color:var(--tx-3);text-wrap:pretty}
-#store-screen .st-empty-go{flex:none;height:32px;padding:0 14px;border-radius:var(--r-md);font-size:var(--fs-md)}
+#store-screen .toggle:focus-visible{outline:0;box-shadow:0 0 0 3px var(--ink-2)}
+/* An empty section is one Settings row: what goes here, and a way to fill
+   it. No artwork standing in for content that isn't there. */
+.st-empty-card{display:flex;align-items:center;gap:12px;min-height:64px;padding:14px;border-radius:var(--r-xl);background:var(--bg-panel)}
+.st-empty-copy{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.st-empty-copy b{font-size:var(--fs-md);line-height:18px;font-weight:var(--fw-medium);color:var(--tx)}
+.st-empty-copy span{max-width:60ch;font-size:var(--fs-sm);line-height:16px;color:var(--tx-3);text-wrap:pretty}
+#store-screen .st-empty-go{flex:none;height:30px;padding:0 12px;border-radius:var(--sg-control-radius);font-size:var(--fs-sm)}
 
 /* ── motion ── */
 /* One vocabulary, the app's own: hover and press answer at --dur-1 on the
@@ -335,8 +375,7 @@ button.st-plus:hover{background:var(--bg-row-hi)}
 
 /* Tiles and chips on a card: a step down from the card in light, where the
    raised fill is the card's own white; a step up in dark. */
-#store-screen :is(.st-item-icon,.st-plus:not(.is-done),.st-empty-mark){background:var(--bg-field)}
+#store-screen :is(.st-item-icon,.st-plus:not(.is-done)){background:var(--bg-field)}
 #store-screen button.st-plus:hover{background:var(--bg-row-hi)}
-:root[data-theme="dark"] #store-screen :is(.st-item-icon,.st-plus:not(.is-done),.st-empty-mark){background:var(--bg-float)}
+:root[data-theme="dark"] #store-screen :is(.st-item-icon,.st-plus:not(.is-done)){background:var(--bg-float)}
 :root[data-theme="dark"] #store-screen button.st-plus:hover{background:var(--bg-row-hi)}
-

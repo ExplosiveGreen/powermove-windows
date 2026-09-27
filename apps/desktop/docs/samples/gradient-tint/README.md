@@ -19,7 +19,7 @@ by Powermove from the four effect params.
 5. In the automatic verification continuation, use `get_workspace_state` to
    inspect extension health and `registeredEffects`. If applying the effect was
    requested, use `apply_commands` with `add_effect` on the intended layer:
-   `{ "type": "add_effect", "target": "LAYER_ID", "effect": "gradient-tint" }`.
+   `{ "type": "add_effect", "target": "LAYER_ID", "effect": "gradient-tint.effect" }`.
    Inspect `get_project_state` for the effect instance and its editable property
    paths. Use those observed paths for `set_property` or `replace_keyframes`.
 6. Check the effect in Effects & Presets and the Inspector. Inspect real

@@ -61,9 +61,20 @@ function fakeClient(releases: Built[], latest: () => Built) {
   };
   const unused = async (): Promise<never> => { throw new Error('not used'); };
   const addInstall = vi.fn(async (_repoId: string, _releaseId: string) => undefined);
+  const fetched: string[] = [];
   const deleteInstall = vi.fn(async (_repoId: string) => undefined);
   const client: StoreClient = {
-    browse: unused, extensions: unused, detail: unused, tree: unused, file: unused, compare: unused, listInstalls: unused,
+    browse: unused, extensions: unused, detail: unused, file: unused, compare: unused, listInstalls: unused,
+    tree: async (id) => {
+      const snap = await snapshot(byId(id).files);
+      return { treeSha: snap.treeSha, files: snap.files };
+    },
+    fileBytes: async (_handle, _slug, version, file) => {
+      const found = releases.find((entry) => entry.release.version === version)?.files.find((entry) => entry.path === file);
+      if (!found) throw new ApiError({ error: 'not_found' });
+      fetched.push(`${version}:${file}`);
+      return found.bytes.slice();
+    },
     release: async (id) => structuredClone(byId(id).release),
     tar: async (id) => byId(id).tar.slice(),
     versions: async (items) => ({
@@ -79,12 +90,12 @@ function fakeClient(releases: Built[], latest: () => Built) {
     addInstall,
     deleteInstall
   };
-  return Object.assign(client, { addInstall, deleteInstall });
+  return Object.assign(client, { addInstall, deleteInstall, fetched });
 }
 
 const me: MeDto = {
   user: { id: '55555555-5555-4555-8555-555555555555', name: 'Jude', email: 'jude@example.com', image: null },
-  publisher: { id: '66666666-6666-4666-8666-666666666666', handle: 'jude', tombstoned: false },
+  publisher: { id: '66666666-6666-4666-8666-666666666666', handle: 'jude', tombstoned: false, verified: false },
   settings: { rememberInstalls: true }
 };
 
@@ -147,9 +158,18 @@ describe('store installer', () => {
   it('refuses reserved host and built-in ids before writing a folder', async () => {
     const releaseId = '77777777-7777-4777-8777-777777777777';
     const reserved = await build(releaseId, '1.0.0', tree('1.0.0', 'project'));
-    const { userDir, installer } = await setup({ extra: [reserved] });
+    const { userDir, installer, setHead } = await setup({ extra: [reserved] });
+    setHead(reserved);
     await expect(installer.installRelease({ repoId: REPO, releaseId })).rejects.toMatchObject({ body: { error: 'id_collision' } });
     expect(await exists(path.join(userDir, 'project'))).toBe(false);
+  });
+  it('installs the latest release even when the Store showed an older one', async () => {
+    /* The Store stayed open while 1.1.0 shipped: its button still names 1.0.0. */
+    const { userDir, installer, provenance, v2, setHead } = await setup();
+    setHead(v2);
+    await installer.installRelease({ repoId: REPO, releaseId: R1 });
+    expect(await readFolder(path.join(userDir, 'glass-blur'))).toEqual(installed(v2.files, R2));
+    expect((await provenance.get('glass-blur'))?.origin).toMatchObject({ releaseId: R2, version: '1.1.0' });
   });
   it('installs a release byte for byte and records where it came from', async () => {
     const { userDir, installer, provenance, client, v1 } = await setup();
@@ -281,6 +301,63 @@ describe('store installer', () => {
     expect((await provenance.get('glass-blur'))?.origin?.releaseId).toBe(R1);
     expect(await fs.readdir(path.join(userDir, '.staging'))).toEqual([]);
     expect(await fs.readdir(path.join(userDir, '.trash'))).toEqual([]);
+  });
+
+  it('pulls an unmodified update: only the changed file is fetched, the folder becomes the release', async () => {
+    const { userDir, installer, client, v2, setHead } = await setup();
+    await installer.installRelease({ repoId: REPO, releaseId: R1 });
+    setHead(v2);
+    await expect(installer.updateRelease('glass-blur')).resolves.toEqual({ kind: 'updated', localId: 'glass-blur', version: '1.1.0' });
+    expect(await readFolder(path.join(userDir, 'glass-blur'))).toEqual(installed(v2.files, R2));
+    // manifest.json, index.ts and the shader all changed between 1.0.0 and 1.1.0; nothing else is fetched.
+    expect(client.fetched.sort()).toEqual(['1.1.0:index.ts', '1.1.0:manifest.json', '1.1.0:shaders/glass.frag']);
+  });
+
+  it('keeps a change made here when the update touched other files', async () => {
+    const R5 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const R6 = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const files = (version: string, frag: string): SnapshotInput[] => [
+      { path: 'manifest.json', bytes: text(`${JSON.stringify({ id: 'glass-blur', name: 'Glass blur', version, apiVersion: 2, contributes: ['effects'] }, null, 2)}\n`) },
+      { path: 'index.ts', bytes: text('export default {}\n') },
+      { path: 'shaders/glass.frag', bytes: text(frag) }
+    ];
+    const one = await build(R5, '2.0.0', files('2.0.0', 'void main() {}\n'));
+    const two = await build(R6, '2.1.0', files('2.1.0', 'void main() { /* edge */ }\n'));
+    const { userDir, installer, provenance, client, setHead } = await setup({ extra: [one, two] });
+    setHead(one);
+    await installer.installRelease({ repoId: REPO, releaseId: R5 });
+    const folder = path.join(userDir, 'glass-blur');
+    await fs.writeFile(path.join(folder, 'index.ts'), 'export default { mine: true }\n');
+    await fs.writeFile(path.join(folder, 'notes.md'), 'mine\n');
+    setHead(two);
+    await expect(installer.updateRelease('glass-blur')).resolves.toEqual({ kind: 'merged', localId: 'glass-blur', version: '2.1.0' });
+    expect(await fs.readFile(path.join(folder, 'index.ts'), 'utf8')).toBe('export default { mine: true }\n');
+    expect(await fs.readFile(path.join(folder, 'notes.md'), 'utf8')).toBe('mine\n');
+    expect(await fs.readFile(path.join(folder, 'shaders/glass.frag'), 'utf8')).toBe('void main() { /* edge */ }\n');
+    expect(client.fetched.sort()).toEqual(['2.1.0:manifest.json', '2.1.0:shaders/glass.frag']);
+    const record = await provenance.get('glass-blur');
+    expect(record?.origin?.releaseId).toBe(R6);
+    expect(record).not.toHaveProperty('pendingUpdate');
+    expect(await installer.isModified('glass-blur')).toBe(true);
+  });
+
+  it('merges lines when both sides changed the same file in different places', async () => {
+    const R7 = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const R8 = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const files = (version: string, body: string): SnapshotInput[] => [
+      { path: 'manifest.json', bytes: text(`${JSON.stringify({ id: 'glass-blur', name: 'Glass blur', version, apiVersion: 2, contributes: ['effects'] }, null, 2)}\n`) },
+      { path: 'index.ts', bytes: text(body) }
+    ];
+    const one = await build(R7, '3.0.0', files('3.0.0', 'const a = 1;\nconst b = 2;\nconst c = 3;\nexport default { a, b, c };\n'));
+    const two = await build(R8, '3.1.0', files('3.1.0', 'const a = 1;\nconst b = 2;\nconst c = 30;\nexport default { a, b, c };\n'));
+    const { userDir, installer, setHead } = await setup({ extra: [one, two] });
+    setHead(one);
+    await installer.installRelease({ repoId: REPO, releaseId: R7 });
+    const index = path.join(userDir, 'glass-blur', 'index.ts');
+    await fs.writeFile(index, 'const a = 10;\nconst b = 2;\nconst c = 3;\nexport default { a, b, c };\n');
+    setHead(two);
+    await expect(installer.updateRelease('glass-blur')).resolves.toMatchObject({ kind: 'merged', version: '3.1.0' });
+    expect(await fs.readFile(index, 'utf8')).toBe('const a = 10;\nconst b = 2;\nconst c = 30;\nexport default { a, b, c };\n');
   });
 
   it('stages a modified update beside the folder and leaves the folder alone', async () => {

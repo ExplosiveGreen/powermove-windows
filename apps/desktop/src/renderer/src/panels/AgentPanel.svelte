@@ -50,7 +50,7 @@
     if (accountStatus.state !== 'checking') connectionRequired = accountStatus.state !== 'connected';
   });
   const showConnectionGate = $derived(accountStatus.state === 'checking' ? connectionRequired : accountStatus.state !== 'connected');
-  const showSetup = $derived(showConnectionGate && agentState.phase === 'idle' && !agentState.conversation.length && !agentState.activity);
+  const showSetup = $derived(showConnectionGate && agentState.phase === 'idle' && !agentState.conversation.length && !agentState.activity && !agentState.composerDraft);
 
   onMount(() => {
     // Panels mount before app.ts chooses the boot project. Synchronize on the

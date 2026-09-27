@@ -108,8 +108,7 @@
   });
 </script>
 
-<!-- svelte-ignore a11y_autofocus -->
-<div class="vars-sheet" bind:this={root} tabindex="-1" autofocus>
+<div class="vars-sheet" bind:this={root} tabindex="-1" data-autofocus>
   <header class="acct-head">
     <h2>{name}</h2>
   </header>

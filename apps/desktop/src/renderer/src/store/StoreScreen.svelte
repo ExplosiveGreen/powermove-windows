@@ -1,7 +1,9 @@
 <script lang="ts">
+  import { openProjectPicker } from './project-picker';
   import { tick, untrack } from 'svelte';
   import { fade, fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
+  import Scritto from '@scritto/svelte';
   import type { CompareDto, CompareStatus, ListingDto, TreeFileDto } from '@powermove/registry/wire';
   import Icon from '../panels/Icon.svelte';
   import { mountSquircles, SQUIRCLE_SELECTOR } from '../settings/squircle';
@@ -79,6 +81,13 @@
   let showAllVersions = $state(false);
   /* The version whose Withdraw is asking "are you sure?" inline. */
   let withdrawing = $state<string | null>(null);
+  /* A developer's page: everything one handle has published. It sits over
+     the page you opened it from (Discover, a kind, the Library, an
+     extension's page), and Back returns there exactly. */
+  type ProfileFrom = { page: StorePage; detail: DetailTarget | null; search: string; scroll: number; label: string };
+  let profile = $state<{ handle: string; from: ProfileFrom } | null>(null);
+  let profileItems = $state<Loadable<StoreListing[]>>({ status: 'loading' });
+  const profileCache = new Map<string, StoreListing[]>();
 
   $effect(() => subscribeAccount((user) => {
     account = user;
@@ -88,7 +97,11 @@
 
   const query = $derived(searchText.trim());
   const pageKind = $derived(page.startsWith('kind:') ? kindOf(page.slice(5)) : null);
-  const viewKey = $derived(detail ? `detail:${detail.coord ? `${detail.coord.handle}/${detail.coord.slug}` : detail.localId}` : query ? 'search' : page);
+  /* The Store's title doubles as Back on a kind page or a developer's page
+     (unless a search covers it), and names where Back goes. */
+  const titleBack = $derived((!!pageKind || !!profile) && !query);
+  const titleText = $derived(titleBack ? (profile ? profile.from.label : 'Discover') : 'Store');
+  const viewKey = $derived(detail ? `detail:${detail.coord ? `${detail.coord.handle}/${detail.coord.slug}` : detail.localId}` : query ? 'search' : profile ? `dev:${profile.handle}` : page);
   const slide = $derived(reduced() ? { duration: 0 }
     : direction === 0 ? { y: RISE, duration: PAGE_MS, easing: cubicOut }
     : { x: direction * SLIDE, duration: PAGE_MS, easing: cubicOut });
@@ -171,6 +184,13 @@
     } catch {
       // Keep what is shown; the next change reloads it.
     }
+  }
+
+  /* A publish or withdrawal changes what Discover lists: refetch it quietly,
+     and drop the kind shelves so they load fresh when next opened. */
+  function refreshDiscover(): void {
+    shelfCache.clear();
+    void loadBrowse();
   }
 
   async function loadBrowse(): Promise<void> {
@@ -312,6 +332,7 @@
   export function open(target: StorePage = 'browse'): void {
     page = target;
     detail = null;
+    profile = null;
     direction = 0;
     searchText = '';
     if (!shown) {
@@ -382,14 +403,104 @@
 
   function scrollTop(): void {
     void tick().then(() => scrollEl?.scrollTo({ top: 0, behavior: 'instant' }));
+    keepFocus();
   }
 
+  /* A view change unmounts the button that caused it; hand focus to the
+     screen so Escape (and the next Tab) still land here. */
+  function keepFocus(): void {
+    void tick().then(() => {
+      if (rootEl && !rootEl.contains(document.activeElement)) rootEl.focus({ preventScroll: true });
+    });
+  }
+
+  /* Where Discover was scrolled when a kind page opened from it, so the
+     way back lands on the shelf you left. */
+  let browseScroll = 0;
   function show(id: StorePage): void {
-    direction = 0;
+    if (page === 'browse' && !detail && id.startsWith('kind:')) browseScroll = scrollEl?.scrollTop ?? 0;
+    direction = id.startsWith('kind:') ? 1 : 0;
     page = id;
     detail = null;
+    profile = null;
     searchText = '';
     scrollTop();
+  }
+
+  /* ── developers ── */
+
+  /* Where Back goes from a developer's page, in the words of that place. */
+  function hereLabel(): string {
+    if (detail) return detailData?.name ?? detail.preview?.name ?? 'Back';
+    if (query) return 'Results';
+    if (page === 'library') return 'Library';
+    if (pageKind) return KIND_PLURAL[pageKind];
+    return 'Discover';
+  }
+
+  function openProfile(handle: string): void {
+    if (profile?.handle === handle && !detail) return;
+    const from: ProfileFrom = profile && !detail
+      ? profile.from
+      : { page, detail, search: searchText, scroll: scrollEl?.scrollTop ?? 0, label: hereLabel() };
+    profile = { handle, from };
+    direction = 1;
+    detail = null;
+    remote = null;
+    compare = null;
+    searchText = '';
+    void loadProfile(handle);
+    scrollTop();
+  }
+
+  function leaveProfile(): void {
+    const from = profile?.from;
+    if (!from) return;
+    profile = null;
+    direction = -1;
+    page = from.page;
+    searchText = from.search;
+    detail = from.detail;
+    if (from.detail) void loadDetail(from.detail);
+    const top = from.scroll;
+    void tick().then(() => scrollEl?.scrollTo({ top, behavior: 'instant' }));
+    keepFocus();
+  }
+
+  /* The registry has no per-developer listing, but its search matches
+     handles, so a handle's search holds everything they published: page
+     through it, most installed first, and keep only exact matches. */
+  let profileToken = 0;
+  async function loadProfile(handle: string): Promise<void> {
+    const token = ++profileToken;
+    const cached = profileCache.get(handle);
+    profileItems = cached ? { status: 'ready', value: cached } : { status: 'loading' };
+    const found: StoreListing[] = [];
+    let cursor: string | undefined;
+    for (let pageIndex = 0; pageIndex < 8; pageIndex++) {
+      const request = cursor ? { q: handle, sort: 'installs' as const, cursor } : { q: handle, sort: 'installs' as const };
+      const result = await call(() => storeBridge()?.extensions(request));
+      if (token !== profileToken) return;
+      if (!result.ok) {
+        if (!cached) profileItems = { status: 'error', error: failed(result.error) };
+        return;
+      }
+      for (const dto of result.value.items) if (dto.owner.handle.toLowerCase() === handle.toLowerCase()) found.push(toListing(dto));
+      cursor = result.value.nextCursor ?? undefined;
+      if (!cursor) break;
+    }
+    profileCache.set(handle, found);
+    profileItems = { status: 'ready', value: found };
+  }
+
+  /* A kind page is one level under Discover: Back (or Escape) returns to it. */
+  function leaveKind(): void {
+    direction = -1;
+    page = 'browse';
+    searchText = '';
+    const top = browseScroll;
+    void tick().then(() => scrollEl?.scrollTo({ top, behavior: 'instant' }));
+    keepFocus();
   }
 
   function pushDetail(target: DetailTarget): void {
@@ -431,22 +542,31 @@
     detail = null;
     remote = null;
     compare = null;
+    keepFocus();
   }
 
-  /* Escape leaves a detail; otherwise it is the home's. App shortcuts such as
-     ⌘, keep working over the Store. */
+  /* Escape leaves a detail, then a developer's page, then a kind page;
+     otherwise it is the home's. App shortcuts such as ⌘, keep working. */
   function keydown(event: KeyboardEvent): void {
-    if (event.key !== 'Escape' || !detail) return;
+    if (event.key !== 'Escape' || (!detail && (!(pageKind || profile) || query))) return;
     event.stopPropagation();
     event.preventDefault();
-    back();
+    if (detail) back();
+    else if (profile) leaveProfile();
+    else leaveKind();
+  }
+
+  function titleGo(): void {
+    if (!titleBack) return;
+    if (profile) leaveProfile();
+    else leaveKind();
   }
 
   /* Lisse squircles on the cards, previews and controls while the screen is up. */
   $effect(() => {
     if (!shown || !rootEl) return;
     const root = rootEl;
-    const selector = `${SQUIRCLE_SELECTOR}, .st-card, .st-thumb, .st-slide, .st-item, .st-item-icon, .st-detail-banner, .st-search, .st-plus`;
+    const selector = `${SQUIRCLE_SELECTOR}, .st-card, .st-thumb, .st-slide, .st-item, .st-item-icon, .st-search, .st-plus`;
     let unmount = mountSquircles(root, selector);
     const observer = new MutationObserver(() => { unmount(); unmount = mountSquircles(root, selector); });
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
@@ -463,10 +583,6 @@
   }
 
   /* Classify the whole package, not an individual contribution. */
-  function byline(kind: StoreKind, who: string): string {
-    return `${KIND_PLURAL[kind]} extension · ${who}`;
-  }
-
   /* A published fork knows its origin from provenance (the folder's own
      manifest never names it); anything else from its manifest. */
   function storeLineageOf(item: LibraryItemDto | undefined): Lineage | undefined {
@@ -590,7 +706,9 @@
     }
     toast(result.value.kind === 'updated'
       ? `${item.name} is updated to ${result.value.version}.`
-      : 'Update available; you changed the files. The new version is beside your folder for your agent to merge.');
+      : result.value.kind === 'merged'
+        ? `${item.name} is updated to ${result.value.version}. Your changes were kept.`
+        : 'Update available; you and the author changed the same lines. The new version is beside your folder for your agent to merge.');
   }
 
   async function uninstall(item: LibraryItemDto): Promise<void> {
@@ -667,6 +785,7 @@
     }
     openPublishSheet(PM, bridge, result.value, (published) => {
       void loadLibrary();
+      refreshDiscover();
       // The page you published from now has a store page of its own.
       const current = detail;
       const coord = splitCoordinate(published.coordinate);
@@ -690,6 +809,7 @@
       return;
     }
     toast(`Withdrew ${version.version}.`);
+    refreshDiscover();
     await loadLibrary();
     if (detail) void loadDetail(detail);
   }
@@ -742,9 +862,25 @@
     <div class="st-scroll" bind:this={scrollEl}>
       {#if !detail}
         <!-- Title, then one toolbar: where you are on the left; search on the
-             right, and Publish beside it in the Library. -->
+             right, and Publish beside it in the Library. On a kind page the
+             title is the way back: "Store" rolls into "Discover" (Scritto)
+             as a chevron grows in beside it. -->
         <header class="st-head">
-          <h1 class="st-title">Store</h1>
+          <h1 class="st-title" class:is-back={titleBack}>
+            <!-- Focusable only while it is role=button (titleBack). -->
+            <!-- svelte-ignore a11y_no_static_element_interactions, a11y_no_noninteractive_tabindex -->
+            <span
+              class="st-title-inner"
+              role={titleBack ? 'button' : undefined}
+              tabindex={titleBack ? 0 : undefined}
+              aria-label={titleBack ? `Back to ${titleText}` : undefined}
+              onclick={titleGo}
+              onkeydown={(event) => { if (titleBack && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); titleGo(); } }}
+            >
+              <span class="st-title-chev" aria-hidden="true"><Icon {PM} name="chev" /></span>
+              <Scritto value={titleText} />
+            </span>
+          </h1>
           <div class="st-toolbar">
             <div class="segmented" role="tablist" aria-label="Store pages">
               <button type="button" role="tab" class:on={page !== 'library'} aria-selected={page !== 'library'} onclick={() => show('browse')}>Discover</button>
@@ -754,16 +890,14 @@
               <Icon {PM} name="search" />
               <input type="search" placeholder="Search extensions" aria-label="Search extensions" maxlength="120" bind:value={searchText} />
             </label>
-            {#if page === 'library'}
               <button class="st-add" type="button" onclick={publishMenu}>
                 <Icon {PM} name="plus" /><span>Publish</span>
               </button>
-            {/if}
           </div>
         </header>
       {/if}
       {#key viewKey}
-        <div class="st-column" in:fly={slide}>
+        <div class="st-column" class:is-detail={!!detail} in:fly={slide}>
           {#if detail}
             {@render detailView(detail)}
 
@@ -785,6 +919,34 @@
                 {/each}
               </div>
             {/if}
+
+          {:else if profile}
+            {@const dev = profile.handle}
+            <!-- A developer: who they are, then everything they publish. -->
+            <header class="st-dev-head">
+              <span class="acct-avatar st-dev-avatar" aria-hidden="true">{dev.slice(0, 1).toUpperCase()}</span>
+              <h2>{dev}</h2>
+            </header>
+            <section class="st-sec">
+              {@render head('Extensions', profileItems.status === 'ready' ? profileItems.value.length : null)}
+              {#if profileItems.status === 'loading'}
+                {@render skeleton(4)}
+              {:else if profileItems.status === 'error'}
+                {@const handle = dev}
+                {@render failure(profileItems.error, () => void loadProfile(handle))}
+              {:else if profileItems.value.length === 0}
+                <div class="st-empty" in:fade={settle}>
+                  <b>Nothing on the store</b>
+                  <span>{dev} hasn’t published anything that’s listed.</span>
+                </div>
+              {:else}
+                <div class="st-cards" in:fade={settle}>
+                  {#each profileItems.value as l (l.repoId)}
+                    {@render card(l, false)}
+                  {/each}
+                </div>
+              {/if}
+            </section>
 
           {:else if page === 'browse'}
             {#if browse.status === 'loading'}
@@ -888,7 +1050,7 @@
                   {/each}
                 </div>
               {:else if !groups.store.length}
-                {@render libraryEmpty('basket', 'Nothing installed yet', 'Extensions you install from the store live here, and update when their makers publish.', 'Discover Extensions', () => show('browse'))}
+                {@render libraryEmpty('Nothing installed yet', 'Extensions you install from the store live here, and update when their makers publish.', 'Discover Extensions', () => show('browse'))}
               {/if}
             </section>
             <section class="st-sec">
@@ -900,7 +1062,7 @@
                   {/each}
                 </div>
               {:else if !groups.yours.length}
-                {@render libraryEmpty('wand', 'Nothing made yet', 'Ask your agent for an effect, a panel or a theme. What it makes shows up here, ready to publish.')}
+                {@render libraryEmpty('Nothing made yet', 'Ask your agent for an effect, a panel or a theme. What it makes shows up here, ready to publish.')}
               {/if}
             </section>
           {/if}
@@ -919,14 +1081,23 @@
   {:else if act.quiet}
     <span class="st-installed">{act.label}</span>
   {:else}
-    <button class={cls} class:pri={act.primary} type="button" disabled={act.disabled} onclick={() => run(act, item, listing)}>{act.label}</button>
+    <button class={cls} class:pri={act.primary} type="button" disabled={act.disabled} onclick={(event) => {
+      if (act.kind === 'open' && item) openProjectPicker(event.currentTarget, PM, async (id) => {
+        if (!await PM.openProjectHere?.(id)) throw new Error('This project is open in another window. Open the extension from that window.');
+        PM.ProjectsScreen?.hide?.();
+        const panels = PM.Kernel?.panels?.entries?.().filter((entry: any) => entry.ownerId === item.localId) ?? [];
+        for (const panel of panels) PM.LibraryUI?.reveal?.(panel.id);
+        if (!panels.length && item.category === 'effects') PM.LibraryUI?.reveal?.('effects');
+      });
+      else run(act, item, listing);
+    }}>{act.label}</button>
   {/if}
 {/snippet}
 
 <!-- A card per extension: its icon on a tile, name, what it does and who
      made it. The whole card opens it; the corner button is the one other
      target: + to install, a tick once it is here, or whatever it needs. -->
-{#snippet card(l: StoreListing)}
+{#snippet card(l: StoreListing, byline = true)}
   {@const act = listingAction(l)}
   {@const item = libraryItemFor(l.repoId, library, l)}
   {@const target = { repoId: l.repoId, releaseId: l.latestReleaseId, name: l.name }}
@@ -937,7 +1108,9 @@
     <span class="st-item-copy">
       <b>{l.name}</b>
       <span class="st-item-line">{l.tagline}</span>
-      <span class="st-item-by">by {l.publisher}</span>
+      {#if byline}
+        <span class="st-item-meta"><button class="st-item-dev" type="button" onclick={() => openProfile(l.publisher)}>by {l.publisher}</button></span>
+      {/if}
     </span>
     <span class="st-item-action">
       {#if !pending && act.kind === 'install'}
@@ -960,24 +1133,34 @@
   </div>
 {/snippet}
 
-<!-- A Library card: the Discover card, plus what is up with it. The corner
-     holds its one action, or its switch when it just runs; the menu has the
-     rest. Turned off or waiting on you, the icon dims. -->
+<!-- A Library card: the Discover card, plus what is up with it. Three tiers:
+     the name, one line of what it does, then one quiet line of facts (who
+     made it, where it came from, its state), where only a state that needs
+     you lights up. "By you" is left to the section heading. The corner holds
+     its one action, or its switch when it just runs; the menu has the rest.
+     Turned off or waiting on you, the icon dims. -->
 {#snippet libraryCard(item: LibraryItemDto)}
   {@const note = statusText(item)}
   {@const lineage = storeLineageOf(item)}
   {@const act = libraryAction(item)}
+  {@const byline = item.group === 'yours' ? null : makerText(item)}
+  {@const makerHandle = 'handle' in item.maker ? item.maker.handle : null}
   <div class="st-item is-library" class:is-off={needsSetup(item) || needsTrust(item) || !item.enabled}>
     <button class="st-item-open" type="button" aria-label={`Open ${item.name}`} onclick={() => openItem(item)}></button>
     <span class="st-item-icon"><span class="st-thumb" style={itemArt(item)}></span></span>
     <span class="st-item-copy">
       <b>{item.name}</b>
       <span class="st-item-line">{item.description ?? KIND_LABEL[item.category]}</span>
-      <span class="st-item-by">{makerText(item)}{#if lineage}&nbsp;· forked from {lineage.handle}/{lineage.slug}{/if}</span>
-      {#if note}
-        {#key note}
-          <span class="st-item-status" class:is-hot={statusIsHot(item)} in:fade={settle}>{note}</span>
-        {/key}
+      {#if byline || lineage || note}
+        <span class="st-item-meta">
+          {#if byline && makerHandle}<button class="st-item-dev" type="button" onclick={() => openProfile(makerHandle)}>{byline}</button>{:else if byline}<span>{byline}</span>{/if}
+          {#if lineage}<span class="st-item-lineage">forked from {lineage.handle}/{lineage.slug}</span>{/if}
+          {#if note}
+            {#key note}
+              <span class="st-item-status" class:is-hot={statusIsHot(item)} in:fade={settle}>{note}</span>
+            {/key}
+          {/if}
+        </span>
       {/if}
     </span>
     <span class="st-item-action">
@@ -993,9 +1176,8 @@
   </div>
 {/snippet}
 
-{#snippet libraryEmpty(icon: string, title: string, body: string, cta?: string, go?: () => void)}
+{#snippet libraryEmpty(title: string, body: string, cta?: string, go?: () => void)}
   <div class="st-empty-card">
-    <span class="st-empty-mark"><Icon {PM} name={icon} /></span>
     <span class="st-empty-copy">
       <b>{title}</b>
       <span>{body}</span>
@@ -1051,6 +1233,9 @@
   {@const act = detailAction({ vars: data?.vars ?? item?.vars, item, repoId: data?.repoId })}
   {@const alsoPublish = data && item?.fork && data.repoId !== item.published?.repoId ? null : secondaryPublish(item)}
   {@const ownPage = ownsListing(data, account)}
+  {@const byYou = ownPage || (!data && !preview && !!item && 'you' in item.maker)}
+  <!-- Whose page "Made by" opens: the store's publisher, when there is one. -->
+  {@const devHandle = data?.publisher ?? preview?.publisher ?? (item && 'handle' in item.maker ? item.maker.handle : null)}
   {@const storeLineage = data?.forkedFrom ?? storeLineageOf(item)}
   {@const builtinLineage = storeLineage ? undefined : builtinLineageOf(item)}
   <!-- A fork compares against the release it was forked from (P0 Q5), or
@@ -1063,13 +1248,14 @@
   {@const apiVersion = data?.apiVersion ?? preview?.apiVersion ?? null}
   {@const access = permissionLines(data?.permissions ?? preview?.permissions ?? item?.permissions)}
   {@const coord = data ? coordinate(data) : preview ? coordinate(preview) : item?.origin?.coordinate ?? (account?.handle && item ? `${account.handle}/${item.localId}` : item?.localId ?? '')}
+  {@const updated = data?.updated ?? preview?.updated ?? null}
+  {@const installedOlder = item?.origin && data && item.origin.version !== data.version ? item.origin.version : null}
+  <!-- The about text only when it says more than the tagline under the name. -->
+  {@const about = data?.about && data.about.trim() !== lede.trim() ? data.about : null}
 
   <button class="st-back" type="button" onclick={back}>
     <Icon {PM} name="chev" /><span>Back</span>
   </button>
-  <div class="st-banner st-banner-art st-detail-banner" style={art(pair)} aria-hidden="true">
-    <span class="st-banner-mark"><span class="st-thumb is-hero" style={art(pair)}></span></span>
-  </div>
   <!-- Icon, copy, then the one action at the right edge, all on one line
        like the hero card and every row. Anything the action needs to
        explain goes under the head as its own line. -->
@@ -1078,9 +1264,7 @@
     <div class="st-detail-copy">
       <div class="st-detail-title">
         <h2>{name}</h2>
-        {#if version}<span class="st-tag">{version}</span>{/if}
       </div>
-      <p class="st-byline">{byline(kind, who)}</p>
       {#if lede}<p class="st-lede">{lede}</p>{/if}
       {#if access.length}
         <!-- What it declares it uses, beside the one action that installs it. -->
@@ -1133,7 +1317,7 @@
       {#if item.update.state === 'staged-for-merge'}
         Update available; you changed the files. The new version is beside your folder for your agent to merge.
       {:else if item.update.modified}
-        You changed the files since installing {item.origin?.version}. Updating saves {item.update.version} beside your folder for your agent to merge.
+        You changed the files since installing {item.origin?.version}. Updating to {item.update.version} keeps your changes.
       {:else}
         You have {item.origin?.version}. Updating replaces the files with {item.update.version}.
       {/if}
@@ -1173,20 +1357,7 @@
     {@render failure(remote.error, () => void loadDetail(target))}
   {/if}
 
-  <dl class="st-facts">
-    <div><dt>Author</dt><dd>{data ? (ownPage ? 'You' : data.publisher) : preview ? preview.publisher : item && 'builtin' in item.maker ? 'Powermove' : item && 'you' in item.maker ? 'You' : ''}</dd></div>
-    <div><dt>Kind</dt><dd>{KIND_LABEL[kind]}</dd></div>
-    <div><dt>Updated</dt><dd>{data?.updated ?? preview?.updated ?? '—'}</dd></div>
-    <div>
-      {#if item?.origin && data && item.origin.version !== data.version}
-        <dt>Installed</dt><dd>{item.origin.version} of {data.version}</dd>
-      {:else}
-        <dt>Version</dt><dd>{version || '—'}</dd>
-      {/if}
-    </div>
-  </dl>
-
-  {#if data?.about}<p class="st-about">{data.about}</p>{/if}
+  {#if about}<p class="st-about">{about}</p>{/if}
 
   {#if item && item.group === 'yours' && !item.published}
     <section class="st-sec">
@@ -1199,7 +1370,7 @@
   {/if}
 
   {#if ownPage && data}
-    <!-- Yours on the store: how it's doing, and every version with a way
+    <!-- Yours on the store: how it is doing, then every version with a way
          to withdraw it. Withdrawing asks inline, next to the version. -->
     <section class="st-sec">
       <h3 class="st-sec-title">On the store</h3>
@@ -1237,13 +1408,7 @@
       </div>
     </section>
   {:else if data?.versions.length}
-    {@const latest = data.versions.find((v) => !v.withdrawn)}
-    {#if latest?.note}
-      <section class="st-sec">
-        <div class="st-sec-head"><h3>What’s new <span class="st-sec-sub">{latest.version}</span></h3></div>
-        <p class="st-whatsnew">{latest.note}</p>
-      </section>
-    {/if}
+    <!-- Newest first, so its top row is what's new. -->
     <section class="st-sec">
       <div class="st-sec-head">
         <h3>Version history</h3>
@@ -1287,8 +1452,20 @@
 
   <section class="st-sec">
     <h3 class="st-sec-title">Details</h3>
+    <!-- The facts live here, as Settings rows; the header is only the name
+         and what it does. -->
     <div class="st-card">
-      {#if coord}<div class="st-kv"><span>Identifier</span><b>{coord}</b></div>{/if}
+      {#if who}
+        <div class="st-kv">
+          <span>Made by</span>
+          <b>{#if devHandle}<button class="st-link st-dev-link" type="button" onclick={() => openProfile(devHandle)}>{byYou ? 'You' : devHandle}</button>{:else}{byYou ? 'You' : who.replace(/^by /, '')}{/if}</b>
+        </div>
+      {/if}
+      <div class="st-kv"><span>Kind</span><b>{KIND_LABEL[kind]}</b></div>
+      {#if version}<div class="st-kv"><span>Version</span><b>{#if installedOlder}{installedOlder} installed<span class="st-kv-aside">{version} available</span>{:else}{version}{/if}</b></div>{/if}
+      {#if updated}<div class="st-kv"><span>Updated</span><b>{updated}</b></div>{/if}
+      <!-- Before a first publish the Publish card already names it. -->
+      {#if coord && !(item && item.group === 'yours' && !item.published)}<div class="st-kv"><span>Identifier</span><b>{coord}</b></div>{/if}
       {#if storeLineage}<div class="st-kv"><span>Forked from</span><b>{storeLineage.handle}/{storeLineage.slug}@{storeLineage.version}</b></div>{/if}
       {#if contributes.length}<div class="st-kv"><span>Includes</span><b>{includesText(contributes)}</b></div>{/if}
       {#if apiVersion !== null}<div class="st-kv"><span>Compatibility</span><b>{requiresText(apiVersion)}</b></div>{/if}

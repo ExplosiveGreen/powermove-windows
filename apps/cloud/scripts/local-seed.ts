@@ -35,6 +35,8 @@ let maraToken: string;
 try {
   judeToken = await seedUser('jude@localhost', 'Jude', 'powermove');
   maraToken = await seedUser('mara@localhost', 'Mara', 'mara');
+  // Local only: jude@localhost can sign in to the admin panel (apps/admin).
+  await pool.query(`insert into admins (user_id) select id from "user" where email = 'jude@localhost' on conflict do nothing`);
 } finally {
   await pool.end();
 }

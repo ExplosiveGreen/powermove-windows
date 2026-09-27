@@ -82,8 +82,8 @@ describe('action labels', () => {
     `);
   });
 
-  it('keeps Open disabled until it does something', () => {
-    expect(detailAction({ item: item({ group: 'yours', maker: { you: true } }) }).disabled).toBe(true);
+  it('offers an enabled Open action for usable extensions', () => {
+    expect(detailAction({ item: item({ group: 'yours', maker: { you: true } }) })).toMatchObject({ label: 'Open', kind: 'open' });
   });
 });
 
@@ -117,7 +117,7 @@ describe('library', () => {
 
 describe('view models', () => {
   const listing: ListingDto = {
-    repoId: REPO, owner: { id: '22222222-2222-4222-8222-222222222222', handle: 'mara', tombstoned: false }, slug: 'glass-blur',
+    repoId: REPO, owner: { id: '22222222-2222-4222-8222-222222222222', handle: 'mara', tombstoned: false, verified: false }, slug: 'glass-blur',
     name: 'Glass blur', tagline: 'Frosted glass.', category: 'tools', iconUrl: null, visibility: 'public', permissions: [],
     latest: { id: R2, version: '1.1.0', publishedAt: new Date(2026, 8, 22, 10).toISOString(), apiVersion: 2, yankedAt: null },
     installCount: 3, forkCount: 0, licence: 'MIT',

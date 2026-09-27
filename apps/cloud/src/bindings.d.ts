@@ -8,7 +8,6 @@ interface CloudflareBindings {
   EMAIL_FROM: string;
   DEV_LOG_OTP?: string;
   OTP_SENDER?: (email: string, otp: string) => Promise<void>;
-  ADMIN_TOKEN?: string;
   TURNSTILE_ENABLED?: string;
   TURNSTILE_CLEARANCE_DAYS?: string;
   TURNSTILE_SITE_KEY?: string;

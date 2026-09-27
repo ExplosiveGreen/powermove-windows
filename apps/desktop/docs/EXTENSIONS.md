@@ -319,7 +319,7 @@ api.effects.register({
 });
 ```
 
-**Add a panel (Svelte)** — `Counter.svelte` + `api.panels.register({ id:'counter', title:'Counter', component: Counter, size: 160 })`, then `api.panels.open('counter','right')`.
+**Add a panel (Svelte)** — for manifest id `counter`, `Counter.svelte` + `api.panels.register({ id:'counter.panel', title:'Counter', component: Counter, size: 160 })`, then `api.panels.open('counter.panel','right')`.
 
 **Add a structured programmable layer**
 ```ts

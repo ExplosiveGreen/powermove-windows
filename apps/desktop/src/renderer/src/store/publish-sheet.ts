@@ -8,7 +8,7 @@ import type { StoreBridge } from '../../../shared/store-ipc';
 import type { ModalHandle, ModalOptions } from '../overlays/types';
 import type { StorePM } from './data';
 import PublishSheet from './PublishSheet.svelte';
-import { checkInSandbox } from './sandbox-check';
+import { checkInSandbox, sandboxCheckLines } from './sandbox-check';
 
 let open: { localId: string; close(): void } | null = null;
 
@@ -25,7 +25,7 @@ export function openPublishSheet(
   let component: ReturnType<typeof mount> | null = null;
   const handle = modal({
     body,
-    width: 520,
+    width: 580,
     actions: [],
     onClose: () => {
       if (component) void unmount(component);
@@ -33,12 +33,14 @@ export function openPublishSheet(
       if (open === current) open = null;
     }
   });
-  handle.el.classList.add('account-modal', 'publish-modal');
+  handle.el.classList.add('publish-modal');
   const current = { localId: plan.localId, close: () => handle.close() };
   open = current;
   component = mount(PublishSheet, {
     target: body,
-    props: { plan, bridge, check: () => checkInSandbox(PM, plan.localId), onclose: () => handle.close(), onpublished }
+    props: { plan, bridge, check: () => checkInSandbox(PM, plan.localId), onclose: () => handle.close(), onpublished,
+      onfix: async (report) => Boolean(await PM.AgentUI?.repairExtension?.({ id: plan.localId, name: plan.manifest.name, diagnostics: sandboxCheckLines(report) }))
+    }
   });
   flushSync();
 }

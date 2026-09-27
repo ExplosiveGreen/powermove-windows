@@ -140,6 +140,10 @@ export const POWERMOVE_AGENT_TOOLS: readonly PowermoveAgentToolSpec[] = [
   }
 ] as const;
 
+/** App runs may inspect and stage extensions, but never touch a composition. */
+export const POWERMOVE_APP_AGENT_TOOLS = POWERMOVE_AGENT_TOOLS.filter((tool) =>
+  ['fork_builtin_extension', 'stage_fork_rebase', 'validate_effect'].includes(tool.name));
+
 /** Read-only project inspection plus the minimum layout action required to
  * make a hidden panel observable. Editor/planning runs must never receive the
  * project- or control-mutating tools from the complete agent tool set. */

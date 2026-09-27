@@ -331,7 +331,7 @@ export function statusIsHot(item: LibraryItemDto): boolean {
 
 /* ── actions ── */
 
-export type ActionKind = 'install' | 'setup' | 'trust' | 'update' | 'publish' | 'none' | 'toggle';
+export type ActionKind = 'install' | 'setup' | 'trust' | 'update' | 'publish' | 'none' | 'toggle' | 'open';
 
 export type Action = {
   label: string;
@@ -355,7 +355,7 @@ export type Action = {
  *   here, up to date               Installed
  *   yours, changed since publishing  Publish… / Publish Update…
  *   the store page of what you forked  Forked
- *   yours or built in              Open (not yet)
+ *   yours or built in              Open in a project
  */
 export function detailAction(input: { vars?: readonly VarDecl[] | undefined; item?: LibraryItemDto | undefined; repoId?: string | undefined }): Action {
   const { item } = input;
@@ -372,7 +372,8 @@ export function detailAction(input: { vars?: readonly VarDecl[] | undefined; ite
   if (item.update && !item.removed) return { label: item.update.modified ? 'Update…' : 'Update', kind: 'update', primary: true };
   if (item.group === 'yours' && item.publish) return { ...publishAction(item), primary: true };
   if (item.group === 'store') return { label: 'Installed', kind: 'none', quiet: true };
-  return { label: 'Open', kind: 'none', disabled: true };
+  if (!item.enabled) return { label: 'Turn On', kind: 'toggle' };
+  return { label: 'Open', kind: 'open' };
 }
 
 const TRUST_ACTION: Action = { label: 'Trust…', kind: 'trust', primary: true };

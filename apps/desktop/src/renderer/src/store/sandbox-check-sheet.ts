@@ -5,7 +5,7 @@ import { flushSync, mount, unmount } from 'svelte';
 import type { ModalHandle, ModalOptions } from '../overlays/types';
 import type { StorePM } from './data';
 import SandboxCheckSheet from './SandboxCheckSheet.svelte';
-import { checkInSandbox } from './sandbox-check';
+import { checkInSandbox, sandboxCheckLines } from './sandbox-check';
 
 let open: { close(): void } | null = null;
 
@@ -17,7 +17,7 @@ export function openSandboxCheckSheet(PM: StorePM, localId: string, name: string
   let component: ReturnType<typeof mount> | null = null;
   const handle = modal({
     body,
-    width: 480,
+    width: 520,
     actions: [],
     onClose: () => {
       if (component) void unmount(component);
@@ -25,12 +25,15 @@ export function openSandboxCheckSheet(PM: StorePM, localId: string, name: string
       if (open === current) open = null;
     }
   });
-  handle.el.classList.add('account-modal', 'publish-modal');
+  handle.el.classList.add('publish-modal');
   const current = { close: () => handle.close() };
   open = current;
   component = mount(SandboxCheckSheet, {
     target: body,
-    props: { name, check: () => checkInSandbox(PM, localId), onclose: () => handle.close() }
+    props: {
+      name, check: () => checkInSandbox(PM, localId), onclose: () => handle.close(),
+      onfix: async (report) => Boolean(await PM.AgentUI?.repairExtension?.({ id: localId, name, diagnostics: sandboxCheckLines(report) }))
+    }
   });
   flushSync();
 }

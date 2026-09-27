@@ -37,8 +37,11 @@ export function inlineRuns(text: string, flags: InlineFlags = {}): Run[] {
   while (i < text.length) {
     const rest = text.slice(i);
     let m: RegExpExecArray | null;
-    if ((m = /^`([^`]+)`/.exec(rest))) {
-      flush(); runs.push({ text: m[1]!, c: true }); i += m[0].length; continue;
+    if ((m = /^\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/.exec(rest))) {
+      plain += m[1]; i += m[0].length; continue;
+    }
+    if ((m = /^(`+)([\s\S]*?[^`])\1(?!`)/.exec(rest))) {
+      flush(); runs.push({ text: m[2]!.replace(/\n/g, ' '), c: true }); i += m[0].length; continue;
     }
     if (!flags.b && (m = /^\*\*([^\s*](?:.*?[^\s*])?)\*\*/.exec(rest))) {
       flush(); runs.push(...inlineRuns(m[1]!, { ...flags, b: true })); i += m[0].length; continue;
@@ -133,7 +136,7 @@ export interface Word extends Run {
 export function wordsFromRuns(runs: Run[]): Word[] {
   const words: Word[] = [];
   runs.forEach((run, ri) => {
-    if (run.href) { words.push({ ...run, key: `${ri}` }); return; }
+    if (run.href || run.c) { words.push({ ...run, key: `${ri}` }); return; }
     run.text.split(/(\s+)/).forEach((part, wi) => {
       if (part) words.push({ ...run, text: part, key: `${ri}-${wi}` });
     });

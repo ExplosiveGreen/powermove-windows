@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Markdown from './Markdown.svelte';
   import Icon from '../Icon.svelte';
   import { openImagePreview } from './attachments';
   import { agentState, describePanelAction } from './agent-state.svelte';
@@ -28,7 +29,7 @@
 {#if panelRun}
   <div class="agent-card">
     <div class="agent-card-kicker">Reversible agent change</div>
-    <h3>{panelRun.summary}</h3>
+    <div class="result-summary"><Markdown text={panelRun.summary} /></div>
     {#each panelRun.actions as action}
       <div class="spatial-preview-control panel-action"><Icon {PM} name="panel" /><span>{describePanelAction(PM, action)}</span></div>
     {/each}
@@ -44,11 +45,11 @@
       <div class="agent-card-kicker">Rendered result</div>
       <h3>Review the actual result</h3>
     {/if}
-    {#if showReviewMessage}<p>{reviewMessage || 'The rendered change is ready.'}</p>{/if}
-    {#if run.review?.critique}<p>{run.review.critique}</p>{/if}
+    {#if showReviewMessage}<Markdown text={reviewMessage || 'The rendered change is ready.'} />{/if}
+    {#if run.review?.critique}<Markdown text={run.review.critique} />{/if}
     {#if reversible && !run.autonomous}<p>Powermove source changes from this run are one Command-Z Undo step.</p>{/if}
     {#if run.reviewError}
-      <p class="spatial-review-warning">{run.autonomous ? run.reviewError : `Visual review stopped: ${run.reviewError.slice(0, 130)}. You can still inspect and undo the rendered change.`}</p>
+      <div class="spatial-review-warning"><Markdown text={run.autonomous ? run.reviewError : `Visual review stopped: ${run.reviewError.slice(0, 130)}. You can still inspect and undo the rendered change.`} /></div>
     {/if}
     {#if run.frames?.images?.length}
       {#if run.autonomous}
@@ -69,6 +70,7 @@
 {/if}
 
 <style>
+  .result-summary { font-weight: var(--fw-semibold); }
   .agent-run-details { flex: none; min-width: 0; display: flex; flex-direction: column; gap: 8px; color: var(--tx); font-size: var(--fs-md); line-height: 1.6; overflow-wrap: anywhere; }
   .agent-run-details:empty { display: none; }
   .agent-run-details p { margin: 0; white-space: pre-wrap; }

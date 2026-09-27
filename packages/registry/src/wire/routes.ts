@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Category, Handle, Sha1, Slug, Uuid, Version, Visibility } from './common';
+import { Category, Handle, IsoDate, Sha1, Slug, Uuid, Version, Visibility } from './common';
 import { CompareDto, ExtensionDetailDto, InstallDto, ListingDto, MeDto, PublisherDto, ReleaseDto, SessionDto, TreeDto } from './dto';
 
 export const CLIENT_HEADER = 'X-Powermove-Client';
@@ -24,6 +24,10 @@ export const Auth = {
   DesktopStart: { Req: Req(Empty, z.object({ provider: z.enum(['google']), state: z.string().regex(/^[a-fA-F0-9]{16,64}$/), challenge: z.string().regex(/^[A-Za-z0-9_-]+$/) })), Res: z.string() },
   DesktopDone: { Req: Req(Empty, z.object({ state: z.string() })), Res: z.string() },
   DesktopExchange: { Req: Req(Empty, Empty, z.object({ state: z.string(), token: z.string(), verifier: z.string() })), Res: SessionDto },
+  /** The admin panel's Google sign-in: same PKCE hand-off, token returned to ADMIN_ORIGIN/auth/callback. */
+  WebStart: { Req: Req(Empty, z.object({ provider: z.enum(['google']), state: z.string().regex(/^[a-fA-F0-9]{16,64}$/), challenge: z.string().regex(/^[A-Za-z0-9_-]+$/) })), Res: z.string() },
+  WebDone: { Req: Req(Empty, z.object({ state: z.string() })), Res: z.string() },
+  WebExchange: { Req: Req(Empty, Empty, z.object({ state: z.string(), token: z.string(), verifier: z.string() })), Res: SessionDto },
   EmailSend: { Req: Req(Empty, Empty, z.object({ email: z.email() })), Res: Ok },
   EmailVerify: { Req: Req(Empty, Empty, z.object({ email: z.email(), otp: z.string() })), Res: SessionDto },
   SignOut: { Req: Req(), Res: Ok }
@@ -66,8 +70,39 @@ export const Publish = {
   PatchRepo: { Req: Req(Coordinate, Empty, z.object({ visibility: Visibility.optional(), listing: listingInput.partial().optional(), iconPng })), Res: ListingDto },
   DeleteRepo: { Req: Req(Coordinate), Res: NoContent }
 } as const;
+const AdminUser = z.object({ id: z.string().min(1), email: z.email(), name: z.string().nullable() });
+const AdminPublisher = z.object({ publisher: PublisherDto, user: AdminUser.nullable(), claimedAt: IsoDate, verifiedAt: IsoDate.nullable(), tombstonedAt: IsoDate.nullable(), extensionCount: z.number().int().nonnegative() });
+const AdminExtension = z.object({ repoId: Uuid, owner: PublisherDto, slug: Slug, name: z.string(), tagline: z.string(), visibility: Visibility, moderation: z.enum(['none', 'hidden', 'removed']), tombstoned: z.boolean(), latestVersion: Version.nullable(), installCount: z.number().int().nonnegative(), updatedAt: IsoDate });
+const AdminGrant = z.object({ user: AdminUser, grantedAt: IsoDate, grantedBy: AdminUser.nullable() });
+const LogTarget = z.object({ kind: z.enum(['repo', 'publisher', 'user']), id: z.string(), label: z.string().nullable() });
+const LogEntry = z.object({ id: Uuid, action: z.string(), reason: z.string(), createdAt: IsoDate, actor: z.object({ id: z.string(), label: z.string().nullable() }), target: LogTarget.nullable() });
+const PublisherId = z.object({ publisherId: Uuid });
+const search = z.object({ q: z.string().max(200).optional() });
+export type AdminUser = z.infer<typeof AdminUser>;
+export type AdminPublisher = z.infer<typeof AdminPublisher>;
+export type AdminExtension = z.infer<typeof AdminExtension>;
+export type AdminGrant = z.infer<typeof AdminGrant>;
+export type AdminLogEntry = z.infer<typeof LogEntry>;
+
+/** Every route needs a session whose user has an `admins` row: 401 signed out, 403 otherwise. */
 export const Admin = {
+  /** The signed-in admin; 403 tells a signed-in user they are not one. */
+  Session: { Req: Req(), Res: z.object({ user: AdminUser }) },
   /** Seeds a reserved handle (e.g. `powermove`) for an existing user; bypasses the reserved list. */
   SeedPublisher: { Req: Req(Empty, Empty, z.object({ handle: Handle, userId: z.string().min(1) })), Res: z.object({ publisher: PublisherDto }) },
-  Moderate: { Req: Req(z.object({ repoId: Uuid }), Empty, z.object({ action: z.enum(['hide', 'unhide', 'remove']), reason: z.string().max(1000) })), Res: ListingDto }
+  /** Handle or account email, substring match; newest claims first. */
+  Publishers: { Req: Req(Empty, search), Res: z.object({ items: z.array(AdminPublisher) }) },
+  Publisher: { Req: Req(PublisherId), Res: AdminPublisher.extend({ extensions: z.array(AdminExtension) }) },
+  /** Sets or clears `verified_at`; the blue check on every PublisherDto. */
+  SetVerified: { Req: Req(PublisherId, Empty, z.object({ verified: z.boolean() })), Res: AdminPublisher },
+  /** Name, slug or handle, substring match, in every moderation and tombstone state. */
+  Extensions: { Req: Req(Empty, search), Res: z.object({ items: z.array(AdminExtension) }) },
+  Extension: { Req: Req(z.object({ repoId: Uuid })), Res: AdminExtension },
+  Moderate: { Req: Req(z.object({ repoId: Uuid }), Empty, z.object({ action: z.enum(['hide', 'unhide', 'remove']), reason: z.string().max(1000) })), Res: ListingDto },
+  Admins: { Req: Req(), Res: z.object({ items: z.array(AdminGrant) }) },
+  /** Grants admin to an existing account by email. Idempotent. */
+  Grant: { Req: Req(Empty, Empty, z.object({ email: z.email() })), Res: AdminGrant },
+  /** Refused for the last admin. */
+  Revoke: { Req: Req(z.object({ userId: z.string().min(1) })), Res: NoContent },
+  Log: { Req: Req(Empty, z.object({ limit: z.coerce.number().int().min(1).max(200).optional() })), Res: z.object({ items: z.array(LogEntry) }) }
 } as const;

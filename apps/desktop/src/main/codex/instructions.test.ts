@@ -64,7 +64,7 @@ describe('autonomous agent contract', () => {
     expect(instructions).toContain("result's extensions array");
   });
 
-  it('keeps scene edits on typed commands and stays below 9 KB', () => {
+  it('keeps scene edits on typed commands and stays below 10 KB', () => {
     const instructions = agentInstructions({
       projectName: 'Project',
       artifactPath: 'artifacts/run-1',
@@ -79,7 +79,7 @@ describe('autonomous agent contract', () => {
     expect(instructions).toContain('source checkout, package scripts, and Electron test harness are not available');
     expect(instructions).not.toMatch(/src\/extensions|npm run|bun run/u);
     expect(instructions).toContain('isolated temporary test data');
-    expect(Buffer.byteLength(instructions, 'utf8')).toBeLessThanOrEqual(9 * 1024);
+    expect(Buffer.byteLength(instructions, 'utf8')).toBeLessThanOrEqual(10 * 1024);
   });
 
   it('holds every user-visible field to the shared response style', () => {

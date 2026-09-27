@@ -60,6 +60,15 @@ it('validates optional thread ids without accepting paths or unbounded input', (
   }
 });
 
+it('requires an isolated empty snapshot for app extension runs', () => {
+  const app = request({ context: 'app', projectId: 'powermove-global', projectName: 'Powermove app', projectJSON: '{}' });
+  expect(isCodexRunRequest(app)).toBe(true);
+  expect(isCodexRunRequest({ ...app, projectId: 'previously-open-project' })).toBe(false);
+  expect(isCodexRunRequest({ ...app, projectJSON: '{"layers":[]}' })).toBe(false);
+  expect(isCodexRunRequest({ ...app, access: 'computer' })).toBe(false);
+  expect(isCodexRunRequest({ ...app, mode: 'editor' })).toBe(false);
+});
+
 it('accepts every persistable project snapshot and rejects oversized UTF-8 input', () => {
   const projectJSON = JSON.stringify({ data: 'x'.repeat(LIMITS.storeValueBytes - 11) });
   expect(Buffer.byteLength(projectJSON)).toBe(LIMITS.storeValueBytes);

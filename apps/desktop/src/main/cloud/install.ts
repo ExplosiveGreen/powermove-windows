@@ -15,8 +15,13 @@
  *
  *   .staging/<id>          the tree being installed or swapped in
  *   .trash/<id>-<ts>       the old folder during an update's swap
- *   .updates/<id>          a newer release beside a folder the user changed
- *                          (Store 1.0 has no merge; the agent merges it)
+ *   .updates/<id>          a newer release beside a folder the user changed,
+ *                          when the pull below can't merge it (the agent does)
+ *
+ * Updates are a git pull (pull.ts): the installed release, the folder and the
+ * new release are compared per file, only what the release changed is
+ * fetched, and changes made on this Mac are kept. Only a real conflict falls
+ * back to leaving the new release beside the folder.
  */
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
@@ -24,6 +29,7 @@ import path from 'node:path';
 
 import { REGISTRY_LIMITS } from '@powermove/registry/limits';
 import { snapshotDir } from '@powermove/registry/node';
+import { hashObject } from '@powermove/registry/git';
 import { isExcludedPath, snapshot, type SnapshotInput } from '@powermove/registry/snapshot';
 import { readTarGz } from '@powermove/registry/tar';
 import { ApiError, type MeDto } from '@powermove/registry/wire';
@@ -31,6 +37,7 @@ import { ApiError, type MeDto } from '@powermove/registry/wire';
 import { EXTENSION_ID, parseManifest, type ExtensionManifest, type ExtensionRecord, type ExtensionsChangedEvent } from '../../shared/extensions';
 import type { StoreInstallResult, StoreLocalErrorCode, StoreUpdateResult, StoreUpdates, StoreUpdateState } from '../../shared/store-ipc';
 import type { ProvenanceOrigin, ProvenanceRecord, ProvenanceStore } from './provenance';
+import { mergeText, planPull, treeShaOf } from './pull';
 import type { ReleaseByIdResult, StoreClient, VersionsItem } from './store-client';
 import { RESERVED_STORE_IDS } from './reserved-slugs';
 import { STORE_MARKER } from './trust';
@@ -90,6 +97,9 @@ export interface StoreInstaller {
 export const UPDATE_CHECK_DELAY_MS = 5_000;
 export const UPDATE_CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
 const VERSIONS_BATCH = 200;
+/** Past this many files to fetch, one archive is cheaper than a pull. */
+export const PULL_FETCH_MAX = 32;
+const PULL_PARALLEL = 6;
 
 interface VerifiedRelease {
   release: ReleaseByIdResult;
@@ -284,9 +294,20 @@ export function createStoreInstaller(options: StoreInstallerOptions): StoreInsta
     return (await localTree(localId)) !== origin.treeSha;
   }
 
+  /* Install means the newest release. The renderer names the release it
+     showed, which can be stale (the Store stayed open while a version
+     shipped) or withdrawn since; ask the registry for the repo's latest at
+     the moment of installing, and fall back to the named release only when
+     the registry has no latest to offer. */
+  async function currentRelease(request: { repoId: string; releaseId: string }): Promise<string> {
+    const [item] = (await store.versions([{ repoId: request.repoId, releaseId: request.releaseId }])).items;
+    return item && item.repoId === request.repoId && item.state === 'ok' && item.latest ? item.latest.releaseId : request.releaseId;
+  }
+
   function installRelease(request: { repoId: string; releaseId: string }): Promise<StoreInstallResult> {
     return serial(async () => {
-      const verified = await fetchVerified(request.repoId, request.releaseId);
+      const releaseId = await currentRelease(request);
+      const verified = await fetchVerified(request.repoId, releaseId);
       const { manifest } = verified;
       const id = manifest.id;
       if (RESERVED_STORE_IDS.has(id) || builtinIds().has(id)) {
@@ -303,7 +324,7 @@ export function createStoreInstaller(options: StoreInstallerOptions): StoreInsta
       }
 
       const staging = await stage(id, verified.files);
-      await fs.writeFile(path.join(staging, STORE_MARKER), JSON.stringify({ repoId: request.repoId, releaseId: request.releaseId }));
+      await fs.writeFile(path.join(staging, STORE_MARKER), JSON.stringify({ repoId: request.repoId, releaseId }));
       /* Provenance lands before the folder does: a watcher refresh between the
          two must already see someone else's code, never a "local" folder. */
       const origin = originOf(verified);
@@ -341,13 +362,122 @@ export function createStoreInstaller(options: StoreInstallerOptions): StoreInsta
     });
   }
 
-  async function latestFor(record: ProvenanceRecord & { origin: ProvenanceOrigin }): Promise<{ releaseId: string; version: string }> {
+  async function latestFor(record: ProvenanceRecord & { origin: ProvenanceOrigin }): Promise<{ releaseId: string; version: string; ownerPublisherId: string | null }> {
     const [item] = (await store.versions([{ repoId: record.origin.repoId, releaseId: record.origin.releaseId }])).items;
     if (item) publishUpdates({ ...updates, [record.localId]: stateFor(item) });
     if (!item || item.state !== 'ok' || !item.latest || item.latest.releaseId === record.origin.releaseId) {
       throw new StoreLocalError('no_update', 'There’s no newer version to update to.');
     }
-    return item.latest;
+    return { ...item.latest, ownerPublisherId: item.ownerPublisherId };
+  }
+
+  type Pulled =
+    | { kind: 'ready'; release: ReleaseByIdResult; files: SnapshotInput[]; manifest: ExtensionManifest; keptLocal: boolean }
+    | { kind: 'conflict' };
+
+  /**
+   * The update as a git pull: plan per file from the three trees, fetch only
+   * the release's blobs this Mac doesn't already hold, merge files both sides
+   * changed, and prove every byte. Resolves null when a pull isn't the right
+   * tool (the base tree is gone, the folder can't be read, or so much changed
+   * that one archive is cheaper); the caller then takes the whole release.
+   */
+  async function pullUpdate(localId: string, origin: ProvenanceOrigin, releaseId: string): Promise<Pulled | null> {
+    const release = await store.release(releaseId);
+    if (release.id !== releaseId || release.repoId !== origin.repoId) throw integrity();
+    if (release.manifest.id !== localId) throw integrity('The new version changes the extension’s id, so it can’t replace this one.');
+    const [baseTree, theirsTree, local] = await Promise.all([
+      store.tree(origin.releaseId).catch(() => null),
+      store.tree(release.id),
+      snapshotDir(folderFor(localId)).catch(() => null)
+    ]);
+    // Listings are trusted only once they hash to the trees the releases name.
+    if (theirsTree.treeSha !== release.treeSha || (await treeShaOf(theirsTree.files)) !== release.treeSha) throw integrity();
+    if (!baseTree || !local || baseTree.treeSha !== origin.treeSha || (await treeShaOf(baseTree.files)) !== origin.treeSha) return null;
+
+    const plan = planPull(baseTree.files, local.files, theirsTree.files);
+    if (plan.conflicts.length) return { kind: 'conflict' };
+    const blobs = new Map<string, Uint8Array>();
+    for (const object of local.objects) if (object.type === 'blob') blobs.set(object.sha, object.body);
+    const wantTheirs = new Map<string, string>();
+    const wantBase = new Map<string, string>();
+    for (const entry of plan.take) if (!blobs.has(entry.sha)) wantTheirs.set(entry.sha, entry.path);
+    for (const entry of plan.merge) {
+      if (!blobs.has(entry.theirs)) wantTheirs.set(entry.theirs, entry.path);
+      if (entry.base && !blobs.has(entry.base)) wantBase.set(entry.base, entry.path);
+    }
+    if (wantTheirs.size + wantBase.size > PULL_FETCH_MAX) return null;
+
+    const [baseHandle, baseSlug] = origin.coordinate.split('/');
+    const jobs: Array<() => Promise<void>> = [];
+    const fetchBlob = (sha: string, handle: string, slug: string, version: string, file: string) => async (): Promise<void> => {
+      const bytes = await store.fileBytes(handle, slug, version, file);
+      if ((await hashObject('blob', bytes)) !== sha) throw integrity();
+      blobs.set(sha, bytes);
+    };
+    for (const [sha, file] of wantTheirs) jobs.push(fetchBlob(sha, release.handle, release.slug, release.version, file));
+    if (wantBase.size && (!baseHandle || !baseSlug)) return null;
+    for (const [sha, file] of wantBase) jobs.push(fetchBlob(sha, baseHandle!, baseSlug!, origin.version, file));
+    for (let start = 0; start < jobs.length; start += PULL_PARALLEL) await Promise.all(jobs.slice(start, start + PULL_PARALLEL).map((job) => job()));
+
+    const ours = new Map(local.files.map((file) => [file.path, file.sha]));
+    const files: SnapshotInput[] = [];
+    const blob = (sha: string | undefined): Uint8Array => {
+      const bytes = sha ? blobs.get(sha) : undefined;
+      if (!bytes) throw integrity();
+      return bytes;
+    };
+    for (const file of plan.keep) files.push({ path: file, bytes: blob(ours.get(file)) });
+    for (const entry of plan.take) files.push({ path: entry.path, bytes: blob(entry.sha) });
+    for (const entry of plan.merge) {
+      const merged = mergeText(entry.base ? blob(entry.base) : null, blob(entry.ours), blob(entry.theirs));
+      if (!merged) return { kind: 'conflict' };
+      files.push({ path: entry.path, bytes: merged });
+    }
+
+    const keptLocal = local.treeSha !== origin.treeSha;
+    let result;
+    try {
+      result = await snapshot(files, REGISTRY_LIMITS);
+    } catch {
+      return { kind: 'conflict' };
+    }
+    // Nothing changed here: the pulled folder must be the release, byte for byte.
+    if (!keptLocal && result.treeSha !== release.treeSha) throw integrity();
+    const manifestFile = files.find((file) => file.path === 'manifest.json');
+    let parsed: ReturnType<typeof parseManifest> | null = null;
+    try {
+      parsed = manifestFile ? parseManifest(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(manifestFile.bytes))) : null;
+    } catch {
+      parsed = null;
+    }
+    if (!parsed?.ok || parsed.manifest.id !== localId) {
+      if (!keptLocal) throw integrity('This release’s manifest is invalid, so it wasn’t installed.');
+      return { kind: 'conflict' };
+    }
+    return { kind: 'ready', release, files, manifest: parsed.manifest, keptLocal };
+  }
+
+  /** The new release beside the folder, for the agent to merge; the folder is untouched. */
+  async function stageForMerge(localId: string, verified: VerifiedRelease): Promise<StoreUpdateResult> {
+    const version = verified.release.version;
+    const staging = await stage(`${localId}-update`, verified.files);
+    const target = path.join(updatesRoot, localId);
+    try {
+      await fs.mkdir(updatesRoot, { recursive: true });
+      await fs.rm(target, { recursive: true, force: true });
+      await rename(staging, target);
+    } catch {
+      await fs.rm(staging, { recursive: true, force: true }).catch(() => undefined);
+      throw new StoreLocalError('local', 'Powermove couldn’t save the new version beside your folder. Try again.');
+    }
+    await provenance.update(localId, (current) => current && ({
+      ...current,
+      pendingUpdate: { releaseId: verified.release.id, version, path: target }
+    }));
+    registry.emitChanged({ ids: [localId], reason: 'health' });
+    publishUpdates({ ...updates });
+    return { kind: 'staged-for-merge', localId, version, path: target };
   }
 
   function updateRelease(localId: string): Promise<StoreUpdateResult> {
@@ -359,34 +489,37 @@ export function createStoreInstaller(options: StoreInstallerOptions): StoreInsta
         throw new StoreLocalError('not_installed', 'That extension isn’t installed from the store on this Mac.');
       }
       const latest = await latestFor({ ...record, origin });
-      const verified = await fetchVerified(origin.repoId, latest.releaseId);
-      if (verified.manifest.id !== localId) {
-        throw integrity('The new version changes the extension’s id, so it can’t replace this one.');
-      }
-      const modified = await isModified(localId);
-      const version = verified.release.version;
+      const pulled = await pullUpdate(localId, origin, latest.releaseId).catch((error: unknown) => {
+        if (error instanceof StoreLocalError) throw error;
+        log(`pull for ${localId} failed; taking the whole release`, error);
+        return null;
+      });
 
-      if (modified) {
-        /* Store 1.0: no merge. The new tree goes beside the folder for the
-           agent; the folder itself is not touched. */
-        const staging = await stage(`${localId}-update`, verified.files);
-        const target = path.join(updatesRoot, localId);
-        try {
-          await fs.mkdir(updatesRoot, { recursive: true });
-          await fs.rm(target, { recursive: true, force: true });
-          await rename(staging, target);
-        } catch {
-          await fs.rm(staging, { recursive: true, force: true }).catch(() => undefined);
-          throw new StoreLocalError('local', 'Powermove couldn’t save the new version beside your folder. Try again.');
+      if (pulled?.kind === 'conflict') {
+        /* Both sides changed the same lines: the new release goes beside the
+           folder for the agent; the folder itself is not touched. */
+        const verified = await fetchVerified(origin.repoId, latest.releaseId);
+        if (verified.manifest.id !== localId) {
+          throw integrity('The new version changes the extension’s id, so it can’t replace this one.');
         }
-        await provenance.update(localId, (current) => current && ({
-          ...current,
-          pendingUpdate: { releaseId: verified.release.id, version, path: target }
-        }));
-        registry.emitChanged({ ids: [localId], reason: 'health' });
-        publishUpdates({ ...updates });
-        return { kind: 'staged-for-merge', localId, version, path: target };
+        return stageForMerge(localId, verified);
       }
+
+      let incoming: { release: ReleaseByIdResult; files: SnapshotInput[]; manifest: ExtensionManifest; ownerPublisherId: string; keptLocal: boolean };
+      if (pulled) {
+        if (!latest.ownerPublisherId) throw new ApiError({ error: 'not_found' });
+        incoming = { ...pulled, ownerPublisherId: latest.ownerPublisherId };
+      } else {
+        const verified = await fetchVerified(origin.repoId, latest.releaseId);
+        if (verified.manifest.id !== localId) {
+          throw integrity('The new version changes the extension’s id, so it can’t replace this one.');
+        }
+        // Without a pull there's no merge: a folder changed here keeps today's path.
+        if (await isModified(localId)) return stageForMerge(localId, verified);
+        incoming = { ...verified, keptLocal: false };
+      }
+      const verified = incoming;
+      const version = verified.release.version;
 
       const staging = await stage(localId, verified.files);
       await fs.writeFile(path.join(staging, STORE_MARKER), JSON.stringify({ repoId: origin.repoId, releaseId: verified.release.id }));
@@ -424,7 +557,7 @@ export function createStoreInstaller(options: StoreInstallerOptions): StoreInsta
       const known = next[localId];
       if (known) next[localId] = { ...known, currentYanked: false };
       publishUpdates(next);
-      return { kind: 'updated', localId, version };
+      return verified.keptLocal ? { kind: 'merged', localId, version } : { kind: 'updated', localId, version };
     });
   }
 

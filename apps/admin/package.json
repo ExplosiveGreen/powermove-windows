@@ -1,0 +1,31 @@
+{
+  "name": "@powermove/admin",
+  "license": "AGPL-3.0-or-later",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Powermove admin panel (SvelteKit on Cloudflare Workers) at admin.trypowermove.com.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite build && wrangler dev --env local --port 5174",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "typecheck": "bun run check",
+    "deploy": "vite build && wrangler deploy"
+  },
+  "dependencies": {
+    "@powermove/registry": "workspace:*",
+    "@powermove/tokens": "workspace:*",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-cloudflare": "7.2.9",
+    "@sveltejs/kit": "2.70.3",
+    "@sveltejs/vite-plugin-svelte": "6.2.4",
+    "svelte": "5.56.10",
+    "svelte-check": "4.7.6",
+    "typescript": "5.9.3",
+    "vite": "7.3.6",
+    "wrangler": "4.136.1"
+  }
+}

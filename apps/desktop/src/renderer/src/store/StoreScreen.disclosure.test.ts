@@ -70,6 +70,9 @@ it('renders Trusted and offers Revoke Trust for a trusted Store install', async 
 });
 
 
+const madeBy = (root: HTMLElement): string | undefined =>
+  [...root.querySelectorAll('.st-kv')].find((row) => row.querySelector('span')?.textContent === 'Made by')?.querySelector('b')?.textContent ?? undefined;
+
 it('removes owner controls immediately on account switch despite local publication metadata', async () => {
   vi.stubGlobal('matchMedia', () => ({ matches: true, addListener() {}, removeListener() {} }));
   HTMLElement.prototype.scrollTo = vi.fn();
@@ -112,9 +115,12 @@ it('removes owner controls immediately on account switch despite local publicati
     await vi.waitFor(() => expect(target.querySelector('[aria-label="Withdraw 1.0.0…"]')).not.toBeNull());
     expect(target.textContent).toContain('runs in a sandbox');
     expect(target.textContent).not.toContain('same access as the app');
+    expect(madeBy(target)).toBe('You');
+    expect(target.textContent).toContain('On the store');
     flushSync(() => notify({ ...owner, name: '@jude', handle: 'jude' }, null));
     expect(target.querySelector('[aria-label="Withdraw 1.0.0…"]')).toBeNull();
-    expect(target.querySelector('.st-facts dd')?.textContent).toBe('mara');
+    expect(madeBy(target)).toBe('mara');
+    expect(target.textContent).not.toContain('On the store');
     flushSync(() => notify(null, null));
     expect(target.querySelector('[aria-label="Withdraw 1.0.0…"]')).toBeNull();
   } finally { await unmount(screen); target.remove(); }
