@@ -2,6 +2,7 @@
   import { tick, untrack } from 'svelte';
   import { fade, fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
+  import Scritto from '@scritto/svelte';
   import type { CompareDto, CompareStatus, ListingDto, TreeFileDto } from '@powermove/registry/wire';
   import Icon from '../panels/Icon.svelte';
   import { mountSquircles, SQUIRCLE_SELECTOR } from '../settings/squircle';
@@ -88,6 +89,8 @@
 
   const query = $derived(searchText.trim());
   const pageKind = $derived(page.startsWith('kind:') ? kindOf(page.slice(5)) : null);
+  /* The Store's title doubles as Back while a kind page is up (and no search covers it). */
+  const titleBack = $derived(!!pageKind && !query);
   const viewKey = $derived(detail ? `detail:${detail.coord ? `${detail.coord.handle}/${detail.coord.slug}` : detail.localId}` : query ? 'search' : page);
   const slide = $derived(reduced() ? { duration: 0 }
     : direction === 0 ? { y: RISE, duration: PAGE_MS, easing: cubicOut }
@@ -767,9 +770,24 @@
     <div class="st-scroll" bind:this={scrollEl}>
       {#if !detail}
         <!-- Title, then one toolbar: where you are on the left; search on the
-             right, and Publish beside it in the Library. -->
+             right, and Publish beside it in the Library. On a kind page the
+             title is the way back: "Store" rolls into "Discover" (Scritto)
+             as a chevron grows in beside it. -->
         <header class="st-head">
-          <h1 class="st-title">Store</h1>
+          <h1 class="st-title" class:is-back={titleBack}>
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <span
+              class="st-title-inner"
+              role={titleBack ? 'button' : undefined}
+              tabindex={titleBack ? 0 : undefined}
+              aria-label={titleBack ? 'Back to Discover' : undefined}
+              onclick={() => { if (titleBack) leaveKind(); }}
+              onkeydown={(event) => { if (titleBack && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); leaveKind(); } }}
+            >
+              <span class="st-title-chev" aria-hidden="true"><Icon {PM} name="chev" /></span>
+              <Scritto value={titleBack ? 'Discover' : 'Store'} />
+            </span>
+          </h1>
           <div class="st-toolbar">
             <div class="segmented" role="tablist" aria-label="Store pages">
               <button type="button" role="tab" class:on={page !== 'library'} aria-selected={page !== 'library'} onclick={() => show('browse')}>Discover</button>
@@ -865,9 +883,6 @@
             {/if}
 
           {:else if pageKind}
-            <button class="st-back" type="button" onclick={leaveKind}>
-              <Icon {PM} name="chev" /><span>Discover</span>
-            </button>
             {@render head(KIND_PLURAL[pageKind], shelf.status === 'ready' && shelf.value.items.length ? (shelf.value.nextCursor ? `${shelf.value.items.length}+` : shelf.value.items.length) : null)}
             {#if shelf.status === 'loading'}
               {@render skeleton(6)}
