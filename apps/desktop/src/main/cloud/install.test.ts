@@ -147,9 +147,18 @@ describe('store installer', () => {
   it('refuses reserved host and built-in ids before writing a folder', async () => {
     const releaseId = '77777777-7777-4777-8777-777777777777';
     const reserved = await build(releaseId, '1.0.0', tree('1.0.0', 'project'));
-    const { userDir, installer } = await setup({ extra: [reserved] });
+    const { userDir, installer, setHead } = await setup({ extra: [reserved] });
+    setHead(reserved);
     await expect(installer.installRelease({ repoId: REPO, releaseId })).rejects.toMatchObject({ body: { error: 'id_collision' } });
     expect(await exists(path.join(userDir, 'project'))).toBe(false);
+  });
+  it('installs the latest release even when the Store showed an older one', async () => {
+    /* The Store stayed open while 1.1.0 shipped: its button still names 1.0.0. */
+    const { userDir, installer, provenance, v2, setHead } = await setup();
+    setHead(v2);
+    await installer.installRelease({ repoId: REPO, releaseId: R1 });
+    expect(await readFolder(path.join(userDir, 'glass-blur'))).toEqual(installed(v2.files, R2));
+    expect((await provenance.get('glass-blur'))?.origin).toMatchObject({ releaseId: R2, version: '1.1.0' });
   });
   it('installs a release byte for byte and records where it came from', async () => {
     const { userDir, installer, provenance, client, v1 } = await setup();

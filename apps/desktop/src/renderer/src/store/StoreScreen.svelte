@@ -176,6 +176,13 @@
     }
   }
 
+  /* A publish or withdrawal changes what Discover lists: refetch it quietly,
+     and drop the kind shelves so they load fresh when next opened. */
+  function refreshDiscover(): void {
+    shelfCache.clear();
+    void loadBrowse();
+  }
+
   async function loadBrowse(): Promise<void> {
     const hadBrowse = browse.status === 'ready';
     if (!hadBrowse) browse = { status: 'loading' };
@@ -691,6 +698,7 @@
     }
     openPublishSheet(PM, bridge, result.value, (published) => {
       void loadLibrary();
+      refreshDiscover();
       // The page you published from now has a store page of its own.
       const current = detail;
       const coord = splitCoordinate(published.coordinate);
@@ -714,6 +722,7 @@
       return;
     }
     toast(`Withdrew ${version.version}.`);
+    refreshDiscover();
     await loadLibrary();
     if (detail) void loadDetail(detail);
   }

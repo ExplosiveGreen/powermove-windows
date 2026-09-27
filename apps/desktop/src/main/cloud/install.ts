@@ -284,9 +284,20 @@ export function createStoreInstaller(options: StoreInstallerOptions): StoreInsta
     return (await localTree(localId)) !== origin.treeSha;
   }
 
+  /* Install means the newest release. The renderer names the release it
+     showed, which can be stale (the Store stayed open while a version
+     shipped) or withdrawn since; ask the registry for the repo's latest at
+     the moment of installing, and fall back to the named release only when
+     the registry has no latest to offer. */
+  async function currentRelease(request: { repoId: string; releaseId: string }): Promise<string> {
+    const [item] = (await store.versions([{ repoId: request.repoId, releaseId: request.releaseId }])).items;
+    return item && item.repoId === request.repoId && item.state === 'ok' && item.latest ? item.latest.releaseId : request.releaseId;
+  }
+
   function installRelease(request: { repoId: string; releaseId: string }): Promise<StoreInstallResult> {
     return serial(async () => {
-      const verified = await fetchVerified(request.repoId, request.releaseId);
+      const releaseId = await currentRelease(request);
+      const verified = await fetchVerified(request.repoId, releaseId);
       const { manifest } = verified;
       const id = manifest.id;
       if (RESERVED_STORE_IDS.has(id) || builtinIds().has(id)) {
@@ -303,7 +314,7 @@ export function createStoreInstaller(options: StoreInstallerOptions): StoreInsta
       }
 
       const staging = await stage(id, verified.files);
-      await fs.writeFile(path.join(staging, STORE_MARKER), JSON.stringify({ repoId: request.repoId, releaseId: request.releaseId }));
+      await fs.writeFile(path.join(staging, STORE_MARKER), JSON.stringify({ repoId: request.repoId, releaseId }));
       /* Provenance lands before the folder does: a watcher refresh between the
          two must already see someone else's code, never a "local" folder. */
       const origin = originOf(verified);
