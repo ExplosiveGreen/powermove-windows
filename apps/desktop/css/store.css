@@ -269,7 +269,8 @@ button.st-plus:hover{background:var(--bg-row-hi);color:var(--tx)}
 .st-verified-seal{fill:var(--verified)}
 .st-verified-tick{fill:none;stroke:#fff;stroke-width:2.1;stroke-linecap:round;stroke-linejoin:round}
 .st-kv-dev{display:inline-flex;align-items:center}
-.st-dev-head .st-verified{margin-left:-8px}
+/* Center against the visible letterforms, slightly below the line-box center. */
+.st-dev-head .st-verified{margin-left:-8px;transform:translateY(1px)}
 
 /* ── developer ── */
 /* Their avatar (the account's flat ink, never a hue) and handle, on the
