@@ -19,13 +19,13 @@ test('admin routes: signed out 401, non-admin 403, admin 200; the old token head
     const admin = await seedAdmin(data, env);
     const owner = await publisher(data, env, 'alice');
     const token = { 'X-Admin-Token': 'legacy-token' };
-    const reads = ['/v1/admin/session', '/v1/admin/publishers', `/v1/admin/publishers/${owner.publisher.id}`, '/v1/admin/extensions', '/v1/admin/admins', '/v1/admin/log'];
+    const reads = ['/v1/admin/session', '/v1/admin/publishers', `/v1/admin/publishers/${owner.publisher.id}`, '/v1/admin/extensions', `/v1/admin/extensions/${crypto.randomUUID()}`, '/v1/admin/admins', '/v1/admin/log'];
     for (const path of reads) {
       expect((await app.request(path, {}, env)).status).toBe(401);
       expect((await app.request(path, { headers: token }, env)).status).toBe(401);
       expect((await app.request(path, { headers: { ...someone.headers, ...token } }, env)).status).toBe(403);
       const ok = await app.request(path, { headers: admin.headers }, env);
-      expect(ok.status).toBe(200);
+      expect(ok.status).toBe(path.startsWith('/v1/admin/extensions/') ? 404 : 200);
       expect(ok.headers.get('Cache-Control')).toBe('no-store');
     }
     const writes: Array<[string, string, unknown]> = [
@@ -115,6 +115,7 @@ test('search, moderation by an admin, and the log actor is the admin user id', (
     expect((await moderate('remove')).status).toBe(200);
     expect((await moderate('unhide')).status).toBe(400);
     expect(Admin.Extensions.Res.parse(await get('/v1/admin/extensions')).items[0]!.moderation).toBe('removed');
+    expect(Admin.Extension.Res.parse(await get(`/v1/admin/extensions/${repoId}`))).toMatchObject({ repoId, slug: 'demo', moderation: 'removed' });
 
     const log = await data.db.select().from(moderationLog).where(eq(moderationLog.repoId, repoId)).orderBy(moderationLog.createdAt);
     expect(log.map((row) => [row.action, row.actor])).toEqual([['hide', admin.id], ['unhide', admin.id], ['remove', admin.id]]);

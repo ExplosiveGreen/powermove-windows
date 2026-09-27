@@ -97,6 +97,7 @@ export const Admin = {
   SetVerified: { Req: Req(PublisherId, Empty, z.object({ verified: z.boolean() })), Res: AdminPublisher },
   /** Name, slug or handle, substring match, in every moderation and tombstone state. */
   Extensions: { Req: Req(Empty, search), Res: z.object({ items: z.array(AdminExtension) }) },
+  Extension: { Req: Req(z.object({ repoId: Uuid })), Res: AdminExtension },
   Moderate: { Req: Req(z.object({ repoId: Uuid }), Empty, z.object({ action: z.enum(['hide', 'unhide', 'remove']), reason: z.string().max(1000) })), Res: ListingDto },
   Admins: { Req: Req(), Res: z.object({ items: z.array(AdminGrant) }) },
   /** Grants admin to an existing account by email. Idempotent. */

@@ -129,6 +129,12 @@ export const adminRoutes = new Hono<Env>()
     const pattern = contains(q);
     return c.json({ items: await extensionRows(c, pattern ? or(ilike(extensions.name, pattern), ilike(repos.slug, pattern), ilike(publishers.handle, pattern)) : undefined, 50) });
   })
+  .get('/extensions/:repoId', async (c) => {
+    const { repoId } = Admin.Extension.Req.shape.params.parse(c.req.param());
+    const [row] = await extensionRows(c, eq(repos.id, repoId));
+    if (!row) throw new ApiError({ error: 'not_found' });
+    return c.json(row);
+  })
   .post('/repos/:repoId/moderation', async (c) => {
     const s = requireSession(c);
     const { repoId } = Admin.Moderate.Req.shape.params.parse(c.req.param());

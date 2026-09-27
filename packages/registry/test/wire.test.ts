@@ -38,7 +38,7 @@ const req: Record<string, unknown> = {
   'Admin.SeedPublisher': { ...e, body: { handle: 'powermove', userId: 'user-1' } },
   'Auth.WebStart': { ...e, query: { provider: 'google', state: 'a'.repeat(16), challenge: 'abc_-123' } }, 'Auth.WebDone': { ...e, query: { state: 'abc' } }, 'Auth.WebExchange': { ...e, body: { state: 'abc', token: 'tok', verifier: 'ver' } },
   'Admin.Publishers': { ...e, query: { q: 'mara' } }, 'Admin.Publisher': { ...e, params: { publisherId: id } }, 'Admin.SetVerified': { ...e, params: { publisherId: id }, body: { verified: true } },
-  'Admin.Extensions': { ...e, query: { q: 'glass' } }, 'Admin.Grant': { ...e, body: { email: 'a@example.com' } }, 'Admin.Revoke': { ...e, params: { userId: 'user-1' } }, 'Admin.Log': { ...e, query: { limit: '50' } }
+  'Admin.Extensions': { ...e, query: { q: 'glass' } }, 'Admin.Extension': { ...e, params: { repoId: id } }, 'Admin.Grant': { ...e, body: { email: 'a@example.com' } }, 'Admin.Revoke': { ...e, params: { userId: 'user-1' } }, 'Admin.Log': { ...e, query: { limit: '50' } }
 };
 const adminUser = { id: 'user-1', email: 'a@example.com', name: null };
 const adminPublisher = { publisher: owner, user: adminUser, claimedAt: date, verifiedAt: null, tombstonedAt: null, extensionCount: 1 };
@@ -52,7 +52,7 @@ const res: Record<string, unknown> = {
   'Installs.List': { items: [install] }, 'Installs.Add': undefined, 'Installs.Delete': undefined, 'Publish.PutRelease': { repo: listing, release }, 'Publish.Yank': { repo: listing, release }, 'Publish.PatchRepo': listing, 'Publish.DeleteRepo': undefined, 'Admin.Moderate': listing, 'Admin.SeedPublisher': { publisher: owner },
   'Auth.WebStart': '<html></html>', 'Auth.WebDone': '', 'Auth.WebExchange': session,
   'Admin.Session': { user: adminUser }, 'Admin.Publishers': { items: [adminPublisher] }, 'Admin.Publisher': { ...adminPublisher, extensions: [adminExtension] }, 'Admin.SetVerified': adminPublisher,
-  'Admin.Extensions': { items: [adminExtension] }, 'Admin.Admins': { items: [grant] }, 'Admin.Grant': grant, 'Admin.Revoke': undefined,
+  'Admin.Extensions': { items: [adminExtension] }, 'Admin.Extension': adminExtension, 'Admin.Admins': { items: [grant] }, 'Admin.Grant': grant, 'Admin.Revoke': undefined,
   'Admin.Log': { items: [{ id, action: 'verify', reason: '', createdAt: date, actor: { id: 'user-1', label: 'a@example.com' }, target: { kind: 'publisher', id, label: '@my-handle' } }] }
 };
 for (const [groupName, group] of Object.entries({ Auth: W.Auth, Me: W.Me, Objects: W.Objects, Store: W.Store, Installs: W.Installs, Publish: W.Publish, Admin: W.Admin })) for (const [routeName, schemas] of Object.entries(group)) {
