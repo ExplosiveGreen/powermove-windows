@@ -491,10 +491,6 @@
   }
 
   /* Classify the whole package, not an individual contribution. */
-  function byline(kind: StoreKind, who: string): string {
-    return `${KIND_PLURAL[kind]} extension · ${who}`;
-  }
-
   /* A published fork knows its origin from provenance (the folder's own
      manifest never names it); anything else from its manifest. */
   function storeLineageOf(item: LibraryItemDto | undefined): Lineage | undefined {
@@ -1103,6 +1099,7 @@
   {@const act = detailAction({ vars: data?.vars ?? item?.vars, item, repoId: data?.repoId })}
   {@const alsoPublish = data && item?.fork && data.repoId !== item.published?.repoId ? null : secondaryPublish(item)}
   {@const ownPage = ownsListing(data, account)}
+  {@const byYou = ownPage || (!data && !preview && !!item && 'you' in item.maker)}
   {@const storeLineage = data?.forkedFrom ?? storeLineageOf(item)}
   {@const builtinLineage = storeLineage ? undefined : builtinLineageOf(item)}
   <!-- A fork compares against the release it was forked from (P0 Q5), or
@@ -1115,6 +1112,9 @@
   {@const apiVersion = data?.apiVersion ?? preview?.apiVersion ?? null}
   {@const access = permissionLines(data?.permissions ?? preview?.permissions ?? item?.permissions)}
   {@const coord = data ? coordinate(data) : preview ? coordinate(preview) : item?.origin?.coordinate ?? (account?.handle && item ? `${account.handle}/${item.localId}` : item?.localId ?? '')}
+  {@const updated = data?.updated ?? preview?.updated ?? null}
+  <!-- The about text only when it says more than the tagline under the name. -->
+  {@const about = data?.about && data.about.trim() !== lede.trim() ? data.about : null}
 
   <button class="st-back" type="button" onclick={back}>
     <Icon {PM} name="chev" /><span>Back</span>
@@ -1127,10 +1127,9 @@
     <div class="st-detail-copy">
       <div class="st-detail-title">
         <h2>{name}</h2>
-        {#if version}<span class="st-tag">{version}</span>{/if}
       </div>
-      <p class="st-byline">{byline(kind, who)}</p>
       {#if lede}<p class="st-lede">{lede}</p>{/if}
+      {#if who}<p class="st-byline">{byYou ? 'by you' : who}</p>{/if}
       {#if access.length}
         <!-- What it declares it uses, beside the one action that installs it. -->
         <p class="st-access" aria-label="Access">
@@ -1222,20 +1221,24 @@
     {@render failure(remote.error, () => void loadDetail(target))}
   {/if}
 
+  <!-- The facts, each once: what it is, which version, when, and on your
+       own page how it is doing. The header carries only who made it. -->
   <dl class="st-facts">
-    <div><dt>Author</dt><dd>{data ? (ownPage ? 'You' : data.publisher) : preview ? preview.publisher : item && 'builtin' in item.maker ? 'Powermove' : item && 'you' in item.maker ? 'You' : ''}</dd></div>
     <div><dt>Kind</dt><dd>{KIND_LABEL[kind]}</dd></div>
-    <div><dt>Updated</dt><dd>{data?.updated ?? preview?.updated ?? '—'}</dd></div>
-    <div>
-      {#if item?.origin && data && item.origin.version !== data.version}
-        <dt>Installed</dt><dd>{item.origin.version} of {data.version}</dd>
-      {:else}
-        <dt>Version</dt><dd>{version || '—'}</dd>
-      {/if}
-    </div>
+    {#if item?.origin && data && item.origin.version !== data.version}
+      <div><dt>Installed</dt><dd>{item.origin.version} of {data.version}</dd></div>
+    {:else if version}
+      <div><dt>Version</dt><dd>{version}</dd></div>
+    {/if}
+    {#if updated}<div><dt>Updated</dt><dd>{updated}</dd></div>{/if}
+    {#if ownPage && data}
+      <div><dt>Installs</dt><dd>{data.installCount.toLocaleString('en')}</dd></div>
+      <div><dt>Forks</dt><dd>{data.forkCount.toLocaleString('en')}</dd></div>
+      <div><dt>Visibility</dt><dd>{data.visibility === 'public' ? 'Public' : 'Unlisted'}</dd></div>
+    {/if}
   </dl>
 
-  {#if data?.about}<p class="st-about">{data.about}</p>{/if}
+  {#if about}<p class="st-about">{about}</p>{/if}
 
   {#if item && item.group === 'yours' && !item.published}
     <section class="st-sec">
@@ -1248,16 +1251,9 @@
   {/if}
 
   {#if ownPage && data}
-    <!-- Yours on the store: how it's doing, and every version with a way
-         to withdraw it. Withdrawing asks inline, next to the version. -->
-    <section class="st-sec">
-      <h3 class="st-sec-title">On the store</h3>
-      <div class="st-card">
-        <div class="st-kv"><span>Installs</span><b>{data.installCount.toLocaleString('en')}</b></div>
-        <div class="st-kv"><span>Forks</span><b>{data.forkCount.toLocaleString('en')}</b></div>
-        <div class="st-kv"><span>Visibility</span><b>{data.visibility === 'public' ? 'Public' : 'Unlisted'}</b></div>
-      </div>
-    </section>
+    <!-- Yours on the store: every version with a way to withdraw it (how
+         it is doing is in the facts). Withdrawing asks inline, next to the
+         version. -->
     <section class="st-sec">
       <div class="st-sec-head">
         <h3>Versions</h3>
@@ -1286,13 +1282,7 @@
       </div>
     </section>
   {:else if data?.versions.length}
-    {@const latest = data.versions.find((v) => !v.withdrawn)}
-    {#if latest?.note}
-      <section class="st-sec">
-        <div class="st-sec-head"><h3>What’s new <span class="st-sec-sub">{latest.version}</span></h3></div>
-        <p class="st-whatsnew">{latest.note}</p>
-      </section>
-    {/if}
+    <!-- Newest first, so its top row is what's new. -->
     <section class="st-sec">
       <div class="st-sec-head">
         <h3>Version history</h3>
@@ -1337,7 +1327,8 @@
   <section class="st-sec">
     <h3 class="st-sec-title">Details</h3>
     <div class="st-card">
-      {#if coord}<div class="st-kv"><span>Identifier</span><b>{coord}</b></div>{/if}
+      <!-- Before a first publish the Publish card already names it. -->
+      {#if coord && !(item && item.group === 'yours' && !item.published)}<div class="st-kv"><span>Identifier</span><b>{coord}</b></div>{/if}
       {#if storeLineage}<div class="st-kv"><span>Forked from</span><b>{storeLineage.handle}/{storeLineage.slug}@{storeLineage.version}</b></div>{/if}
       {#if contributes.length}<div class="st-kv"><span>Includes</span><b>{includesText(contributes)}</b></div>{/if}
       {#if apiVersion !== null}<div class="st-kv"><span>Compatibility</span><b>{requiresText(apiVersion)}</b></div>{/if}

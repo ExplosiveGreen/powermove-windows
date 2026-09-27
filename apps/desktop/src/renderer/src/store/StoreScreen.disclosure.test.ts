@@ -112,9 +112,12 @@ it('removes owner controls immediately on account switch despite local publicati
     await vi.waitFor(() => expect(target.querySelector('[aria-label="Withdraw 1.0.0…"]')).not.toBeNull());
     expect(target.textContent).toContain('runs in a sandbox');
     expect(target.textContent).not.toContain('same access as the app');
+    expect(target.querySelector('.st-byline')?.textContent).toBe('by you');
+    expect(target.querySelector('.st-facts')?.textContent).toContain('Installs');
     flushSync(() => notify({ ...owner, name: '@jude', handle: 'jude' }, null));
     expect(target.querySelector('[aria-label="Withdraw 1.0.0…"]')).toBeNull();
-    expect(target.querySelector('.st-facts dd')?.textContent).toBe('mara');
+    expect(target.querySelector('.st-byline')?.textContent).toBe('by mara');
+    expect(target.querySelector('.st-facts')?.textContent).not.toContain('Installs');
     flushSync(() => notify(null, null));
     expect(target.querySelector('[aria-label="Withdraw 1.0.0…"]')).toBeNull();
   } finally { await unmount(screen); target.remove(); }

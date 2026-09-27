@@ -71,8 +71,9 @@
 .st-kv.is-own{align-items:center}
 .st-kv.is-own>b{flex:1}
 .st-kv.is-own .st-var-req{margin:0 6px 0 0}
-.st-withdraw-open{flex:none;font-size:var(--fs-sm);line-height:16px;text-decoration:none}
-.st-withdraw-open:hover{text-decoration:underline}
+/* Withdraw is there when you look for it: quiet until pointed at. */
+.st-link.st-withdraw-open{flex:none;font-size:var(--fs-sm);line-height:16px;text-decoration:none;color:var(--tx-4)}
+.st-link.st-withdraw-open:hover{color:var(--tx-2)}
 .st-withdraw-ask{color:var(--tx);text-wrap:pretty}
 .st-withdraw-actions{flex:none;display:flex;gap:6px}
 .st-withdraw-actions .btn{height:28px;padding:0 12px;border-radius:var(--r-pill)}
