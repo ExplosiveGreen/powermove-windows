@@ -1,13 +1,14 @@
 /*
- * Settings › Advanced › Registry URL: which Powermove Cloud this Mac talks to.
+ * Which Powermove Cloud this Mac talks to. A released build talks only to
+ * Powermove Cloud: the Store, accounts and publishing are Powermove's
+ * service, and another registry could serve updates to extensions installed
+ * from ours. So a packaged build ignores `<userData>/cloud/registry.json`
+ * and the environment, and refuses to change.
  *
- * Stored by main in `<userData>/cloud/registry.json`, never in the renderer's
- * store: the bearer session is bound to the registry origin, so pointing the
- * app at another registry is a trust decision the renderer cannot make on
- * its own (store plan §2.6). A change goes through `confirmRegistryChange`,
- * a native dialog that shows the exact origin being switched to.
- *
- * P10 adds the Settings UI; this module is the stored value and the gate.
+ * Development builds (unpackaged) may still point elsewhere, for the local
+ * cloud and tests: `POWERMOVE_REGISTRY_URL`, else the stored file. A change
+ * still goes through `confirmRegistryChange`, a native dialog naming the
+ * exact origin.
  */
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -29,16 +30,22 @@ export interface RegistryUrlSetting {
   fromEnvironment(): boolean;
 }
 
-export function createRegistryUrlSetting(dir: string): RegistryUrlSetting {
+/** Released builds are locked to Powermove Cloud. */
+export function registryLocked(): boolean {
+  return app?.isPackaged === true;
+}
+
+export function createRegistryUrlSetting(dir: string, locked: () => boolean = registryLocked): RegistryUrlSetting {
   const file = path.join(dir, 'registry.json');
   let current = DEFAULT_REGISTRY_ORIGIN;
-  const override = !app?.isPackaged && process.env.POWERMOVE_REGISTRY_URL
+  const override = !locked() && process.env.POWERMOVE_REGISTRY_URL
     ? normalizeOrigin(process.env.POWERMOVE_REGISTRY_URL)
     : null;
   return {
-    get: () => override ?? current,
+    get: () => (locked() ? DEFAULT_REGISTRY_ORIGIN : override ?? current),
     fromEnvironment: () => override !== null,
     async load() {
+      if (locked()) return DEFAULT_REGISTRY_ORIGIN;
       try {
         const parsed = Stored.safeParse(JSON.parse(await readFile(file, 'utf8')));
         current = parsed.success ? normalizeOrigin(parsed.data.origin) : DEFAULT_REGISTRY_ORIGIN;
@@ -48,6 +55,7 @@ export function createRegistryUrlSetting(dir: string): RegistryUrlSetting {
       return override ?? current;
     },
     async set(origin) {
+      if (locked()) return DEFAULT_REGISTRY_ORIGIN;
       const next = normalizeOrigin(origin);
       await mkdir(dir, { recursive: true, mode: 0o700 });
       await writeFile(`${file}.tmp`, JSON.stringify({ origin: next }), { mode: 0o600 });
@@ -70,8 +78,8 @@ export interface ConfirmRegistryChangeOptions {
  * concrete origin; the value stored is the one shown, never a re-read.
  * Returns whether the change was made.
  */
-export async function confirmRegistryChange(origin: string, options: ConfirmRegistryChangeOptions): Promise<boolean> {
-  if (options.setting.fromEnvironment()) return false;
+export async function confirmRegistryChange(origin: string, options: ConfirmRegistryChangeOptions & { locked?: () => boolean }): Promise<boolean> {
+  if ((options.locked ?? registryLocked)() || options.setting.fromEnvironment()) return false;
   const next = normalizeOrigin(origin);
   if (next === options.setting.get()) return false;
   const isDefault = next === DEFAULT_REGISTRY_ORIGIN;

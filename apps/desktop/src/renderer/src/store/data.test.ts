@@ -117,7 +117,7 @@ describe('library', () => {
 
 describe('view models', () => {
   const listing: ListingDto = {
-    repoId: REPO, owner: { id: '22222222-2222-4222-8222-222222222222', handle: 'mara', tombstoned: false, verified: false }, slug: 'glass-blur',
+    repoId: REPO, owner: { id: '22222222-2222-4222-8222-222222222222', handle: 'mara', tombstoned: false, verified: true }, slug: 'glass-blur',
     name: 'Glass blur', tagline: 'Frosted glass.', category: 'tools', iconUrl: null, visibility: 'public', permissions: [],
     latest: { id: R2, version: '1.1.0', publishedAt: new Date(2026, 8, 22, 10).toISOString(), apiVersion: 2, yankedAt: null },
     installCount: 3, forkCount: 0, licence: 'MIT',
@@ -130,11 +130,12 @@ describe('view models', () => {
   it('builds a listing from the DTO and the Library', () => {
     const vm = listingFromDto(listing, [item()], now);
     expect(vm).toMatchObject({
-      publisher: 'mara', id: 'glass-blur', kind: 'tools', version: '1.1.0', updated: 'Yesterday', installed: true,
+      publisher: 'mara', verified: true, id: 'glass-blur', kind: 'tools', version: '1.1.0', updated: 'Yesterday', installed: true,
       latestReleaseId: R2, forkedFrom: { handle: 'noor', slug: 'glass', version: '1.0.0', releaseId: R1 }
     });
     expect(listingFromDto({ ...listing, forkedFrom: null }, [], now)).not.toHaveProperty('forkedFrom');
     expect(listingFromDto(listing, [], now).installed).toBe(false);
+    expect(listingFromDto({ ...listing, owner: { ...listing.owner, verified: false } }, [], now).verified).toBe(false);
   });
 
   it('marks withdrawn versions and reads vars from the latest release', () => {

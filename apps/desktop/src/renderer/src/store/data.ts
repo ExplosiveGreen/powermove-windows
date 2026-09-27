@@ -159,6 +159,8 @@ export type Lineage = { handle: string; slug: string; version: string; releaseId
 export type StoreListing = {
   repoId: string;
   publisher: string;
+  /** Powermove vouches for the publisher (the blue check); set by an admin. */
+  verified?: boolean;
   /** The slug: with the publisher, the coordinate `publisher/id`. */
   id: string;
   name: string;
@@ -205,6 +207,7 @@ export function listingFromDto(dto: ListingDto, library: readonly LibraryItemDto
   const listing: StoreListing = {
     repoId: dto.repoId,
     publisher: dto.owner.handle,
+    verified: dto.owner.verified === true,
     id: dto.slug,
     name: dto.name,
     tagline: dto.tagline,
