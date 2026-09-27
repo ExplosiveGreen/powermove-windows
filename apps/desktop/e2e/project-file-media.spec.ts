@@ -48,6 +48,18 @@ test('saved project files restore imported video without the original session me
   expect(restored.bytes).toBeGreaterThan(0);
   expect(restored.pixel[1]).toBeGreaterThan(225);
   expect(restored.pixel[0]).toBeLessThan(30);
+  // Reopening retains the persisted media revision, so the next metadata-only
+  // save must not read/upload that video again.
+  expect(await session.page.evaluate(async () => {
+    const PM = (window as any).PM, original = PM.MediaStore.getForSave;
+    PM.MediaStore.getForSave = async (asset: any) => {
+      const saved = await original(asset);
+      if (saved) Object.defineProperty(saved.blob, 'slice', { value: () => { throw new Error('Reopened media was uploaded again'); } });
+      return saved;
+    };
+    try { PM.Projects.rename(PM.proj.id, 'Reopened and saved'); return await PM.saveProject(); }
+    finally { PM.MediaStore.getForSave = original; }
+  })).toBe(true);
 });
 
 test('saved project files restore imported audio without the original session media', async ({ session }) => {

@@ -25,6 +25,10 @@ export const IPC = {
   fileSaveUpload: 'file:save-upload',
   fileSaveChunk: 'file:save-chunk',
   fileSaveAbort: 'file:save-abort',
+  projectSaveBegin: 'project:save-begin',
+  projectSaveChunk: 'project:save-chunk',
+  projectSaveFinish: 'project:save-finish',
+  projectSaveAbort: 'project:save-abort',
   projectOpen: 'project:open',
   projectOpenExternal: 'project:open-external', // main → renderer
   projectRead: 'project:read',
@@ -227,6 +231,11 @@ export interface FileSaveRequest {
   destinationToken?: string;
 }
 export type FileSaveResult = { ok: true; path: string } | { ok: false; cancelled: boolean; error?: string };
+export interface ProjectSaveRequest {
+  name: string; projectId: string; saveAs?: boolean; documentBytes: number;
+  media: import('./project-incremental').SaveMedia[];
+}
+export type ProjectSaveBeginResult = { ok: true; token: string; required: string[] } | { ok: false; cancelled: boolean; error?: string };
 export type ProjectOpenResult = {
   ok: true; path: string; projectId: string; token: string; size: number;
   document: any; media: import('./project-container').ProjectMediaRange[];
@@ -632,6 +641,12 @@ export interface PowermoveBridge {
     chunk(uploadId: string, data: Uint8Array): Promise<void>;
     finish(uploadId: string, metadata: Omit<FileSaveRequest, 'data'>): Promise<FileSaveResult>;
     abort(uploadId: string): Promise<void>;
+  };
+  projectSave?: {
+    begin(request: ProjectSaveRequest): Promise<ProjectSaveBeginResult>;
+    chunk(token: string, assetId: string | null, data: Uint8Array): Promise<void>;
+    finish(token: string): Promise<FileSaveResult>;
+    abort(token: string): Promise<void>;
   };
   exportDestination?: {
     choose(name: string, directory?: boolean): Promise<string | null>;

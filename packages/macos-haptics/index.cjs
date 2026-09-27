@@ -8,6 +8,10 @@ if (process.platform === 'darwin') {
 }
 
 module.exports = {
+  cloneFile(source, destination) { return native?.fileOperation?.('clone', source, destination) ?? Promise.resolve(false); },
+  swapFiles(source, destination) { return native?.fileOperation?.('swap', source, destination) ?? Promise.resolve(false); },
+  installFile(source, destination) { return native?.fileOperation?.('install', source, destination) ?? Promise.resolve(false); },
+  fullSync(fd) { return native?.fileOperation?.('sync', fd) ?? Promise.resolve(false); },
   cloudFileState(path, download = false) { return native?.cloudFileState?.(path, download) ?? Promise.resolve("unknown"); },
   fontFamilies() { return native?.fontFamilies?.() ?? null; },
   triggerAlignment() {

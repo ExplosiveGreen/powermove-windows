@@ -1,7 +1,33 @@
 import { describe, expect, it, vi } from 'vitest';
-import { packProjectFile, restoreProjectFileMedia, unpackProjectFile, unpackProjectFileBlob, packProjectFileBlob, restoreProjectFileStream } from './project-file';
+import { packProjectFile, restoreProjectFileMedia, unpackProjectFile, unpackProjectFileBlob, packProjectFileBlob, restoreProjectFileStream, saveIncrementalProject } from './project-file';
+import { sha256Hex } from '../../../../shared/sha256';
 
 describe('portable project media', () => {
+  it('uploads only requested media, including media reachable solely from Undo', async () => {
+    const old = { id: 'deleted' }, current = { id: 'current' };
+    const snapshot = { proj: { assets: { current } }, history: { entries: [{ backward: [{ exists: true, path: ['assets', 'deleted'], value: old }] }] } };
+    const serialized = JSON.stringify(snapshot);
+    const bridge = { begin: vi.fn(async () => ({ ok: true as const, token: 'token', required: ['deleted'] })),
+      chunk: vi.fn(async () => undefined), finish: vi.fn(async () => ({ ok: true as const, path: 'file.pmv' })), abort: vi.fn(async () => undefined) };
+    const store = { get: vi.fn(), put: vi.fn(), getForSave: async (asset: any) => ({ blob: new Blob([asset.id]), revision: `revision-${asset.id}` }) };
+    expect(await saveIncrementalProject(snapshot, serialized, store, bridge, { name: 'file.pmv', projectId: 'one', saveAs: false }, () => {})).toMatchObject({ ok: true });
+    const chunks = bridge.chunk.mock.calls as unknown as Array<[string, string | null, Uint8Array]>;
+    expect(chunks.map(call => call[1])).toEqual([null, 'deleted']);
+    expect(new TextDecoder().decode(chunks[0]![2])).toBe(serialized);
+    expect(new TextDecoder().decode(chunks[1]![2])).toBe('deleted');
+    expect(store.get).not.toHaveBeenCalled();
+    expect(bridge.abort).toHaveBeenCalledWith('token');
+  });
+  it('rejects corrupted streamed media before putting it into the local store', async () => {
+    const put = vi.fn(async () => true);
+    vi.stubGlobal('navigator', { storage: {} });
+    try {
+      await expect(restoreProjectFileStream({ proj: { assets: { clip: { id: 'clip' } } } },
+        [{ id: 'clip', type: 'video/webm', offset: 0, length: 3, sha256: sha256Hex(new Uint8Array([1, 2, 3])), revision: 'saved' }],
+        { get: async () => null, put }, async () => new Uint8Array([4, 5, 6]))).rejects.toThrow('checksum');
+      expect(put).not.toHaveBeenCalled();
+    } finally { vi.unstubAllGlobals(); }
+  });
   it.each(['current', 'undo', 'redo', 'all missing'])('saves with missing %s media while preserving editable source and history', async location => {
     const missing = { id: 'missing', name: '01-window-plate.png', kind: 'image' };
     const available = { id: 'available', name: 'available.png', kind: 'image' };

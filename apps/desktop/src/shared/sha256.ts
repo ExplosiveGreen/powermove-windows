@@ -15,19 +15,42 @@ const K = new Uint32Array([
   0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
 ]);
 
-export function sha256Hex(input: Uint8Array): string {
-  const length = input.byteLength;
-  const bitLength = length * 8;
-  const padded = new Uint8Array(((length + 9 + 63) >> 6) << 6);
-  padded.set(input);
-  padded[length] = 0x80;
-  const view = new DataView(padded.buffer);
-  view.setUint32(padded.byteLength - 8, Math.floor(bitLength / 0x100000000));
-  view.setUint32(padded.byteLength - 4, bitLength >>> 0);
-
-  const h = new Uint32Array([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]);
-  const w = new Uint32Array(64);
-  for (let offset = 0; offset < padded.byteLength; offset += 64) {
+/** Incremental digest for bounded-memory project verification. */
+export class Sha256 {
+  private h = new Uint32Array([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]);
+  private w = new Uint32Array(64);
+  private tail = new Uint8Array(64);
+  private used = 0;
+  private length = 0;
+  private ended = false;
+  update(input: Uint8Array): this {
+    if (this.ended) throw new Error('Digest already finished');
+    this.length += input.length;
+    if (!Number.isSafeInteger(this.length)) throw new Error('Digest input is too large');
+    let offset = 0;
+    if (this.used) {
+      const count = Math.min(64 - this.used, input.length);
+      this.tail.set(input.subarray(0, count), this.used); this.used += count; offset += count;
+      if (this.used === 64) { this.block(new DataView(this.tail.buffer), 0); this.used = 0; }
+    }
+    const view = new DataView(input.buffer, input.byteOffset, input.byteLength);
+    for (; offset + 64 <= input.length; offset += 64) this.block(view, offset);
+    if (offset < input.length) { this.tail.set(input.subarray(offset), this.used); this.used += input.length - offset; }
+    return this;
+  }
+  digest(): string {
+    if (this.ended) throw new Error('Digest already finished');
+    this.ended = true;
+    const padded = new Uint8Array(this.used < 56 ? 64 : 128);
+    padded.set(this.tail.subarray(0, this.used)); padded[this.used] = 0x80;
+    const view = new DataView(padded.buffer), bitLength = this.length * 8;
+    view.setUint32(padded.length - 8, Math.floor(bitLength / 0x100000000));
+    view.setUint32(padded.length - 4, bitLength >>> 0);
+    for (let offset = 0; offset < padded.length; offset += 64) this.block(view, offset);
+    return Array.from(this.h, word => word.toString(16).padStart(8, '0')).join('');
+  }
+  private block(view: DataView, offset: number): void {
+    const h = this.h, w = this.w;
     for (let i = 0; i < 16; i++) w[i] = view.getUint32(offset + i * 4);
     for (let i = 16; i < 64; i++) {
       const x = w[i - 15]!, y = w[i - 2]!;
@@ -48,8 +71,8 @@ export function sha256Hex(input: Uint8Array): string {
     h[0] = (h[0]! + a) >>> 0; h[1] = (h[1]! + b) >>> 0; h[2] = (h[2]! + c) >>> 0; h[3] = (h[3]! + d) >>> 0;
     h[4] = (h[4]! + e) >>> 0; h[5] = (h[5]! + f) >>> 0; h[6] = (h[6]! + g) >>> 0; h[7] = (h[7]! + hh) >>> 0;
   }
-  return Array.from(h, (word) => word.toString(16).padStart(8, '0')).join('');
 }
+export function sha256Hex(input: Uint8Array): string { return new Sha256().update(input).digest(); }
 
 /** SubtleCrypto when the page is a secure context, the same digest in JS otherwise. */
 export async function sha256HexOf(bytes: Uint8Array): Promise<string> {

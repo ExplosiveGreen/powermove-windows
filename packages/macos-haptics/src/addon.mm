@@ -2,6 +2,10 @@
 #import <CoreText/CoreText.h>
 #include <node_api.h>
 #include <sys/stat.h>
+#include <sys/clonefile.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <stdio.h>
 #include <string>
 #include <vector>
 
@@ -119,6 +123,79 @@ static napi_value CloudFileState(napi_env env, napi_callback_info info) {
   return promise;
 }
 
+// File work runs off the Electron main thread. Clones own their metadata and
+// diverge on write; never substitute hard links for recovery snapshots.
+struct FileWork {
+  napi_async_work work;
+  napi_deferred deferred;
+  std::string source, destination, operation;
+  int fd = -1, error = 0;
+  bool supported = true;
+};
+static void PerformFileWork(napi_env env, void *data) {
+  FileWork *job = static_cast<FileWork *>(data);
+  int result;
+  if (job->operation == "clone") result = clonefile(job->source.c_str(), job->destination.c_str(), CLONE_NOFOLLOW);
+  else if (job->operation == "swap") result = renamex_np(job->source.c_str(), job->destination.c_str(), RENAME_SWAP);
+  else if (job->operation == "install") result = renamex_np(job->source.c_str(), job->destination.c_str(), RENAME_EXCL);
+  else {
+    result = fcntl(job->fd, F_FULLFSYNC);
+    if (result && (errno == EINVAL || errno == ENOTSUP)) result = fsync(job->fd);
+    if (result) job->error = errno;
+    close(job->fd); job->fd = -1;
+    return;
+  }
+  if (result) {
+    if (errno == EXDEV || errno == ENOTSUP || errno == ENOSYS) job->supported = false;
+    else job->error = errno;
+  }
+}
+static void FileWorkComplete(napi_env env, napi_status status, void *data) {
+  FileWork *job = static_cast<FileWork *>(data);
+  napi_value value;
+  if (status != napi_ok || job->error) {
+    napi_value message, code;
+    napi_create_string_utf8(env, job->error ? strerror(job->error) : "File operation cancelled", NAPI_AUTO_LENGTH, &message);
+    napi_create_error(env, nullptr, message, &value);
+    const char *name = job->error == EEXIST ? "EEXIST" : job->error == ENOENT ? "ENOENT" : job->error == ENOSPC ? "ENOSPC" : "EIO";
+    napi_create_string_utf8(env, name, NAPI_AUTO_LENGTH, &code);
+    napi_set_named_property(env, value, "code", code);
+    napi_reject_deferred(env, job->deferred, value);
+  } else {
+    napi_get_boolean(env, job->supported, &value);
+    napi_resolve_deferred(env, job->deferred, value);
+  }
+  if (job->fd >= 0) close(job->fd);
+  napi_delete_async_work(env, job->work);
+  delete job;
+}
+static napi_value FileOperation(napi_env env, napi_callback_info info) {
+  size_t argc = 3; napi_value args[3];
+  napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+  auto stringArg = [&](size_t index, std::string &out) {
+    size_t length = 0;
+    if (index >= argc || napi_get_value_string_utf8(env, args[index], nullptr, 0, &length) != napi_ok || length > 16384) return false;
+    std::vector<char> chars(length + 1);
+    napi_get_value_string_utf8(env, args[index], chars.data(), chars.size(), &length);
+    out.assign(chars.data(), length);
+    return out.find('\0') == std::string::npos;
+  };
+  FileWork *job = new FileWork{};
+  bool valid = stringArg(0, job->operation);
+  if (valid && job->operation == "sync") {
+    int fd;
+    valid = argc > 1 && napi_get_value_int32(env, args[1], &fd) == napi_ok;
+    if (valid) { job->fd = dup(fd); valid = job->fd >= 0; }
+  } else valid = valid && (job->operation == "clone" || job->operation == "swap" || job->operation == "install") && stringArg(1, job->source) && stringArg(2, job->destination);
+  if (!valid) { delete job; napi_throw_type_error(env, nullptr, "Invalid file operation"); return nullptr; }
+  napi_value promise, name;
+  napi_create_promise(env, &job->deferred, &promise);
+  napi_create_string_utf8(env, "projectFileOperation", NAPI_AUTO_LENGTH, &name);
+  napi_create_async_work(env, nullptr, name, PerformFileWork, FileWorkComplete, job, &job->work);
+  napi_queue_async_work(env, job->work);
+  return promise;
+}
+
 static napi_value Init(napi_env env, napi_value exports) {
   napi_value trigger;
   napi_create_function(env, "triggerAlignment", NAPI_AUTO_LENGTH,
@@ -130,6 +207,9 @@ static napi_value Init(napi_env env, napi_value exports) {
   napi_value cloud;
   napi_create_function(env, "cloudFileState", NAPI_AUTO_LENGTH, CloudFileState, nullptr, &cloud);
   napi_set_named_property(env, exports, "cloudFileState", cloud);
+  napi_value file;
+  napi_create_function(env, "fileOperation", NAPI_AUTO_LENGTH, FileOperation, nullptr, &file);
+  napi_set_named_property(env, exports, "fileOperation", file);
   return exports;
 }
 
