@@ -9,7 +9,7 @@ import { createCloudSession } from './session';
 const ORIGIN = 'https://cloud.example.test';
 const ME = {
   user: { id: '3f1c9b1e-8f55-4d8f-9d0a-6f1d1c1b2a3e', name: 'Jude', email: 'jude@example.test', image: null },
-  publisher: { id: '7d2a0b6e-1c3f-4a5b-8c9d-0e1f2a3b4c5d', handle: 'jude', tombstoned: false },
+  publisher: { id: '7d2a0b6e-1c3f-4a5b-8c9d-0e1f2a3b4c5d', handle: 'jude', tombstoned: false, verified: false },
   settings: { rememberInstalls: true }
 };
 

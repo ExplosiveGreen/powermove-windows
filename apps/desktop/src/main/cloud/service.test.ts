@@ -35,6 +35,29 @@ describe('registry URL', () => {
     return createRegistryUrlSetting(path.join(root, 'cloud'));
   }
 
+  it('locks a released build to Powermove Cloud: no file, no environment, no change', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'powermove-registry-'));
+    roots.push(root);
+    const dir = path.join(root, 'cloud');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'registry.json'), JSON.stringify({ origin: 'https://evil.example.test' }));
+    process.env.POWERMOVE_REGISTRY_URL = 'https://evil.example.test';
+    try {
+      const value = createRegistryUrlSetting(dir, () => true);
+      expect(await value.load()).toBe(DEFAULT_REGISTRY_ORIGIN);
+      expect(value.get()).toBe(DEFAULT_REGISTRY_ORIGIN);
+      expect(value.fromEnvironment()).toBe(false);
+      expect(await value.set('https://evil.example.test')).toBe(DEFAULT_REGISTRY_ORIGIN);
+      const showMessageBox = vi.fn(async () => ({ response: 0 }));
+      expect(await confirmRegistryChange('https://evil.example.test', { setting: value, showMessageBox, locked: () => true })).toBe(false);
+      expect(showMessageBox).not.toHaveBeenCalled();
+      expect(JSON.parse(await fs.readFile(path.join(dir, 'registry.json'), 'utf8')).origin).toBe('https://evil.example.test');
+      expect(value.get()).toBe(DEFAULT_REGISTRY_ORIGIN);
+    } finally {
+      delete process.env.POWERMOVE_REGISTRY_URL;
+    }
+  });
+
   it('defaults to Powermove Cloud', async () => {
     const value = await setting();
     expect(await value.load()).toBe(DEFAULT_REGISTRY_ORIGIN);
