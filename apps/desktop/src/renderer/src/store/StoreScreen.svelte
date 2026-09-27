@@ -981,7 +981,7 @@
     <span class="st-item-copy">
       <b>{l.name}</b>
       <span class="st-item-line">{l.tagline}</span>
-      <span class="st-item-by">by {l.publisher}</span>
+      <span class="st-item-meta"><span>by {l.publisher}</span></span>
     </span>
     <span class="st-item-action">
       {#if !pending && act.kind === 'install'}
@@ -1004,24 +1004,33 @@
   </div>
 {/snippet}
 
-<!-- A Library card: the Discover card, plus what is up with it. The corner
-     holds its one action, or its switch when it just runs; the menu has the
-     rest. Turned off or waiting on you, the icon dims. -->
+<!-- A Library card: the Discover card, plus what is up with it. Three tiers:
+     the name, one line of what it does, then one quiet line of facts (who
+     made it, where it came from, its state), where only a state that needs
+     you lights up. "By you" is left to the section heading. The corner holds
+     its one action, or its switch when it just runs; the menu has the rest.
+     Turned off or waiting on you, the icon dims. -->
 {#snippet libraryCard(item: LibraryItemDto)}
   {@const note = statusText(item)}
   {@const lineage = storeLineageOf(item)}
   {@const act = libraryAction(item)}
+  {@const byline = item.group === 'yours' ? null : makerText(item)}
   <div class="st-item is-library" class:is-off={needsSetup(item) || needsTrust(item) || !item.enabled}>
     <button class="st-item-open" type="button" aria-label={`Open ${item.name}`} onclick={() => openItem(item)}></button>
     <span class="st-item-icon"><span class="st-thumb" style={itemArt(item)}></span></span>
     <span class="st-item-copy">
       <b>{item.name}</b>
       <span class="st-item-line">{item.description ?? KIND_LABEL[item.category]}</span>
-      <span class="st-item-by">{makerText(item)}{#if lineage}&nbsp;· forked from {lineage.handle}/{lineage.slug}{/if}</span>
-      {#if note}
-        {#key note}
-          <span class="st-item-status" class:is-hot={statusIsHot(item)} in:fade={settle}>{note}</span>
-        {/key}
+      {#if byline || lineage || note}
+        <span class="st-item-meta">
+          {#if byline}<span>{byline}</span>{/if}
+          {#if lineage}<span class="st-item-lineage">forked from {lineage.handle}/{lineage.slug}</span>{/if}
+          {#if note}
+            {#key note}
+              <span class="st-item-status" class:is-hot={statusIsHot(item)} in:fade={settle}>{note}</span>
+            {/key}
+          {/if}
+        </span>
       {/if}
     </span>
     <span class="st-item-action">

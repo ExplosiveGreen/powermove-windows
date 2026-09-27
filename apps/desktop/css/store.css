@@ -176,8 +176,14 @@
 .st-item-icon .st-thumb{width:30px;height:30px;border-radius:8px}
 .st-item-copy{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
 .st-item-copy b{font-size:var(--fs-md);line-height:18px;font-weight:var(--fw-medium);color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.st-item-line{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;font-size:var(--fs-sm);line-height:16px;color:var(--tx-3);text-wrap:pretty}
-.st-item-by{margin-top:2px;font-size:var(--fs-sm);line-height:16px;color:var(--tx-4);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.st-item-line{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--fs-sm);line-height:16px;color:var(--tx-3)}
+/* The facts line: the quietest ink, parts joined by a dot. */
+.st-item-meta{display:flex;min-width:0;margin-top:3px;font-size:var(--fs-sm);line-height:16px;color:var(--tx-4);white-space:nowrap}
+/* Short of room, the lineage gives way first; the state is the last thing cut. */
+.st-item-meta{overflow:hidden}
+.st-item-meta>span{flex:0 0 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.st-item-meta>.st-item-lineage,.st-item-meta:not(:has(>.st-item-lineage))>span:last-child{flex-shrink:1}
+.st-item-meta>span+span::before{content:"·";margin:0 5px;color:var(--tx-4);font-weight:var(--fw-regular)}
 .st-item-action{position:relative;z-index:2;flex:none;display:flex;align-items:center;gap:4px}
 .st-plus{display:grid;place-items:center;width:30px;height:30px;padding:0;border:0;border-radius:var(--sg-control-radius);background:var(--bg-float);color:var(--tx-2);transition:background var(--dur-1),color var(--dur-1)}
 .st-plus svg{width:13px;height:13px}
@@ -318,7 +324,6 @@ button.st-plus:hover{background:var(--bg-row-hi);color:var(--tx)}
 
 /* ── Library ── */
 .st-stack{display:flex;flex-direction:column;gap:32px}
-.st-item-status{margin-top:3px;font-size:var(--fs-sm);line-height:16px;color:var(--tx-3)}
 .st-item-status.is-hot{color:var(--accent-tx);font-weight:var(--fw-medium)}
 .st-item.is-off .st-item-icon .st-thumb{opacity:.45;filter:saturate(.4)}
 .st-item.is-off .st-item-copy b{color:var(--tx-2)}
