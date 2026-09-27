@@ -35,14 +35,25 @@ const req: Record<string, unknown> = {
   'Installs.Add': { ...e, body: { repoId: id, releaseId: id } }, 'Installs.Delete': { ...e, params: { repoId: id } },
   'Publish.PutRelease': { ...e, params: coordinate, body: { version: '1.0.0', commitSha: sha, listing: { name: 'Name', tagline: 'Tag', category: 'effects' }, waivers: [] } }, 'Publish.Yank': { ...e, params: releaseCoordinate }, 'Publish.PatchRepo': { ...e, params: coordinate, body: { visibility: 'public' } }, 'Publish.DeleteRepo': { ...e, params: coordinate },
   'Admin.Moderate': { ...e, params: { repoId: id }, body: { action: 'hide', reason: 'Reason' } },
-  'Admin.SeedPublisher': { ...e, body: { handle: 'powermove', userId: 'user-1' } }
+  'Admin.SeedPublisher': { ...e, body: { handle: 'powermove', userId: 'user-1' } },
+  'Auth.WebStart': { ...e, query: { provider: 'google', state: 'a'.repeat(16), challenge: 'abc_-123' } }, 'Auth.WebDone': { ...e, query: { state: 'abc' } }, 'Auth.WebExchange': { ...e, body: { state: 'abc', token: 'tok', verifier: 'ver' } },
+  'Admin.Publishers': { ...e, query: { q: 'mara' } }, 'Admin.Publisher': { ...e, params: { publisherId: id } }, 'Admin.SetVerified': { ...e, params: { publisherId: id }, body: { verified: true } },
+  'Admin.Extensions': { ...e, query: { q: 'glass' } }, 'Admin.Grant': { ...e, body: { email: 'a@example.com' } }, 'Admin.Revoke': { ...e, params: { userId: 'user-1' } }, 'Admin.Log': { ...e, query: { limit: '50' } }
 };
+const adminUser = { id: 'user-1', email: 'a@example.com', name: null };
+const adminPublisher = { publisher: owner, user: adminUser, claimedAt: date, verifiedAt: null, tombstonedAt: null, extensionCount: 1 };
+const adminExtension = { repoId: id, owner, slug: 'my-extension', name: 'Name', tagline: 'Tag', visibility: 'public', moderation: 'hidden', tombstoned: false, latestVersion: '1.0.0', installCount: 0, updatedAt: date };
+const grant = { user: adminUser, grantedAt: date, grantedBy: null };
 const res: Record<string, unknown> = {
   'Auth.DesktopStart': '<html></html>', 'Auth.DesktopDone': '<html></html>', 'Auth.DesktopExchange': session, 'Auth.EmailSend': { ok: true }, 'Auth.EmailVerify': session, 'Auth.SignOut': { ok: true },
   'Me.Get': me, 'Me.SetHandle': { publisher: owner }, 'Me.Settings': { settings: { rememberInstalls: false } }, 'Me.Delete': undefined, 'Me.Repos': { items: [listing] }, 'Objects.Missing': { missing: [sha] }, 'Objects.Upload': { stored: [sha], present: [], rejected: [] },
   'Store.Browse': { sections: [{ id: 'featured', title: 'Featured', items: [listing] }] }, 'Store.Extensions': { items: [listing], nextCursor: null }, 'Store.Detail': { ...listing, about: null, releases: [release], moderation: 'none' }, 'Store.Release': release, 'Store.Tree': tree, 'Store.Tar': new Uint8Array(), 'Store.File': 'source', 'Store.ReleaseById': { ...release, handle: 'my-handle', slug: 'my-extension' }, 'Store.TreeById': tree, 'Store.TarById': new Uint8Array(), 'Store.Compare': compare,
   'Store.Versions': { items: [{ repoId: id, state: 'ok', ownerPublisherId: id, current: { yanked: false }, latest: { releaseId: id, version: '1.0.0', treeSha: sha, tarSha256: sha256, apiVersion: 2 }, handle: 'my-handle', slug: 'my-extension' }] }, 'Store.Icon': new Uint8Array(), 'Store.Report': undefined,
-  'Installs.List': { items: [install] }, 'Installs.Add': undefined, 'Installs.Delete': undefined, 'Publish.PutRelease': { repo: listing, release }, 'Publish.Yank': { repo: listing, release }, 'Publish.PatchRepo': listing, 'Publish.DeleteRepo': undefined, 'Admin.Moderate': listing, 'Admin.SeedPublisher': { publisher: owner }
+  'Installs.List': { items: [install] }, 'Installs.Add': undefined, 'Installs.Delete': undefined, 'Publish.PutRelease': { repo: listing, release }, 'Publish.Yank': { repo: listing, release }, 'Publish.PatchRepo': listing, 'Publish.DeleteRepo': undefined, 'Admin.Moderate': listing, 'Admin.SeedPublisher': { publisher: owner },
+  'Auth.WebStart': '<html></html>', 'Auth.WebDone': '', 'Auth.WebExchange': session,
+  'Admin.Session': { user: adminUser }, 'Admin.Publishers': { items: [adminPublisher] }, 'Admin.Publisher': { ...adminPublisher, extensions: [adminExtension] }, 'Admin.SetVerified': adminPublisher,
+  'Admin.Extensions': { items: [adminExtension] }, 'Admin.Admins': { items: [grant] }, 'Admin.Grant': grant, 'Admin.Revoke': undefined,
+  'Admin.Log': { items: [{ id, action: 'verify', reason: '', createdAt: date, actor: { id: 'user-1', label: 'a@example.com' }, target: { kind: 'publisher', id, label: '@my-handle' } }] }
 };
 for (const [groupName, group] of Object.entries({ Auth: W.Auth, Me: W.Me, Objects: W.Objects, Store: W.Store, Installs: W.Installs, Publish: W.Publish, Admin: W.Admin })) for (const [routeName, schemas] of Object.entries(group)) {
   const name = `${groupName}.${routeName}`;
