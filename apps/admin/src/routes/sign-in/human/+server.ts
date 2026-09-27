@@ -9,7 +9,6 @@ import type { RequestHandler } from './$types';
    clearance is bound to the email and lasts as long as the API says; it is
    not a session. */
 export const POST: RequestHandler = async (event) => {
-  if (event.request.headers.get('origin') !== event.url.origin) error(403, 'Cross-origin request');
   const body = (await event.request.json().catch(() => null)) as { ticket?: unknown } | null;
   if (typeof body?.ticket !== 'string') error(400, 'Missing ticket');
   const result = await cloud(event, '/v1/human/result', {

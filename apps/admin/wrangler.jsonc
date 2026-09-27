@@ -18,6 +18,8 @@
   "env": {
     // `vite dev` and `bun run preview`: plain fetch to the local cloud Worker.
     "local": {
+      "routes": [],
+      "services": [],
       "vars": { "API_ORIGIN": "http://localhost:8787" }
     }
   }
