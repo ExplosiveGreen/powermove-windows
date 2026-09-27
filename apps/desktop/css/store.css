@@ -217,7 +217,9 @@ button.st-plus:hover{background:var(--bg-row-hi);color:var(--tx)}
 .st-detail-title h2{min-width:0;font-size:22px;line-height:28px;font-weight:var(--fw-medium);letter-spacing:-.015em;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Name, what it does, who made it: the Library card's three tiers, larger. */
 .st-lede{margin-top:2px;font-size:var(--fs-md);line-height:18px;color:var(--tx-2);text-wrap:pretty;max-width:64ch}
-.st-byline{margin-top:6px;font-size:var(--fs-sm);line-height:16px;color:var(--tx-3)}
+.st-byline{display:flex;flex-wrap:wrap;margin-top:6px;font-size:var(--fs-sm);line-height:16px;color:var(--tx-3);font-variant-numeric:tabular-nums}
+.st-byline>span+span::before{content:"·";margin:0 6px;color:var(--tx-4)}
+.st-byline.is-standing{margin-top:2px;color:var(--tx-4)}
 .st-access{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:6px;font-size:var(--fs-sm);line-height:16px;color:var(--tx-3)}
 .st-access>span{display:inline-flex;align-items:center;gap:4px}
 .st-access .is-warn{color:var(--warning)}
@@ -262,13 +264,6 @@ button.st-plus:hover{background:var(--bg-row-hi);color:var(--tx)}
 #store-screen .st-var-input::placeholder{color:var(--tx-4)}
 #store-screen .st-var-input:focus-visible{outline:0;box-shadow:0 0 0 3px var(--ink-2)}
 
-/* Facts: quiet label/value pairs at their own widths, one line, no rules. */
-.st-facts{display:flex;flex-wrap:wrap;gap:12px 40px;padding:0 var(--st-inset)}
-/* The facts read as the header's last line, not a section of their own. */
-.st-detail-head+.st-facts{margin-top:-8px}
-.st-facts>div{min-width:0;display:flex;flex-direction:column;gap:2px}
-.st-facts dt{font-size:var(--fs-sm);line-height:16px;color:var(--tx-3)}
-.st-facts dd{font-size:var(--fs-md);line-height:18px;color:var(--tx);font-variant-numeric:tabular-nums;white-space:nowrap}
 .st-sec-sub{margin-left:6px;font-weight:var(--fw-regular);color:var(--tx-4)}
 
 /* ── empty ── */
@@ -278,7 +273,7 @@ button.st-plus:hover{background:var(--bg-row-hi);color:var(--tx)}
 .st-empty .btn{margin-top:12px}
 .st-empty .st-coord{font:var(--fs-sm)/18px var(--f-mono);color:var(--tx-2)}
 
-#store-screen .st-item,#store-screen .st-carousel,#store-screen .st-head,#store-screen .st-facts,#store-screen .st-empty-card{user-select:none;-webkit-user-select:none}
+#store-screen .st-item,#store-screen .st-carousel,#store-screen .st-head,#store-screen .st-byline,#store-screen .st-empty-card{user-select:none;-webkit-user-select:none}
 
 /* ── live data: loading, failure, row controls ── */
 /* Skeleton rows hold the shape of what is coming; a slow breath says it is

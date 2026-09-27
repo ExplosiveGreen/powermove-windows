@@ -1113,6 +1113,21 @@
   {@const access = permissionLines(data?.permissions ?? preview?.permissions ?? item?.permissions)}
   {@const coord = data ? coordinate(data) : preview ? coordinate(preview) : item?.origin?.coordinate ?? (account?.handle && item ? `${account.handle}/${item.localId}` : item?.localId ?? '')}
   {@const updated = data?.updated ?? preview?.updated ?? null}
+  {@const installedOlder = item?.origin && data && item.origin.version !== data.version ? item.origin.version : null}
+  <!-- The facts as a byline, each once: who, what, which version, when. -->
+  {@const facts = [
+    who ? (byYou ? 'by you' : who) : null,
+    KIND_LABEL[kind],
+    installedOlder ? `${installedOlder} installed` : version || null,
+    installedOlder ? `${version} available` : null,
+    updated ? `Updated ${/^(Today|Yesterday)$/.test(updated) ? updated.toLowerCase() : updated}` : null
+  ].filter((part): part is string => !!part)}
+  <!-- Your own page adds how it is doing, in the same quiet voice. -->
+  {@const standing = ownPage && data ? [
+    `${data.installCount.toLocaleString('en')} ${data.installCount === 1 ? 'install' : 'installs'}`,
+    data.forkCount ? `${data.forkCount.toLocaleString('en')} ${data.forkCount === 1 ? 'fork' : 'forks'}` : null,
+    data.visibility === 'public' ? 'Public' : 'Unlisted'
+  ].filter((part): part is string => !!part) : []}
   <!-- The about text only when it says more than the tagline under the name. -->
   {@const about = data?.about && data.about.trim() !== lede.trim() ? data.about : null}
 
@@ -1129,7 +1144,8 @@
         <h2>{name}</h2>
       </div>
       {#if lede}<p class="st-lede">{lede}</p>{/if}
-      {#if who}<p class="st-byline">{byYou ? 'by you' : who}</p>{/if}
+      {#if facts.length}<p class="st-byline">{#each facts as part (part)}<span>{part}</span>{/each}</p>{/if}
+      {#if standing.length}<p class="st-byline is-standing">{#each standing as part (part)}<span>{part}</span>{/each}</p>{/if}
       {#if access.length}
         <!-- What it declares it uses, beside the one action that installs it. -->
         <p class="st-access" aria-label="Access">
@@ -1220,23 +1236,6 @@
   {#if remote?.status === 'error'}
     {@render failure(remote.error, () => void loadDetail(target))}
   {/if}
-
-  <!-- The facts, each once: what it is, which version, when, and on your
-       own page how it is doing. The header carries only who made it. -->
-  <dl class="st-facts">
-    <div><dt>Kind</dt><dd>{KIND_LABEL[kind]}</dd></div>
-    {#if item?.origin && data && item.origin.version !== data.version}
-      <div><dt>Installed</dt><dd>{item.origin.version} of {data.version}</dd></div>
-    {:else if version}
-      <div><dt>Version</dt><dd>{version}</dd></div>
-    {/if}
-    {#if updated}<div><dt>Updated</dt><dd>{updated}</dd></div>{/if}
-    {#if ownPage && data}
-      <div><dt>Installs</dt><dd>{data.installCount.toLocaleString('en')}</dd></div>
-      <div><dt>Forks</dt><dd>{data.forkCount.toLocaleString('en')}</dd></div>
-      <div><dt>Visibility</dt><dd>{data.visibility === 'public' ? 'Public' : 'Unlisted'}</dd></div>
-    {/if}
-  </dl>
 
   {#if about}<p class="st-about">{about}</p>{/if}
 
