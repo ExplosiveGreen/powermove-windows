@@ -1123,20 +1123,6 @@
   {@const coord = data ? coordinate(data) : preview ? coordinate(preview) : item?.origin?.coordinate ?? (account?.handle && item ? `${account.handle}/${item.localId}` : item?.localId ?? '')}
   {@const updated = data?.updated ?? preview?.updated ?? null}
   {@const installedOlder = item?.origin && data && item.origin.version !== data.version ? item.origin.version : null}
-  <!-- The facts as a byline, each once: who, what, which version, when. -->
-  {@const facts = [
-    who ? (byYou ? 'by you' : who) : null,
-    KIND_LABEL[kind],
-    installedOlder ? `${installedOlder} installed` : version || null,
-    installedOlder ? `${version} available` : null,
-    updated ? `Updated ${/^(Today|Yesterday)$/.test(updated) ? updated.toLowerCase() : updated}` : null
-  ].filter((part): part is string => !!part)}
-  <!-- Your own page adds how it is doing, in the same quiet voice. -->
-  {@const standing = ownPage && data ? [
-    `${data.installCount.toLocaleString('en')} ${data.installCount === 1 ? 'install' : 'installs'}`,
-    data.forkCount ? `${data.forkCount.toLocaleString('en')} ${data.forkCount === 1 ? 'fork' : 'forks'}` : null,
-    data.visibility === 'public' ? 'Public' : 'Unlisted'
-  ].filter((part): part is string => !!part) : []}
   <!-- The about text only when it says more than the tagline under the name. -->
   {@const about = data?.about && data.about.trim() !== lede.trim() ? data.about : null}
 
@@ -1153,8 +1139,6 @@
         <h2>{name}</h2>
       </div>
       {#if lede}<p class="st-lede">{lede}</p>{/if}
-      {#if facts.length}<p class="st-byline">{#each facts as part (part)}<span>{part}</span>{/each}</p>{/if}
-      {#if standing.length}<p class="st-byline is-standing">{#each standing as part (part)}<span>{part}</span>{/each}</p>{/if}
       {#if access.length}
         <!-- What it declares it uses, beside the one action that installs it. -->
         <p class="st-access" aria-label="Access">
@@ -1259,9 +1243,16 @@
   {/if}
 
   {#if ownPage && data}
-    <!-- Yours on the store: every version with a way to withdraw it (how
-         it is doing is in the facts). Withdrawing asks inline, next to the
-         version. -->
+    <!-- Yours on the store: how it is doing, then every version with a way
+         to withdraw it. Withdrawing asks inline, next to the version. -->
+    <section class="st-sec">
+      <h3 class="st-sec-title">On the store</h3>
+      <div class="st-card">
+        <div class="st-kv"><span>Installs</span><b>{data.installCount.toLocaleString('en')}</b></div>
+        <div class="st-kv"><span>Forks</span><b>{data.forkCount.toLocaleString('en')}</b></div>
+        <div class="st-kv"><span>Visibility</span><b>{data.visibility === 'public' ? 'Public' : 'Unlisted'}</b></div>
+      </div>
+    </section>
     <section class="st-sec">
       <div class="st-sec-head">
         <h3>Versions</h3>
@@ -1334,7 +1325,13 @@
 
   <section class="st-sec">
     <h3 class="st-sec-title">Details</h3>
+    <!-- The facts live here, as Settings rows; the header is only the name
+         and what it does. -->
     <div class="st-card">
+      {#if who}<div class="st-kv"><span>Made by</span><b>{byYou ? 'You' : who.replace(/^by /, '')}</b></div>{/if}
+      <div class="st-kv"><span>Kind</span><b>{KIND_LABEL[kind]}</b></div>
+      {#if version}<div class="st-kv"><span>Version</span><b>{#if installedOlder}{installedOlder} installed<span class="st-kv-aside">{version} available</span>{:else}{version}{/if}</b></div>{/if}
+      {#if updated}<div class="st-kv"><span>Updated</span><b>{updated}</b></div>{/if}
       <!-- Before a first publish the Publish card already names it. -->
       {#if coord && !(item && item.group === 'yours' && !item.published)}<div class="st-kv"><span>Identifier</span><b>{coord}</b></div>{/if}
       {#if storeLineage}<div class="st-kv"><span>Forked from</span><b>{storeLineage.handle}/{storeLineage.slug}@{storeLineage.version}</b></div>{/if}
