@@ -80,6 +80,13 @@
   let showAllVersions = $state(false);
   /* The version whose Withdraw is asking "are you sure?" inline. */
   let withdrawing = $state<string | null>(null);
+  /* A developer's page: everything one handle has published. It sits over
+     the page you opened it from (Discover, a kind, the Library, an
+     extension's page), and Back returns there exactly. */
+  type ProfileFrom = { page: StorePage; detail: DetailTarget | null; search: string; scroll: number; label: string };
+  let profile = $state<{ handle: string; from: ProfileFrom } | null>(null);
+  let profileItems = $state<Loadable<StoreListing[]>>({ status: 'loading' });
+  const profileCache = new Map<string, StoreListing[]>();
 
   $effect(() => subscribeAccount((user) => {
     account = user;
@@ -89,9 +96,11 @@
 
   const query = $derived(searchText.trim());
   const pageKind = $derived(page.startsWith('kind:') ? kindOf(page.slice(5)) : null);
-  /* The Store's title doubles as Back while a kind page is up (and no search covers it). */
-  const titleBack = $derived(!!pageKind && !query);
-  const viewKey = $derived(detail ? `detail:${detail.coord ? `${detail.coord.handle}/${detail.coord.slug}` : detail.localId}` : query ? 'search' : page);
+  /* The Store's title doubles as Back on a kind page or a developer's page
+     (unless a search covers it), and names where Back goes. */
+  const titleBack = $derived((!!pageKind || !!profile) && !query);
+  const titleText = $derived(titleBack ? (profile ? profile.from.label : 'Discover') : 'Store');
+  const viewKey = $derived(detail ? `detail:${detail.coord ? `${detail.coord.handle}/${detail.coord.slug}` : detail.localId}` : query ? 'search' : profile ? `dev:${profile.handle}` : page);
   const slide = $derived(reduced() ? { duration: 0 }
     : direction === 0 ? { y: RISE, duration: PAGE_MS, easing: cubicOut }
     : { x: direction * SLIDE, duration: PAGE_MS, easing: cubicOut });
@@ -322,6 +331,7 @@
   export function open(target: StorePage = 'browse'): void {
     page = target;
     detail = null;
+    profile = null;
     direction = 0;
     searchText = '';
     if (!shown) {
@@ -411,8 +421,75 @@
     direction = id.startsWith('kind:') ? 1 : 0;
     page = id;
     detail = null;
+    profile = null;
     searchText = '';
     scrollTop();
+  }
+
+  /* ── developers ── */
+
+  /* Where Back goes from a developer's page, in the words of that place. */
+  function hereLabel(): string {
+    if (detail) return detailData?.name ?? detail.preview?.name ?? 'Back';
+    if (query) return 'Results';
+    if (page === 'library') return 'Library';
+    if (pageKind) return KIND_PLURAL[pageKind];
+    return 'Discover';
+  }
+
+  function openProfile(handle: string): void {
+    if (profile?.handle === handle && !detail) return;
+    const from: ProfileFrom = profile && !detail
+      ? profile.from
+      : { page, detail, search: searchText, scroll: scrollEl?.scrollTop ?? 0, label: hereLabel() };
+    profile = { handle, from };
+    direction = 1;
+    detail = null;
+    remote = null;
+    compare = null;
+    searchText = '';
+    void loadProfile(handle);
+    scrollTop();
+  }
+
+  function leaveProfile(): void {
+    const from = profile?.from;
+    if (!from) return;
+    profile = null;
+    direction = -1;
+    page = from.page;
+    searchText = from.search;
+    detail = from.detail;
+    if (from.detail) void loadDetail(from.detail);
+    const top = from.scroll;
+    void tick().then(() => scrollEl?.scrollTo({ top, behavior: 'instant' }));
+    keepFocus();
+  }
+
+  /* The registry has no per-developer listing, but its search matches
+     handles, so a handle's search holds everything they published: page
+     through it, most installed first, and keep only exact matches. */
+  let profileToken = 0;
+  async function loadProfile(handle: string): Promise<void> {
+    const token = ++profileToken;
+    const cached = profileCache.get(handle);
+    profileItems = cached ? { status: 'ready', value: cached } : { status: 'loading' };
+    const found: StoreListing[] = [];
+    let cursor: string | undefined;
+    for (let pageIndex = 0; pageIndex < 8; pageIndex++) {
+      const request = cursor ? { q: handle, sort: 'installs' as const, cursor } : { q: handle, sort: 'installs' as const };
+      const result = await call(() => storeBridge()?.extensions(request));
+      if (token !== profileToken) return;
+      if (!result.ok) {
+        if (!cached) profileItems = { status: 'error', error: failed(result.error) };
+        return;
+      }
+      for (const dto of result.value.items) if (dto.owner.handle.toLowerCase() === handle.toLowerCase()) found.push(toListing(dto));
+      cursor = result.value.nextCursor ?? undefined;
+      if (!cursor) break;
+    }
+    profileCache.set(handle, found);
+    profileItems = { status: 'ready', value: found };
   }
 
   /* A kind page is one level under Discover: Back (or Escape) returns to it. */
@@ -467,13 +544,20 @@
     keepFocus();
   }
 
-  /* Escape leaves a detail, then a kind page; otherwise it is the home's.
-     App shortcuts such as ⌘, keep working over the Store. */
+  /* Escape leaves a detail, then a developer's page, then a kind page;
+     otherwise it is the home's. App shortcuts such as ⌘, keep working. */
   function keydown(event: KeyboardEvent): void {
-    if (event.key !== 'Escape' || (!detail && (!pageKind || query))) return;
+    if (event.key !== 'Escape' || (!detail && (!(pageKind || profile) || query))) return;
     event.stopPropagation();
     event.preventDefault();
     if (detail) back();
+    else if (profile) leaveProfile();
+    else leaveKind();
+  }
+
+  function titleGo(): void {
+    if (!titleBack) return;
+    if (profile) leaveProfile();
     else leaveKind();
   }
 
@@ -788,12 +872,12 @@
               class="st-title-inner"
               role={titleBack ? 'button' : undefined}
               tabindex={titleBack ? 0 : undefined}
-              aria-label={titleBack ? 'Back to Discover' : undefined}
-              onclick={() => { if (titleBack) leaveKind(); }}
-              onkeydown={(event) => { if (titleBack && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); leaveKind(); } }}
+              aria-label={titleBack ? `Back to ${titleText}` : undefined}
+              onclick={titleGo}
+              onkeydown={(event) => { if (titleBack && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); titleGo(); } }}
             >
               <span class="st-title-chev" aria-hidden="true"><Icon {PM} name="chev" /></span>
-              <Scritto value={titleBack ? 'Discover' : 'Store'} />
+              <Scritto value={titleText} />
             </span>
           </h1>
           <div class="st-toolbar">
@@ -836,6 +920,34 @@
                 {/each}
               </div>
             {/if}
+
+          {:else if profile}
+            {@const dev = profile.handle}
+            <!-- A developer: who they are, then everything they publish. -->
+            <header class="st-dev-head">
+              <span class="acct-avatar st-dev-avatar" aria-hidden="true">{dev.slice(0, 1).toUpperCase()}</span>
+              <h2>{dev}</h2>
+            </header>
+            <section class="st-sec">
+              {@render head('Extensions', profileItems.status === 'ready' ? profileItems.value.length : null)}
+              {#if profileItems.status === 'loading'}
+                {@render skeleton(4)}
+              {:else if profileItems.status === 'error'}
+                {@const handle = dev}
+                {@render failure(profileItems.error, () => void loadProfile(handle))}
+              {:else if profileItems.value.length === 0}
+                <div class="st-empty" in:fade={settle}>
+                  <b>Nothing on the store</b>
+                  <span>{dev} hasn’t published anything that’s listed.</span>
+                </div>
+              {:else}
+                <div class="st-cards" in:fade={settle}>
+                  {#each profileItems.value as l (l.repoId)}
+                    {@render card(l, false)}
+                  {/each}
+                </div>
+              {/if}
+            </section>
 
           {:else if page === 'browse'}
             {#if browse.status === 'loading'}
@@ -977,7 +1089,7 @@
 <!-- A card per extension: its icon on a tile, name, what it does and who
      made it. The whole card opens it; the corner button is the one other
      target: + to install, a tick once it is here, or whatever it needs. -->
-{#snippet card(l: StoreListing)}
+{#snippet card(l: StoreListing, byline = true)}
   {@const act = listingAction(l)}
   {@const item = libraryItemFor(l.repoId, library, l)}
   {@const target = { repoId: l.repoId, releaseId: l.latestReleaseId, name: l.name }}
@@ -988,7 +1100,9 @@
     <span class="st-item-copy">
       <b>{l.name}</b>
       <span class="st-item-line">{l.tagline}</span>
-      <span class="st-item-meta"><span>by {l.publisher}</span></span>
+      {#if byline}
+        <span class="st-item-meta"><button class="st-item-dev" type="button" onclick={() => openProfile(l.publisher)}>by {l.publisher}</button></span>
+      {/if}
     </span>
     <span class="st-item-action">
       {#if !pending && act.kind === 'install'}
@@ -1022,6 +1136,7 @@
   {@const lineage = storeLineageOf(item)}
   {@const act = libraryAction(item)}
   {@const byline = item.group === 'yours' ? null : makerText(item)}
+  {@const makerHandle = 'handle' in item.maker ? item.maker.handle : null}
   <div class="st-item is-library" class:is-off={needsSetup(item) || needsTrust(item) || !item.enabled}>
     <button class="st-item-open" type="button" aria-label={`Open ${item.name}`} onclick={() => openItem(item)}></button>
     <span class="st-item-icon"><span class="st-thumb" style={itemArt(item)}></span></span>
@@ -1030,7 +1145,7 @@
       <span class="st-item-line">{item.description ?? KIND_LABEL[item.category]}</span>
       {#if byline || lineage || note}
         <span class="st-item-meta">
-          {#if byline}<span>{byline}</span>{/if}
+          {#if byline && makerHandle}<button class="st-item-dev" type="button" onclick={() => openProfile(makerHandle)}>{byline}</button>{:else if byline}<span>{byline}</span>{/if}
           {#if lineage}<span class="st-item-lineage">forked from {lineage.handle}/{lineage.slug}</span>{/if}
           {#if note}
             {#key note}
@@ -1111,6 +1226,8 @@
   {@const alsoPublish = data && item?.fork && data.repoId !== item.published?.repoId ? null : secondaryPublish(item)}
   {@const ownPage = ownsListing(data, account)}
   {@const byYou = ownPage || (!data && !preview && !!item && 'you' in item.maker)}
+  <!-- Whose page "Made by" opens: the store's publisher, when there is one. -->
+  {@const devHandle = data?.publisher ?? preview?.publisher ?? (item && 'handle' in item.maker ? item.maker.handle : null)}
   {@const storeLineage = data?.forkedFrom ?? storeLineageOf(item)}
   {@const builtinLineage = storeLineage ? undefined : builtinLineageOf(item)}
   <!-- A fork compares against the release it was forked from (P0 Q5), or
@@ -1330,7 +1447,12 @@
     <!-- The facts live here, as Settings rows; the header is only the name
          and what it does. -->
     <div class="st-card">
-      {#if who}<div class="st-kv"><span>Made by</span><b>{byYou ? 'You' : who.replace(/^by /, '')}</b></div>{/if}
+      {#if who}
+        <div class="st-kv">
+          <span>Made by</span>
+          <b>{#if devHandle}<button class="st-link st-dev-link" type="button" onclick={() => openProfile(devHandle)}>{byYou ? 'You' : devHandle}</button>{:else}{byYou ? 'You' : who.replace(/^by /, '')}{/if}</b>
+        </div>
+      {/if}
       <div class="st-kv"><span>Kind</span><b>{KIND_LABEL[kind]}</b></div>
       {#if version}<div class="st-kv"><span>Version</span><b>{#if installedOlder}{installedOlder} installed<span class="st-kv-aside">{version} available</span>{:else}{version}{/if}</b></div>{/if}
       {#if updated}<div class="st-kv"><span>Updated</span><b>{updated}</b></div>{/if}

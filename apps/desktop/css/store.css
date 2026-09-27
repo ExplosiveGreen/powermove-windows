@@ -181,9 +181,14 @@
 .st-item-meta{display:flex;min-width:0;margin-top:3px;font-size:var(--fs-sm);line-height:16px;color:var(--tx-4);white-space:nowrap}
 /* Short of room, the lineage gives way first; the state is the last thing cut. */
 .st-item-meta{overflow:hidden}
-.st-item-meta>span{flex:0 0 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
-.st-item-meta>.st-item-lineage,.st-item-meta:not(:has(>.st-item-lineage))>span:last-child{flex-shrink:1}
-.st-item-meta>span+span::before{content:"·";margin:0 5px;color:var(--tx-4);font-weight:var(--fw-regular)}
+.st-item-meta>*{flex:0 0 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.st-item-meta>.st-item-lineage,.st-item-meta:not(:has(>.st-item-lineage))>:last-child{flex-shrink:1}
+.st-item-meta>*+*::before{content:"·";margin:0 5px;color:var(--tx-4);font-weight:var(--fw-regular)}
+/* Who made it opens their page: a link above the card's own target, quiet
+   until pointed at. */
+.st-item-dev{position:relative;z-index:2;padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;white-space:nowrap;transition:color var(--dur-1)}
+.st-item-dev:hover{color:var(--tx-2)}
+.st-item-dev:focus-visible{outline:0;border-radius:2px;box-shadow:0 0 0 2px var(--ink-2)}
 .st-item-action{position:relative;z-index:2;flex:none;display:flex;align-items:center;gap:4px}
 .st-plus{display:grid;place-items:center;width:30px;height:30px;padding:0;border:0;border-radius:var(--sg-control-radius);background:var(--bg-float);color:var(--tx-2);transition:background var(--dur-1),color var(--dur-1)}
 .st-plus svg{width:13px;height:13px}
@@ -251,6 +256,17 @@ button.st-plus:hover{background:var(--bg-row-hi);color:var(--tx)}
 .st-link{padding:0;border:0;color:var(--tx-2);font:inherit;font-weight:var(--fw-medium);text-decoration:underline;text-decoration-color:var(--tx-4);text-underline-offset:2px;transition:color var(--dur-1)}
 .st-link:hover{color:var(--tx)}
 .st-link:focus-visible{outline:0;border-radius:2px;box-shadow:0 0 0 2px var(--ink-2)}
+
+/* Made by, in Details: the value's own ink, underlined only when pointed at. */
+.st-link.st-dev-link{color:var(--tx);font-weight:var(--fw-regular);text-decoration-color:transparent}
+.st-link.st-dev-link:hover{text-decoration-color:var(--tx-4)}
+
+/* ── developer ── */
+/* Their avatar (the account's flat ink, never a hue) and handle, on the
+   text edge, the way an extension's page opens on its icon and name. */
+.st-dev-head{display:flex;align-items:center;gap:16px;padding:0 var(--st-inset)}
+.acct-avatar.st-dev-avatar{--size:56px;font-size:20px;font-weight:var(--fw-medium)}
+.st-dev-head h2{min-width:0;font-size:22px;line-height:28px;font-weight:var(--fw-medium);letter-spacing:-.015em;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* Setup: one row per variable, like a Settings row. */
 .st-var{display:flex;align-items:center;gap:12px;min-height:52px;padding:10px var(--st-inset)}
