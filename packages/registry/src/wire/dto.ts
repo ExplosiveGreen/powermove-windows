@@ -1,7 +1,10 @@
 import { z } from 'zod';
 import { Category, Handle, IsoDate, Moderation, Permission, Sha1, Sha256, Slug, Uuid, VarDecl, Version, Visibility } from './common';
 
-export const PublisherDto = z.object({ id: Uuid, handle: Handle, tombstoned: z.boolean() });
+/* `verified`: Powermove vouches for who this publisher is (the blue check),
+   set only by an admin. Defaults false so a registry that predates it reads
+   as unverified. */
+export const PublisherDto = z.object({ id: Uuid, handle: Handle, tombstoned: z.boolean(), verified: z.boolean().default(false) });
 export type PublisherDto = z.infer<typeof PublisherDto>;
 export const LineageDto = z.object({ repoId: Uuid, handle: Handle, slug: Slug, releaseId: Uuid, version: Version });
 export type LineageDto = z.infer<typeof LineageDto>;

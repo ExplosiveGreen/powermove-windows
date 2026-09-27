@@ -24,7 +24,7 @@ export const me = new Hono<Env>()
     return c.json(
       {
         user: { id: u.id, name: u.name, email: u.email, image: u.image },
-        publisher: p ? { id: p.id, handle: p.handle, tombstoned: p.tombstonedAt !== null } : null,
+        publisher: p ? { id: p.id, handle: p.handle, tombstoned: p.tombstonedAt !== null, verified: p.verifiedAt !== null } : null,
         settings: { rememberInstalls: settings?.rememberInstalls ?? true },
       } satisfies MeDto,
     );
@@ -51,7 +51,7 @@ export const me = new Hono<Env>()
         await tx.update(user).set({ username: handle, displayUsername: handle }).where(eq(user.id, s.userId));
         return p;
       });
-      return c.json({ publisher: { id: publisher.id, handle: publisher.handle, tombstoned: false } });
+      return c.json({ publisher: { id: publisher.id, handle: publisher.handle, tombstoned: false, verified: publisher.verifiedAt !== null } });
     } catch (e) {
       if (e instanceof ApiError) {
         throw e;

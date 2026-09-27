@@ -86,7 +86,7 @@ export const adminRoutes = new Hono<Env>()
        return p!;
      });
      console.log('admin seeded publisher', { handle: body.handle, userId: body.userId });
-     return c.json({ publisher: { id: publisher.id, handle: publisher.handle, tombstoned: false } }, 201);
+     return c.json({ publisher: { id: publisher.id, handle: publisher.handle, tombstoned: false, verified: publisher.verifiedAt !== null } }, 201);
    } catch (e) {
      if (e instanceof ApiError) throw e;
      const code = (e as { code?: string; cause?: { code?: string } }).code ?? (e as { cause?: { code?: string } }).cause?.code;
