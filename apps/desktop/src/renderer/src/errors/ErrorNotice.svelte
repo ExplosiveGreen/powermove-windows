@@ -1,12 +1,13 @@
 <script lang="ts">
+  import Markdown from '../panels/agent/Markdown.svelte';
   import type { Snippet } from 'svelte';
   import ErrorFix from './ErrorFix.svelte';
   import ErrorLog from './ErrorLog.svelte';
   import { presentError, type NoticeKind } from './presentation';
   /* One shape for both: an alert is the same notice with a softer marker and
      no diagnostics, because the agent's own account is the whole story. */
-  let { error, live = true, kind = 'error', actions, fallbackTitle, onupdated }: {
-    error: unknown; live?: boolean; kind?: Exclude<NoticeKind, 'plain'>; actions?: Snippet;
+  let { error, markdown = false, live = true, kind = 'error', actions, fallbackTitle, onupdated }: {
+    error: unknown; markdown?: boolean; live?: boolean; kind?: Exclude<NoticeKind, 'plain'>; actions?: Snippet;
     /** Names the failure when the text isn't one presentError recognises. */
     fallbackTitle?: string;
     onupdated?: (version: string) => void;
@@ -21,11 +22,11 @@
 
 <div class="error-notice" class:is-alert={alert} role={live && !alert ? 'alert' : undefined}>
   {#if alert}
-    <p class="alert-text"><span class="error-marker" aria-hidden="true">!</span>{presentation.details || presentation.message}</p>
+    <div class="alert-text"><span class="error-marker" aria-hidden="true">!</span><div>{#if markdown}<Markdown text={presentation.details || presentation.message} />{:else}{presentation.details || presentation.message}{/if}</div></div>
   {:else}
     <div class="error-heading"><span class="error-marker" aria-hidden="true">!</span><strong>{presentation.title}</strong></div>
     <div class="error-body">
-      <p>{presentation.message}</p>
+      {#if markdown}<Markdown text={presentation.message} />{:else}<p>{presentation.message}</p>{/if}
       <ErrorFix {presentation} {onupdated} />
     </div>
   {/if}

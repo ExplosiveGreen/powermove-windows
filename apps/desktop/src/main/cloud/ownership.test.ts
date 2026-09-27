@@ -10,7 +10,7 @@ const OTHER = '77777777-7777-4777-8777-777777777777';
 function me(publisherId: string | null): MeDto {
   return {
     user: { id: '55555555-5555-4555-8555-555555555555', name: null, email: 'jude@example.com', image: null },
-    publisher: publisherId ? { id: publisherId, handle: 'jude', tombstoned: false } : null,
+    publisher: publisherId ? { id: publisherId, handle: 'jude', tombstoned: false, verified: false } : null,
     settings: { rememberInstalls: true }
   };
 }

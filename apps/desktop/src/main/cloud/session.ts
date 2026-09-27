@@ -97,9 +97,11 @@ export function createCloudSession(options: CloudSessionOptions): CloudSession {
       secret = null;
       cache = null;
       try {
+        // Do not touch Keychain until there is actually a saved token to read.
+        const sealed = await readFile(binFile);
         const storage = options.safeStorage();
         if (storage.isEncryptionAvailable()) {
-          const parsed = Secret.safeParse(JSON.parse(storage.decryptString(await readFile(binFile))));
+          const parsed = Secret.safeParse(JSON.parse(storage.decryptString(sealed)));
           if (parsed.success) secret = parsed.data;
         }
       } catch {
@@ -120,7 +122,7 @@ export function createCloudSession(options: CloudSessionOptions): CloudSession {
     async save(dto, provider) {
       const storage = options.safeStorage();
       if (!storage.isEncryptionAvailable()) {
-        throw new ApiError({ error: 'internal', detail: 'Secure storage is unavailable, so Powermove can’t keep you signed in. Unlock your Mac and try again.' });
+        throw new ApiError({ error: 'internal', detail: 'Powermove couldn’t access secure storage to save your sign-in. Allow Powermove access if macOS asks. If you denied access, quit and reopen Powermove before trying again.' });
       }
       const next: Secret = { origin: options.origin(), token: dto.token, expiresAt: dto.expiresAt };
       await writeAtomic(binFile, storage.encryptString(JSON.stringify(next)));

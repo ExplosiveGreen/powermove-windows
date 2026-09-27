@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { openProjectPicker } from './project-picker';
   import { tick, untrack } from 'svelte';
   import { fade, fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
@@ -889,11 +890,9 @@
               <Icon {PM} name="search" />
               <input type="search" placeholder="Search extensions" aria-label="Search extensions" maxlength="120" bind:value={searchText} />
             </label>
-            {#if page === 'library'}
               <button class="st-add" type="button" onclick={publishMenu}>
                 <Icon {PM} name="plus" /><span>Publish</span>
               </button>
-            {/if}
           </div>
         </header>
       {/if}
@@ -1082,7 +1081,16 @@
   {:else if act.quiet}
     <span class="st-installed">{act.label}</span>
   {:else}
-    <button class={cls} class:pri={act.primary} type="button" disabled={act.disabled} onclick={() => run(act, item, listing)}>{act.label}</button>
+    <button class={cls} class:pri={act.primary} type="button" disabled={act.disabled} onclick={(event) => {
+      if (act.kind === 'open' && item) openProjectPicker(event.currentTarget, PM, async (id) => {
+        if (!await PM.openProjectHere?.(id)) throw new Error('This project is open in another window. Open the extension from that window.');
+        PM.ProjectsScreen?.hide?.();
+        const panels = PM.Kernel?.panels?.entries?.().filter((entry: any) => entry.ownerId === item.localId) ?? [];
+        for (const panel of panels) PM.LibraryUI?.reveal?.(panel.id);
+        if (!panels.length && item.category === 'effects') PM.LibraryUI?.reveal?.('effects');
+      });
+      else run(act, item, listing);
+    }}>{act.label}</button>
   {/if}
 {/snippet}
 

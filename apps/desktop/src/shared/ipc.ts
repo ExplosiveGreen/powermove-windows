@@ -269,6 +269,8 @@ export interface CodexRunRequest {
   projectId: string; // PROJECT_ID
   projectName: string;
   projectJSON: string | null; // full project snapshot for autonomous mode
+  /** App-wide extension work; never grants access to a live composition. */
+  context?: 'app' | 'project';
   attachments: CodexAttachment[];
   consentToken: string | null; // required when access === 'computer'
 }

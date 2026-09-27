@@ -61,3 +61,9 @@ describe('wordsFromRuns', () => {
     expect(words.map((word) => [word.key, word.text])).toEqual([['0-0', 'a'], ['0-1', ' '], ['0-2', 'b'], ['1', 'x y']]);
   });
 });
+
+ it('keeps inline code in one element and handles escaped delimiters', () => {
+   expect(wordsFromRuns(inlineRuns('`bun run test`'))).toEqual([{text: 'bun run test', c: true, key: '0'}]);
+   expect(inlineRuns('``a `tick` here``')).toEqual([{text: 'a `tick` here', c: true}]);
+   expect(inlineRuns(String.raw`\*literal\*`)).toEqual([{text: '*literal*'}]);
+ });

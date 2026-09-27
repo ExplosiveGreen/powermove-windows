@@ -2,7 +2,7 @@ import type { EffectDefinition, PowermoveAPI } from 'powermove';
 
 // Keep the complete definition available for validate_effect before staging.
 export const definition: EffectDefinition = {
-  id: 'gradient-tint', label: 'Gradient Tint', group: 'Stylize',
+  id: 'gradient-tint.effect', label: 'Gradient Tint', group: 'Stylize',
   params: [
     { k: 'startColor', label: 'Start Color', type: 'color', def: '#ff3366' },
     { k: 'endColor', label: 'End Color', type: 'color', def: '#3366ff' },

@@ -158,56 +158,8 @@
     return () => offs.forEach((off) => off?.());
   });
 
-  /* Electron carves the tab strip out of the titlebar's native drag region
-     using rectangles it derives from layout. Those rectangles can go stale
-     (the strip is absolutely centred and changes width with every rename or
-     open tab), and a stale rectangle turns a click on a tab into a window
-     drag that the page never sees. Flipping the titlebar's app-region for
-     one frame forces Chromium to recompute and resend the regions. Do it
-     whenever the strip changes shape, the window resizes, or the pointer
-     arrives on the titlebar, so the regions are fresh before any click. */
-  let dragRegionFrame = 0;
-  function refreshDragRegions(): void {
-    if (dragRegionFrame) return;
-    const titlebar = document.getElementById('titlebar');
-    if (!titlebar) return;
-    titlebar.style.setProperty('-webkit-app-region', 'no-drag');
-    dragRegionFrame = window.requestAnimationFrame(() => {
-      dragRegionFrame = 0;
-      titlebar.style.removeProperty('-webkit-app-region');
-    });
-  }
-
-  $effect(() => {
-    refreshToken;
-    activeProjectId;
-    homeOpen;
-    refreshDragRegions();
-  });
-
-  $effect(() => {
-    const titlebar = document.getElementById('titlebar');
-    const tabs = document.getElementById('tabs');
-    if (!titlebar) return;
-    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(() => refreshDragRegions()) : null;
-    if (tabs) observer?.observe(tabs);
-    observer?.observe(titlebar);
-    let lastEnter = 0;
-    const onEnter = () => { const now = performance.now(); if (now - lastEnter > 250) { lastEnter = now; refreshDragRegions(); } };
-    titlebar.addEventListener('pointerenter', onEnter);
-    titlebar.addEventListener('pointermove', onEnter);
-    window.addEventListener('resize', refreshDragRegions);
-    window.addEventListener('focus', refreshDragRegions);
-    return () => {
-      observer?.disconnect();
-      titlebar.removeEventListener('pointerenter', onEnter);
-      titlebar.removeEventListener('pointermove', onEnter);
-      window.removeEventListener('resize', refreshDragRegions);
-      window.removeEventListener('focus', refreshDragRegions);
-      if (dragRegionFrame) window.cancelAnimationFrame(dragRegionFrame);
-    };
-  });
-
+  // Keep Electron's CSS drag region stable. Interactive controls explicitly
+  // opt out; toggling the entire titlebar on pointer entry can swallow drags.
   $effect(() => {
     const titlebar = document.getElementById('titlebar');
     titlebar?.addEventListener('pointerdown', startWindowDrag as EventListener);

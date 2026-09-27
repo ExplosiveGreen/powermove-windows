@@ -21,7 +21,7 @@ export const COMPATIBLE_WORKSPACE_TOOLS: readonly PowermoveAgentToolSpec[] = [
 ];
 
 export class CompatibleWorkspace {
-  constructor(readonly layout: AgentWorkspace, readonly access: 'project' | 'computer') {}
+  constructor(readonly layout: AgentWorkspace, readonly access: 'project' | 'computer', readonly context: 'app' | 'project' = 'project') {}
 
   /** Resolve existing ancestors too, so symlinks cannot redirect file writes. */
   private async resolve(file: unknown): Promise<string> {
@@ -98,6 +98,10 @@ export class CompatibleWorkspace {
       || !Array.isArray(value.extensions) || value.extensions.length > 32
       || !Array.isArray(value.artifacts) || !Array.isArray(value.notes) || !Array.isArray(value.externalActions)) {
       throw new Error('complete_task requires summary, commands, artifacts, extensions, notes and externalActions matching its schema.');
+    }
+    if (this.context === 'app' && ((value.commands as unknown[]).length ||
+      (value.artifacts as unknown[]).some((item: any) => item?.importToTimeline === true))) {
+      throw new Error('No project is attached. Return commands: [] and do not import artifacts to a timeline.');
     }
     const extensions = value.extensions.map((item: any) => {
       if (!item || typeof item.id !== 'string' || !EXTENSION_ID.test(item.id)

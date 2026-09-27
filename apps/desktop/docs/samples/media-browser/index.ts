@@ -23,7 +23,7 @@ export const mockMediaSource: MediaSource = async () => [
 
 export default function activate(api: PowermoveAPI): void {
   api.panels.register({
-    id: 'media-browser',
+    id: 'media-browser.panel',
     title: 'Media Browser',
     size: 240,
     build(body) {
@@ -37,11 +37,11 @@ export default function activate(api: PowermoveAPI): void {
     id: 'media-browser.open',
     label: 'Show Media Browser',
     category: 'Panels',
-    run: () => api.panels.open('media-browser', { dock: 'left', index: 0 })
+    run: () => api.panels.open('media-browser.panel', { dock: 'left', index: 0 })
   });
 
   // Indexed placement is deterministic even when the workspace already has
   // other left-docked panels. This runs on every launch; the host ignores it
   // once the user has closed the panel, so their layout is never undone.
-  api.panels.open('media-browser', { dock: 'left', index: 0 });
+  api.panels.open('media-browser.panel', { dock: 'left', index: 0 });
 }

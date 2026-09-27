@@ -116,7 +116,7 @@ input::placeholder,textarea::placeholder{color:var(--tx-4)}
   --titlebar-h:44px;--traffic-inset:96px;
   height:var(--titlebar-h);flex:0 0 var(--titlebar-h);display:flex;align-items:center;gap:8px;
   padding:0 var(--pad) 0 var(--traffic-inset);
-  position:relative;z-index:40;-webkit-app-region:no-drag;
+  position:relative;z-index:40;-webkit-app-region:drag;
 }
 /* The tool strip sits between two flexible drag spacers inside a rail that
    spans the window, so it is centred on the window without a transform and
@@ -137,7 +137,7 @@ input::placeholder,textarea::placeholder{color:var(--tx-4)}
 .titlebar-drag-traffic{position:absolute;left:0;top:0;bottom:0;width:var(--traffic-inset);flex:none}
 /* Served to a browser there are no traffic lights to leave room for. */
 .remote-app #titlebar{--traffic-inset:var(--pad)}
-#titlebar button,#titlebar input,#titlebar a{-webkit-app-region:no-drag}
+#titlebar button,#titlebar input,#titlebar a,#titlebar [role="button"]{-webkit-app-region:no-drag}
 .project-strip-btn{width:26px;height:26px;flex:none;display:grid;place-items:center;border-radius:var(--r-sm);color:var(--tx-3);transition:background var(--dur-1),color var(--dur-1),transform var(--dur-1) var(--ease)}
 .project-strip-btn:hover{background:var(--bg-row-hi);color:var(--tx)}
 .project-strip-btn:active{transform:scale(.94)}
@@ -1118,7 +1118,7 @@ body:has(#projects-screen.on) #body,body:has(#projects-screen.on) #status{visibi
 /* One sidebar language across the home, the Store and Settings: medium rows, 15px icons in the quiet ink, a filled selection. */
 .ps-nav{display:flex;flex-direction:column;gap:2px}.ps-navbtn{height:32px;width:100%;display:flex;align-items:center;gap:9px;padding:0 9px;border-radius:var(--r-md);color:var(--tx-2);font-size:var(--fs-md);font-weight:var(--fw-medium);text-align:left;transition:background var(--dur-1),color var(--dur-1)}
 .ps-navs{position:relative;display:flex;flex-direction:column;gap:12px}
-.ps-navbtn{position:relative;z-index:1}.ps-navbtn:hover{color:var(--tx)}.ps-navbtn.on{color:var(--tx)}
+.ps-navbtn{position:relative;z-index:1}.ps-navbtn:hover{background:var(--ink-1);color:var(--tx)}.ps-navbtn.on{background:var(--ink-2);color:var(--tx)}
 /* Sidebar highlight: one layer that glides between rows (controls/nav-glide.ts). */
 .nav-glider{position:absolute;left:0;top:0;width:0;height:0;opacity:0;pointer-events:none;border-radius:var(--r-md);background:var(--ink-2);transition:transform 220ms var(--nav-glide-ease),width 220ms var(--nav-glide-ease),height 220ms var(--nav-glide-ease),opacity 150ms ease}
 .nav-glider.on{opacity:1}

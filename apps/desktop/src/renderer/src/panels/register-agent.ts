@@ -7,8 +7,11 @@ import {
   type AgentUpdateOptions
 } from './agent/agent-state.svelte';
 import { registerSveltePanel } from './registerSveltePanel';
+import { installAgentShell } from './agent-shell';
 
 export interface AgentLegacyBridge {
+  openGlobal?(): void;
+  repairExtension?(request: { id: string; name?: string; diagnostics?: string[] }): Promise<boolean>;
   newThread?(): void;
   switchThread?(id: string): void;
   deleteThread?(id: string): void;
@@ -53,6 +56,8 @@ export function registerAgentPanel(PM: LegacyPM, bridge: AgentLegacyBridge): voi
   };
 
   PM.AgentUI = {
+    openGlobal: bridge.openGlobal,
+    repairExtension: bridge.repairExtension,
     newThread: bridge.newThread,
     switchThread: bridge.switchThread,
     deleteThread: bridge.deleteThread,
@@ -121,5 +126,6 @@ export function registerAgentPanel(PM: LegacyPM, bridge: AgentLegacyBridge): voi
     noscroll: true,
     component: AgentPanel
   });
+  if (typeof document !== 'undefined' && document.body) installAgentShell(PM);
   PM.AgentUI.update();
 }

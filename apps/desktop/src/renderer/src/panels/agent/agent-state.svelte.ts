@@ -81,6 +81,9 @@ export interface AgentSnapshot {
   steps: AgentStep[];
   stepsExpanded: boolean;
   scope: string;
+  /** The thread's execution context, independent of the screen currently visible. */
+  context?: 'app' | 'project';
+  projectName?: string;
   autoApplyPanels: boolean;
   provider: string;
   model: string;
@@ -128,6 +131,8 @@ const EMPTY_SNAPSHOT: AgentSnapshot = {
   steps: [],
   stepsExpanded: false,
   scope: 'workspace',
+  context: 'app',
+  projectName: '',
   autoApplyPanels: true,
   provider: 'chatgpt',
   model: 'gpt-5.6-sol',

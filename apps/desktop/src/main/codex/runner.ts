@@ -105,6 +105,8 @@ export function isCodexRunRequest(value: unknown): value is CodexRunRequest {
   if (value.provider !== undefined && !isOneOf(value.provider, PROVIDERS)) return false;
   if (value.threadId !== undefined && (!isString(value.threadId) || !/^[A-Za-z0-9_-]{1,120}$/.test(value.threadId))) return false;
   if (!isOneOf(value.mode, MODES)) return false;
+  if (value.context !== undefined && !isOneOf(value.context, ['app', 'project'] as const)) return false;
+  if (value.context === 'app' && (value.mode !== 'autonomous' || value.access !== 'project')) return false;
   if (!isString(value.prompt, LIMITS.codexPromptChars) || value.prompt.length === 0) return false;
   if (!(value.schema === null || isRecord(value.schema))) return false;
   if (!isArrayOf(value.images, LIMITS.codexImages, (image): image is Uint8Array =>
@@ -113,9 +115,11 @@ export function isCodexRunRequest(value: unknown): value is CodexRunRequest {
   if (!(value.reasoningEffort === null || isOneOf(value.reasoningEffort, EFFORTS))) return false;
   if (!isOneOf(value.access, ACCESS)) return false;
   if (!isString(value.projectId) || !PROJECT_ID.test(value.projectId)) return false;
+  if (value.context === 'app' && value.projectId !== 'powermove-global') return false;
   if (!isString(value.projectName)) return false;
   if (!(value.projectJSON === null || (isString(value.projectJSON) &&
     utf8Bytes(value.projectJSON) <= LIMITS.codexProjectJsonBytes))) return false;
+  if (value.context === 'app' && value.projectJSON !== '{}') return false;
   if (!isArrayOf(value.attachments, LIMITS.codexAttachments, (attachment): attachment is { name: string; data: Uint8Array } =>
     isRecord(attachment) && isString(attachment.name) &&
     isBytes(attachment.data))) return false;
@@ -434,6 +438,7 @@ export class CodexRunner {
             projectName: req.projectName,
             artifactPath: `artifacts/${layout.runId}`,
             access: authority,
+            context: req.context,
             extensionsDir: layout.extensionsDir
           }),
           prompt,
@@ -488,6 +493,10 @@ export class CodexRunner {
           parsed = value;
         } catch {
           throw new AgentResultValidationError('The autonomous agent returned an invalid result. Return a JSON object matching the result schema.');
+        }
+        if (req.context === 'app' && (Array.isArray(parsed.commands) && parsed.commands.length
+          || Array.isArray(parsed.artifacts) && parsed.artifacts.some((item: any) => item?.importToTimeline === true))) {
+          throw new AgentResultValidationError('No project is attached. Return commands: [] and do not import artifacts to a timeline.');
         }
         const requested = Array.isArray(parsed.artifacts) ? parsed.artifacts : [];
         parsed.artifacts = await collectArtifacts(layout.runDirectory, layout.runId, requested);

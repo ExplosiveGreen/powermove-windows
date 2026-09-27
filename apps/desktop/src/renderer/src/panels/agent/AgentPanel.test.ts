@@ -229,7 +229,7 @@ describe('AgentPanel', () => {
     expect(target.querySelector<HTMLDivElement>('.agent-inline-prompt')?.textContent).toBe('Make it slower');
   });
 
-  it('keeps setup visible while checking another provider and restores the saved draft', async () => {
+  it('keeps the connection gate and queued draft visible while checking another provider', async () => {
     const chatgpt = (window as any).powermove.chatgpt;
     vi.mocked(chatgpt.status).mockResolvedValue({ state: 'disconnected', email: null, planType: null, detail: null });
     let resolveStatus!: (status: any) => void;
@@ -244,7 +244,8 @@ describe('AgentPanel', () => {
     });
     flushSync(() => setAgentSnapshot(snapshot({ provider: 'claude', composerDraft: 'Animate my title' })));
     expect(target.querySelector('.agent-connect-gate')?.textContent).toContain('Checking connection…');
-    expect(target.querySelector('[aria-label="Message composer"]')).toBeNull();
+    expect(target.querySelector('[aria-label="Message composer"]')).toBeTruthy();
+    expect(target.querySelector<HTMLDivElement>('.agent-inline-prompt')?.textContent).toBe('Animate my title');
     expect(target.querySelector<HTMLButtonElement>('.agent-connect-button')?.disabled).toBe(true);
     resolveStatus({ state: 'connected', email: null, planType: null, detail: null });
     await vi.waitFor(() => {
@@ -621,6 +622,21 @@ describe('AgentPanel', () => {
     expect(button).toBeUndefined();
     expect(target.textContent).toContain("Broken Mod didn't load: Unexpected token");
     expect(PM.SpatialAssistant.requestFix).not.toHaveBeenCalled();
+  });
+
+  it('renders Markdown in completion reviews and critiques', () => {
+    renderPanel(snapshot({
+      legacyPhase: 'result',
+      run: {
+        autonomous: true, changed: true,
+        review: { message: 'Sandbox **passed** for `random-hello-world`.', critique: 'Updated `random-hello-world.panel`.\n\n- Preserved **permissions**' }
+      }
+    }));
+    const details = target.querySelector('.agent-run-details')!;
+    expect([...details.querySelectorAll('code')].map(node => node.textContent)).toEqual(['random-hello-world', 'random-hello-world.panel']);
+    expect(details.querySelector('.agent-md-li')).not.toBeNull();
+    expect(details.textContent).not.toContain('`');
+    expect(details.textContent).not.toContain('**');
   });
 
   it('shows autonomous results once in the conversation without a completion card', () => {

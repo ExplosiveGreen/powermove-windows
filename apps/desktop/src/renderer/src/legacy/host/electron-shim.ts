@@ -99,6 +99,7 @@ export function install(PM: PMRegistry): void {
       model: typeof body.model === 'string' && body.model ? body.model : null,
       reasoningEffort,
       access,
+      context: body.context === 'app' ? 'app' : 'project',
       projectId: String(body.projectId || (mode === 'editor' ? 'editor' : '')),
       projectName: String(body.projectName || ''),
       projectJSON: typeof body.projectJSON === 'string' && body.projectJSON ? body.projectJSON : null,

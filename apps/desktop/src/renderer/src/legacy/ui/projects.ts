@@ -3,7 +3,6 @@ import type { PMRegistry } from '../registry';
 import { subscribeForkUpdates, updateAll, type ForkUpdate } from '../../shell/fork-updates';
 import { installUpdate, subscribeAppUpdates } from '../../shell/app-updates';
 import type { AppUpdateState } from '../../../../shared/ipc';
-import { mountNavGlide } from '../../controls/nav-glide';
 import { mount, unmount } from 'svelte';
 import AccountButton from '../../cloud/AccountButton.svelte';
 
@@ -92,9 +91,7 @@ function ensure() {
   S.offAppUpdate = subscribeAppUpdates(paintAppUpdate);
   S.storeBtn = h('button.ps-navbtn', { onclick: () => { selectSection('store'); paint(); } }, PM.icon('basket'), h('span', 'Store'));
   const store = h('div.ps-nav', S.storeBtn);
-  /* One nav block so the highlight can glide from the sections to Store. */
   const nav = h('div.ps-navs', S.nav, store);
-  S.offGlide = mountNavGlide(nav, { row: '.ps-navbtn', selected: '.on' });
   /* Who you are on Powermove Cloud, pinned to the foot of the sidebar. */
   S.account = h('div.ps-account');
   S.accountButton = mount(AccountButton, { target: S.account, props: { PM } });
@@ -365,7 +362,6 @@ const offOpen = PM.bus.on('projects:open', () => { if (PM.ProjectsScreen.isOpen)
 PM.__disposeProjectsScreen = () => {
   S.offUpdates?.(); S.offUpdates = null;
   S.offAppUpdate?.(); S.offAppUpdate = null;
-  S.offGlide?.(); S.offGlide = null;
   if (S.accountButton) void unmount(S.accountButton); S.accountButton = null;
   offOpen?.();
   S.el?.remove?.();

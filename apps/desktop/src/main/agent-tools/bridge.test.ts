@@ -123,6 +123,39 @@ describe('native Powermove agent tool bridge', () => {
     expect(owner.requests.at(-1)?.tool).toBe('__finish_run');
   });
 
+  it('rejects forged composition calls in an app-only extension run', async () => {
+    const ipc = new FakeIpcMain();
+    const owner = new FakeWebContents(ipc);
+    const bridge = new PowermoveAgentToolBridge(ipc as never, {
+      command: process.execPath,
+      mcpServerPath: path.join(__dirname, 'mcp-server.mjs'),
+      timeoutMs: 2_000
+    });
+    bridges.push(bridge);
+    const session = await bridge.openSession({ runId: 'app-extension-run', owner: owner as never, baseRevision: 0, context: 'app' });
+    const child = spawn(session.mcpConfig.command, session.mcpConfig.args, {
+      env: { ...process.env, ...session.mcpConfig.env },
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    children.push(child);
+    await rpc(child, { jsonrpc: '2.0', id: 1, method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } } });
+    const listed = await rpc(child, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
+    expect(listed.result.tools.map((tool: any) => tool.name)).toEqual([
+      'fork_builtin_extension', 'validate_effect', 'stage_fork_rebase'
+    ]);
+    for (const name of ['get_project_state', 'apply_commands']) {
+      const denied = await rpc(child, { jsonrpc: '2.0', id: name, method: 'tools/call',
+        params: { name, arguments: name === 'apply_commands' ? { commands: ['{}'] } : {} } });
+      expect(denied.result.isError).toBe(true);
+      await expect(bridge.callTool(session, name, {})).rejects.toThrow('no project attached');
+    }
+    expect(owner.requests).toEqual([]);
+    const allowed = await bridge.callTool(session, 'validate_effect', { definition: {} });
+    expect(allowed.ok).toBe(true);
+    expect(owner.requests.map(item => item.tool)).toEqual(['validate_effect']);
+  });
+
   it('forks a built-in into the current run staging directory without calling the renderer', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'powermove-agent-fork-'));
     temporaryDirectories.push(root);

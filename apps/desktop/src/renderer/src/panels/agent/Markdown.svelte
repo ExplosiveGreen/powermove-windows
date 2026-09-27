@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { blocksFromMarkdown, wordsFromRuns, type Block, type Run } from './markdown';
+  import { blocksFromMarkdown, wordsFromRuns, type Run } from './markdown';
   import { revealText } from './text-reveal';
   import { bridge } from '../../kernel/bridge';
 
@@ -25,7 +25,7 @@
   }
 </script>
 
-{#snippet words(runs: Run[], live: boolean)}{#each wordsFromRuns(runs) as word (word.key)}{#if word.href}<a href={word.href} class="agent-md-link" class:is-bold={word.b} onclick={(event) => openLink(event, word.href!)}>{word.text}</a>{:else}<span use:revealText={animated && live && Boolean(word.text.trim())} class:agent-trace-code={word.c} class:is-bold={word.b} class:is-italic={word.i}>{word.text}</span>{/if}{/each}{/snippet}
+{#snippet words(runs: Run[], live: boolean)}{#each wordsFromRuns(runs) as word (word.key)}{#if word.href}<a href={word.href} class="agent-md-link" class:is-bold={word.b} onclick={(event) => openLink(event, word.href!)}>{word.text}</a>{:else if word.c}<code class="agent-trace-code">{word.text}</code>{:else}<span use:revealText={animated && live && Boolean(word.text.trim())} class:is-bold={word.b} class:is-italic={word.i}>{word.text}</span>{/if}{/each}{/snippet}
 
 {#each blocks as block, bi (bi)}
   {@const live = streaming && bi === last}
@@ -46,6 +46,8 @@
 {/each}
 
 <style>
+  .agent-trace-code { border-radius: var(--r-xs); padding: 0 4px; background: var(--ink-1); font-family: var(--f-mono); font-size: .92em; box-decoration-break: clone; }
+  :is(.agent-md-p, .agent-md-h, .agent-md-li, .agent-md-quote, .agent-md-pre) + :is(.agent-md-p, .agent-md-h, .agent-md-quote, .agent-md-pre) { margin-top: .65em; }
   .agent-md-p, .agent-md-h { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
   .agent-md-h { font-weight: var(--fw-semibold); color: var(--tx); }
   .agent-md-h[data-level="1"], .agent-md-h[data-level="2"] { font-size: 1.08em; }

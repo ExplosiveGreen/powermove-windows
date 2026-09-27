@@ -1,12 +1,12 @@
 <script lang="ts">
   import { tick } from 'svelte';
+  import { AGENT_FEATURES } from '../panels/agent-features';
   import Icon from '../panels/Icon.svelte';
   import { createChatGPTSettingsControl, createClaudeSettingsControl } from '../legacy/ui/chatgpt-settings';
   import { createCompatibleSettingsControl } from '../legacy/ui/compatible-settings';
   import { createExtensionSettingsControl } from '../legacy/ui/extension-settings';
   import { createProjectSettingsControl, type ProjectSettingsBridge } from '../legacy/ui/project-settings';
   import { mountSquircles } from './squircle';
-  import { mountNavGlide } from '../controls/nav-glide';
   import { clearSettingsSearch, searchSettings } from './search';
   import Avatar from '../cloud/Avatar.svelte';
   import { applyAccount, cloudBridge, openSignIn, signOut, subscribeAccount, type CloudUser } from '../cloud/account';
@@ -60,6 +60,7 @@
   let searchText = $state('');
   const query = $derived(searchText.trim().toLowerCase());
   let themeMode = $state<string>('system');
+  let agentPresentation = $state<'floating' | 'docked'>('docked');
   /* Reopening last session's windows is the default; the store only ever holds
      the opt-out, so an untouched profile needs no migration. */
   let restoreWindows = $state(true);
@@ -88,6 +89,10 @@
   $effect(() => subscribeAccount((user, me) => {
     account = user;
     rememberInstalls = me?.settings.rememberInstalls ?? true;
+  }));
+
+  $effect(() => PM.bus?.on?.('agent:presentation', () => {
+    agentPresentation = PM.AgentShell?.getPreference?.() ?? 'docked';
   }));
 
   const hasProject = $derived(!!controls?.project);
@@ -181,6 +186,7 @@
     build();
     void loadRegistry();
     themeMode = PM.theme?.mode ?? 'system';
+    agentPresentation = PM.AgentShell?.getPreference?.() ?? 'docked';
     restoreWindows = PM.store?.get?.('restoreWindows', true) !== false;
     autoDownloadCloudMedia = PM.store?.get?.('autoDownloadCloudMedia', false) === true;
     const wanted = target ?? (controls?.project ? 'project' : 'general');
@@ -308,15 +314,17 @@
     return { update: place };
   }
 
-  function glide(node: HTMLElement) {
-    const unmount = mountNavGlide(node, { row: '.sg-navbtn', selected: '.on' });
-    return { destroy: unmount };
-  }
-
   function applyAppearance(event: Event): void {
     const value = (event.currentTarget as HTMLSelectElement).value;
     themeMode = value;
     PM.theme?.apply?.(value);
+  }
+
+  function applyAgentPresentation(event: Event): void {
+    const next = (event.currentTarget as HTMLSelectElement).value;
+    if (next !== 'floating' && next !== 'docked') return;
+    agentPresentation = next;
+    PM.AgentShell?.setMode?.(next);
   }
 
   /* Account actions run in main; failures come back as results, never throws. */
@@ -405,7 +413,7 @@
         bind:value={searchText}
       />
     </label>
-    <nav class="sg-nav" aria-label="Settings sections" use:glide>
+    <nav class="sg-nav" aria-label="Settings sections">
       {#each groups as group (group.title)}
         <div class="sg-nav-group">
           <span class="sg-nav-title">{group.title}</span>
@@ -477,6 +485,23 @@
                   </div>
                 </div>
               </section>
+              {#if AGENT_FEATURES.floating}
+              <section class="sg-section">
+                <h3 class="sg-section-title">Agent</h3>
+                <div class="sg-group">
+                  <div class="settings-row">
+                    <div class="settings-copy">
+                      <b>Agent presentation</b>
+                      <span>Keep the agent in a movable chat or in the editor dock.</span>
+                    </div>
+                    <select class="settings-select" aria-label="Agent presentation" value={agentPresentation} onchange={applyAgentPresentation}>
+                      <option value="floating">Floating</option>
+                      <option value="docked">Docked</option>
+                    </select>
+                  </div>
+                </div>
+              </section>
+              {/if}
               <section class="sg-section">
                 <h3 class="sg-section-title">Media</h3>
                 <div class="sg-group">

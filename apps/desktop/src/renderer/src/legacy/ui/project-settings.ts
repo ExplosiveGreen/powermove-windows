@@ -248,6 +248,8 @@ export function createProjectSettingsControl(bridge: ProjectSettingsBridge): Pro
     backgroundControl = backgroundSwatch;
   }
   if (backgroundControl) {
+    backgroundControl.classList.add('settings-background-control');
+    backgroundControl.style.width = '170px';
     composition.body.append(
       row('Background', 'Colour shown behind every layer of the composition.', backgroundControl).element
     );

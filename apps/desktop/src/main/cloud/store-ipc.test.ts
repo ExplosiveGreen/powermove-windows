@@ -221,7 +221,7 @@ describe('library', () => {
   });
   const me = (publisherId: string | null): MeDto => ({
     user: { id: '55555555-5555-4555-8555-555555555555', name: null, email: 'j@example.com', image: null },
-    publisher: publisherId ? { id: publisherId, handle: 'jude', tombstoned: false } : null,
+    publisher: publisherId ? { id: publisherId, handle: 'jude', tombstoned: false, verified: false } : null,
     settings: { rememberInstalls: true }
   });
   const origin = (owner: string) => ({ repoId: REPO, releaseId: R1, coordinate: 'mara/glass-blur', version: '1.0.0', treeSha: 't', commitSha: 'c', ownerPublisherId: owner });

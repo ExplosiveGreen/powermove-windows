@@ -5,24 +5,37 @@
 
   /* "Test in Sandbox…" from the Library: the publish sheet's check on its
      own, so an extension can be tried as others will run it before publishing. */
-  let { name, check, onclose }: {
+  let { name, check, onclose, onfix }: {
     name: string;
     check: () => Promise<SandboxCheckReport>;
     onclose: () => void;
+    onfix?: (report: SandboxCheckReport) => Promise<boolean>;
   } = $props();
 
-  let state = $state<SandboxCheckState>({ status: 'running' });
+  let checkState = $state<SandboxCheckState>({ status: 'running' });
+  let fixing = $state(false);
+  let fixError = $state('');
+  async function fix(): Promise<void> {
+    if (!onfix || fixing || checkState.status !== 'done' || checkState.report.ok || checkState.report.skipped) return;
+    fixing = true;
+    fixError = '';
+    try {
+      if (await onfix(checkState.report)) onclose();
+      else fixError = 'The agent couldn’t start the repair. Try again.';
+    } catch { fixError = 'The agent couldn’t start the repair. Try again.'; }
+    finally { fixing = false; }
+  }
   let run = 0;
   async function start(): Promise<void> {
     const current = ++run;
-    state = { status: 'running' };
+    checkState = { status: 'running' };
     let next: SandboxCheckState;
     try {
       next = { status: 'done', report: await check() };
     } catch {
       next = { status: 'error', message: SANDBOX_UNAVAILABLE };
     }
-    if (current === run) state = next;
+    if (current === run) checkState = next;
   }
   $effect(() => { untrack(() => void start()); });
 </script>
@@ -32,11 +45,16 @@
     <h2>Check {name} in the sandbox</h2>
     <p>Runs it with only the permissions in its manifest, the way it runs for people who install it.</p>
   </header>
-  <div class="pub-form sg-column">
-    <SandboxCheckStatus {state} onretry={() => void start()} />
+<div class="pub-form sg-column">
+    <SandboxCheckStatus state={checkState} onretry={() => void start()} />
   </div>
+  {#if fixError}<p class="pub-problem" role="alert">{fixError}</p>{/if}
   <footer class="pub-foot">
-    <span></span>
+    <span>
+      {#if onfix && checkState.status === 'done' && !checkState.report.ok && !checkState.report.skipped}
+        <button class="btn" type="button" disabled={fixing} onclick={() => void fix()}>{fixing ? 'Opening agent…' : 'Fix with agent'}</button>
+      {/if}
+    </span>
     <button class="btn pri" type="button" onclick={onclose}>Done</button>
   </footer>
 </div>

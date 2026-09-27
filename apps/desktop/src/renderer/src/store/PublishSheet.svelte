@@ -23,12 +23,13 @@
   import SandboxCheckStatus from './SandboxCheckStatus.svelte';
   import { SANDBOX_UNAVAILABLE, type SandboxCheckReport, type SandboxCheckState } from './sandbox-check';
 
-  let { plan, bridge, check, onclose, onpublished }: {
+  let { plan, bridge, check, onclose, onpublished, onfix }: {
     plan: PublishPlanDto;
     bridge: StoreBridge;
     /** Runs the sandbox check for this extension as it is built now (kernel/sandbox-check.ts). */
     check: () => Promise<SandboxCheckReport>;
     onclose: () => void;
+    onfix?: (report: SandboxCheckReport) => Promise<boolean>;
     onpublished: (result: Extract<StorePublishResult, { published: true }>) => void;
   } = $props();
 
@@ -53,6 +54,16 @@
   /* Required step: the check runs as the sheet opens, and only a clean (or
      full-access, skipped) result lets Publish through. */
   let sandbox = $state<SandboxCheckState>({ status: 'running' });
+  let fixing = $state(false);
+  async function fixSandbox(): Promise<void> {
+    if (!onfix || fixing || busy || sandbox.status !== 'done' || sandbox.report.ok || sandbox.report.skipped) return;
+    fixing = true;
+    try {
+      if (await onfix(sandbox.report)) onclose();
+      else error = 'The agent couldn’t start the repair. Try again.';
+    } catch { error = 'The agent couldn’t start the repair. Try again.'; }
+    finally { fixing = false; }
+  }
   let checkRun = 0;
   async function runCheck(): Promise<void> {
     const run = ++checkRun;
@@ -284,6 +295,9 @@
       <section class="pub-section">
         <h3 class="pub-title">Sandbox</h3>
         <SandboxCheckStatus state={sandbox} onretry={busy ? undefined : () => void runCheck()} />
+        {#if onfix && sandbox.status === 'done' && !sandbox.report.ok && !sandbox.report.skipped}
+          <button class="btn" type="button" disabled={busy || fixing} onclick={() => void fixSandbox()}>{fixing ? 'Opening agent…' : 'Fix with agent'}</button>
+        {/if}
       </section>
 
       {#if plan.permissionFindings.length}

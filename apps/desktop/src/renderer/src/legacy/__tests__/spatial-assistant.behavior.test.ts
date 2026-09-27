@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { makePM } from './make-pm';
+const repairPopup = vi.hoisted(() => vi.fn(() => true));
+vi.mock('../../panels/repair-agent.svelte', () => ({ openRepairAgent: repairPopup }));
 import { install as installElectronShim } from '../host/electron-shim';
 
 afterEach(() => {
@@ -1122,7 +1124,7 @@ it('stops an automatic verification and ignores its late result', async () => {
   assert.equal(jobs.length, 2);
 });
 
-it('builds and automatically submits an extension Fix-it prompt in project mode', async () => {
+it('hands repair to an independent popup without replacing the project composer', async () => {
   const { PM, assistant } = spatialHarness();
   const files = [{ path: 'index.ts', text: 'throw new Error()' }];
   const readSource = vi.fn(async () => files);
@@ -1139,9 +1141,14 @@ it('builds and automatically submits an extension Fix-it prompt in project mode'
 
   assert.deepEqual(readSource.mock.calls, [[{ id: 'broken-mod' }]]);
   assert.deepEqual(fixPrompt.mock.calls, [[{ id: 'broken-mod', error: 'Build failed\nstack', files }]]);
-  assert.equal(PM.store.get('agentAccessMode', ''), 'project');
-  assert.deepEqual(PM.AgentUI.setDraft.mock.calls, [['Fix broken-mod without changing its public id.', true]]);
-  assert.deepEqual(PM.AgentUI.submit.mock.calls, [['Fix broken-mod without changing its public id.']]);
+  assert.equal(PM.AgentUI.setDraft.mock.calls.length, 0);
+  assert.equal(PM.AgentUI.submit.mock.calls.length, 0);
+  const options = repairPopup.mock.calls.at(-1)[1];
+  assert.equal(options.id, 'broken-mod');
+  assert.match(options.prompt, /Repair extension broken-mod/);
+  assert.match(options.prompt, /Build failed/);
+  assert.match(options.prompt, /Fix broken-mod without changing its public id/);
+  assert.equal(await options.connected(), false);
 });
 
 it('warns and no-ops when the Fix-it bridge is absent', async () => {
