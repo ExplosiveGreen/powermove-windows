@@ -57,6 +57,13 @@
       "when": 1790472228328,
       "tag": "0007_publisher_verified",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790472625333,
+      "tag": "0008_admins",
+      "breakpoints": true
     }
   ]
 }
