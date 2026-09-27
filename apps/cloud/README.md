@@ -13,10 +13,11 @@ them on the desktop.
 
 - `src/app.ts` builds the app from a data-layer factory; `src/index.ts` binds
   it to Neon (or local Postgres with `LOCAL_POSTGRES=1`) and exports `fetch` + `scheduled` (GC).
-- `src/routes/` one file per resource: `auth-desktop` (the PKCE hand-off),
-  `auth-email`, `auth-signout`, `me`, `objects`, `publish`, `repo-management`
-  (yank, patch, tombstone, moderation, reports, icons), `store` (public
-  reads, versions batch), `installs`, `health`.
+- `src/routes/` one file per resource: `auth-desktop` (the PKCE hand-off,
+  for the desktop and for the admin panel's `/v1/auth/web`), `auth-email`,
+  `auth-signout`, `me`, `objects`, `publish`, `repo-management` (yank, patch,
+  tombstone, reports, icons), `admin` (everything under `/v1/admin`), `store`
+  (public reads, versions batch), `installs`, `health`.
 - `src/lifecycle.ts` is the state table (visibility × moderation × tombstone
   × yank). Every read decides through it.
 - `src/objects/` presence, references (the one reachability predicate shared
@@ -170,8 +171,9 @@ Cloudflare provisioned on 2026-09-26 in **Motioner** (`98dbb6e46f4901896327e5ff4
   check capacity before launch. Actual inbox delivery is still to be tested.
 - Managed Turnstile widget `Powermove production`, restricted to
   `cloud.trypowermove.com`. Production enforcement and 30-day clearance are set.
-- Worker secrets `BETTER_AUTH_SECRET`, `ADMIN_TOKEN`, `TURNSTILE_SECRET_KEY`
-  installed. Values are never in this repository.
+- Worker secrets `BETTER_AUTH_SECRET`, `TURNSTILE_SECRET_KEY` installed.
+  Values are never in this repository. (`ADMIN_TOKEN` is no longer read; see
+  Admins below.)
 - Rate-limit bindings, six-hour GC schedule and observability deployed.
   Request query strings are redacted; workers.dev and preview URLs are disabled.
 
@@ -234,15 +236,17 @@ Remaining setup reference (skip resources already listed above):
    `wrangler.jsonc`; confirm the account has them enabled.
 7. **Secrets** (`bunx wrangler secret put <NAME>`), never in `vars` or git:
    `DATABASE_URL`, `BETTER_AUTH_SECRET` (≥ 32 random chars),
-   `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `ADMIN_TOKEN` (moderation
-   endpoint; unset means moderation is disabled).
+   `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`.
 8. **Deploy** `bun run deploy`, then `curl https://cloud.trypowermove.com/health`.
-9. **The `powermove` publisher.** Sign in once from the desktop app with the
+9. **The first admin.** Sign in once (desktop or admin panel) with the
+   account, then run `bun scripts/grant-admin.ts <email>` with the direct
+   `DATABASE_URL` (see Admins below).
+10. **The `powermove` publisher.** Sign in once from the desktop app with the
    account that will own the built-ins (skip the handle step), find its user
-   id in the `user` table, then seed the reserved handle with the admin token:
-   `curl -X POST https://cloud.trypowermove.com/v1/admin/publishers -H "X-Admin-Token: …" -H "content-type: application/json" -d '{"handle":"powermove","userId":"<id>"}'`.
+   id in the `user` table, then seed the reserved handle as an admin:
+   `curl -X POST https://cloud.trypowermove.com/v1/admin/publishers -H "Authorization: Bearer <admin session token>" -H "content-type: application/json" -d '{"handle":"powermove","userId":"<id>"}'`.
    Reserved handles (`src/handles.ts`) can only be claimed this way.
-10. **Built-ins.** See below.
+11. **Built-ins.** See below.
 
 Without `GOOGLE_CLIENT_ID` Google sign-in is omitted so local boot works.
 The Email Sending binding delivers sign-in codes. Local `wrangler dev`
@@ -297,12 +301,44 @@ token-minting route later); do not commit it anywhere.
 - **GC** runs on the cron (`0 */6 * * *`): claim unreferenced, unleased
   objects idle for 24 h → recheck → mark `deleting` → delete the R2 key →
   delete the row. It also expires leases and `desktop_auth` rows.
-- **Moderation**: `POST /v1/admin/repos/:repoId/moderation` with header
-  `X-Admin-Token`; actions `hide`, `unhide`, `remove`. Each writes
-  `moderation_log`. Reports arrive at `POST /v1/store/x/:handle/:slug/report`.
+- **Moderation**: `POST /v1/admin/repos/:repoId/moderation` as an admin
+  (the admin panel's Extensions page); actions `hide`, `unhide`, `remove`.
+  Each writes `moderation_log` with the admin's user id as the actor.
+  Reports arrive at `POST /v1/store/x/:handle/:slug/report`.
 - **Lifecycle** (what each state means for browse, detail, files, updates,
   installs and forks) is the table in `docs-private/store-plan.md` §2.6 and
   the code in `src/lifecycle.ts`.
+
+## Admins
+
+Admin is a row in `admins` for a user, not a shared secret. Every
+`/v1/admin/*` route needs a normal Better Auth session (bearer): 401 signed
+out, 403 for a user without an `admins` row. Requests are rate limited per
+admin (`RL_ADMIN`, 120/min) and writes by an hourly budget. Every admin
+action (moderation, verify/unverify, grant/revoke) writes `moderation_log`
+with the acting user's id as `actor`; rows from before this change say
+`admin`.
+
+The admin panel is `apps/admin` (`admin.trypowermove.com`). Its server keeps
+the session token in an httpOnly cookie on its own origin and calls this API
+server-to-server (a service binding in production), so the browser never
+calls the API cross-origin and no CORS is configured. Google sign-in uses
+`/v1/auth/web`: the desktop's PKCE hand-off, with the one-time token returned
+to `ADMIN_ORIGIN/auth/callback` (a Worker var; locally `.dev.vars`). Email
+codes go through the same `/v1/auth/email` routes as the desktop.
+
+Admins grant and revoke other admins in the panel (never the last one). The
+first admin, or a way back in, is a script run with `DATABASE_URL` set to the
+target database (the direct Neon URL for production). The account must have
+signed in once:
+
+```sh
+cd apps/cloud
+DATABASE_URL=… bun scripts/grant-admin.ts <email>
+DATABASE_URL=… bun scripts/revoke-admin.ts <email>   # refuses the last admin
+```
+
+`bun run local:seed` makes `jude@localhost` an admin of the local stack.
 
 ## Auth schema note
 
