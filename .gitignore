@@ -25,6 +25,15 @@ packages/player/dist/
 .env.*
 !.env.example
 
+# Private deployment notes, credentials, and local verification artifacts
+DEPLOYMENT-*.md
+**/.dev.vars
+**/.dev.vars.*
+!**/.dev.vars.example
+**/neon-connections.json
+apps/desktop/dist-local-*/
+apps/desktop/test-results/
+
 # serve host build (npm package payload)
 packages/cli/dist/
 

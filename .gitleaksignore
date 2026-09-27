@@ -1,0 +1,41 @@
+# Reviewed historical false positives only. Each fingerprint is bound to one
+# exact commit, file, rule and line; future changes are still scanned.
+
+# Synthetic test fixture for secret scanning or environment-variable handling.
+e692be728447ec0f9150461ba574fa5d7d5a017a:apps/desktop/src/main/cloud/publish.test.ts:aws-access-token:199
+
+# Synthetic test fixture for secret scanning or environment-variable handling.
+cb3f99a622e8f083532d978a16a5f34a129728bc:apps/desktop/src/main/cloud/publish.test.ts:aws-access-token:199
+
+# Synthetic test fixture for secret scanning or environment-variable handling.
+e997ea5b0681019db513fc8650b2dcc5e40b6b04:apps/cloud/test/publish.test.ts:generic-api-key:347
+
+# Synthetic test fixture for secret scanning or environment-variable handling.
+58a452a62c69bf054b5797b1e6eb12bfd43fb222:apps/cloud/test/publish.test.ts:generic-api-key:347
+
+# Synthetic test fixture for secret scanning or environment-variable handling.
+7e32090d1f36069766d4074071f0ed78132caec8:apps/desktop/src/main/env/ipc.test.ts:generic-api-key:123
+
+# Synthetic test fixture for secret scanning or environment-variable handling.
+dc2f48e824da33710240501ba151524bc5198934:apps/desktop/src/main/env/ipc.test.ts:generic-api-key:123
+
+# Synthetic test fixture for secret scanning or environment-variable handling.
+5d8ba6ac7f011cd2bb2b1d32fefe7792b7b21828:packages/registry/test/scan.test.ts:slack-bot-token:9
+
+# Synthetic test fixture for secret scanning or environment-variable handling.
+5d8ba6ac7f011cd2bb2b1d32fefe7792b7b21828:packages/registry/test/scan.test.ts:jwt:12
+
+# Synthetic test fixture for secret scanning or environment-variable handling.
+5d8ba6ac7f011cd2bb2b1d32fefe7792b7b21828:packages/registry/test/scan.test.ts:aws-access-token:6
+
+# Synthetic test fixture for secret scanning or environment-variable handling.
+5d8ba6ac7f011cd2bb2b1d32fefe7792b7b21828:packages/registry/test/scan.test.ts:gitlab-pat:8
+
+# Animation/keyboard property, not a credential.
+9cb93254c426d75079e34b99ba926d96b46f4352:apps/desktop/src/extensions/timeline/timeline.ts:generic-api-key:2268
+
+# Animation/keyboard property, not a credential.
+0d2fa4867cdd9e9d91aa361519fc5d8dbcb9b2fe:src/extensions/timeline/timeline.ts:generic-api-key:2104
+
+# Animation/keyboard property, not a credential.
+c848300241fef98b3c369c73471d65610710f184:src/extensions/keymap-default/keymap.test.ts:generic-api-key:87
