@@ -6,7 +6,7 @@
   let { data, children } = $props();
 
   const NAV = [
-    { href: '/publishers', label: 'Publishers' },
+    { href: '/users', label: 'Users' },
     { href: '/extensions', label: 'Extensions' },
     { href: '/admins', label: 'Admins' },
     { href: '/log', label: 'Moderation log' },

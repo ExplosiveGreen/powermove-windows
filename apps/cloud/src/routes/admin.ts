@@ -1,10 +1,10 @@
 import { Hono, type Context } from 'hono';
-import { desc, eq, ilike, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, ilike, isNotNull, or, sql, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
-import { Admin, ApiError, type AdminExtension, type AdminGrant, type AdminLogEntry, type AdminPublisher } from '@powermove/registry/wire';
+import { Admin, ApiError, type AdminAccount, type AdminExtension, type AdminGrant, type AdminLogEntry, type AdminPublisher } from '@powermove/registry/wire';
 import type { Env } from '../env';
-import { admins, extensions, moderationLog, publishers, releases, repos } from '../db/schema';
-import { user } from '../db/auth-schema';
+import { admins, extensions, installs, moderationLog, publishers, releases, repos } from '../db/schema';
+import { user, session, account as authAccount } from '../db/auth-schema';
 import { listing } from './repo-management';
 import { requireAdmin, requireSession } from './session';
 import { enforce, rateLimited } from '../abuse';
@@ -53,6 +53,25 @@ async function publisherById(c: Context<Env>, id: string): Promise<AdminPublishe
   if (!row) throw new ApiError({ error: 'not_found' });
   return row;
 }
+/* Only explicit account metadata leaves this boundary: never tokens or credentials. */
+const userColumns = {
+  user: { ...account, emailVerified: user.emailVerified, createdAt: user.createdAt, updatedAt: user.updatedAt },
+  publisher: publishers, adminGrantedAt: admins.grantedAt, extensionCount,
+  installCount: sql<number>`(select count(*)::int from ${installs} where ${installs.userId} = ${user.id} and ${installs.removedAt} is null)`,
+  activeSessions: sql<number>`(select count(*)::int from ${session} where ${session.userId} = ${user.id} and ${session.expiresAt} > now())`,
+  lastSessionAt: sql<string | null>`(select max(${session.createdAt})::text from ${session} where ${session.userId} = ${user.id})`,
+};
+async function userRows(c: Context<Env>, where?: SQL, limit = 50, offset = 0): Promise<AdminAccount[]> {
+  const rows = await c.var.data.db.select(userColumns).from(user)
+    .leftJoin(publishers, eq(publishers.userId, user.id)).leftJoin(admins, eq(admins.userId, user.id))
+    .where(where).orderBy(desc(user.createdAt), desc(user.id)).limit(limit).offset(offset);
+  return rows.map((r) => ({ ...r.user, createdAt: r.user.createdAt.toISOString(), updatedAt: r.user.updatedAt.toISOString(),
+    publisher: r.publisher ? toPublisher(r.publisher, r.user, r.extensionCount).publisher : null,
+    adminGrantedAt: r.adminGrantedAt?.toISOString() ?? null, extensionCount: r.extensionCount,
+    installCount: r.installCount, activeSessions: r.activeSessions,
+    lastSessionAt: r.lastSessionAt ? new Date(r.lastSessionAt).toISOString() : null,
+  }));
+}
 const grantor = alias(user, 'grantor');
 async function grantRows(c: Context<Env>, where?: SQL): Promise<AdminGrant[]> {
   const rows = await c.var.data.db.select({ grant: admins, user: account, grantor: { id: grantor.id, email: grantor.email, name: grantor.name } })
@@ -77,6 +96,42 @@ export const adminRoutes = new Hono<Env>()
     const [me] = await c.var.data.db.select(account).from(user).where(eq(user.id, s.userId)).limit(1);
     if (!me) throw new ApiError({ error: 'unauthorized' });
     return c.json({ user: me });
+  })
+  .get('/users', async (c) => {
+    const { q, filter, limit, offset } = Admin.Users.Req.shape.query.parse(c.req.query());
+    const pattern = contains(q);
+    const where = and(pattern ? or(ilike(user.email, pattern), ilike(user.name, pattern), ilike(publishers.handle, pattern), ilike(user.id, pattern)) : undefined,
+      filter === 'admins' ? isNotNull(admins.userId) : filter === 'publishers' ? isNotNull(publishers.id)
+        : filter === 'verified' ? isNotNull(publishers.verifiedAt) : filter === 'unverified-email' ? eq(user.emailVerified, false) : undefined);
+    const db = c.var.data.db;
+    const [items, totals, counts] = await Promise.all([
+      userRows(c, where, limit, offset),
+      db.select({ total: sql<number>`count(*)::int` }).from(user).leftJoin(publishers, eq(publishers.userId, user.id)).leftJoin(admins, eq(admins.userId, user.id)).where(where),
+      db.select({ users: sql<number>`count(*)::int`, admins: sql<number>`count(${admins.userId})::int`, publishers: sql<number>`count(${publishers.id})::int`, verified: sql<number>`count(${publishers.verifiedAt})::int` })
+        .from(user).leftJoin(publishers, eq(publishers.userId, user.id)).leftJoin(admins, eq(admins.userId, user.id)),
+    ]);
+    return c.json({ items, total: totals[0]!.total, offset, limit, counts: counts[0]! });
+  })
+  .get('/users/:userId', async (c) => {
+    const { userId } = Admin.User.Req.shape.params.parse(c.req.param());
+    const [target] = await userRows(c, eq(user.id, userId), 1);
+    if (!target) throw new ApiError({ error: 'not_found' });
+    const db = c.var.data.db;
+    const [providers, sessions, library, publisherDetails, owned] = await Promise.all([
+      db.selectDistinct({ provider: authAccount.providerId }).from(authAccount).where(eq(authAccount.userId, userId)),
+      db.select({ createdAt: session.createdAt, updatedAt: session.updatedAt, expiresAt: session.expiresAt, userAgent: session.userAgent })
+        .from(session).where(and(eq(session.userId, userId), sql`${session.expiresAt} > now()`)).orderBy(desc(session.createdAt), desc(session.id)).limit(20),
+      db.select({ repoId: repos.id, name: extensions.name, handle: publishers.handle, slug: repos.slug, version: releases.version, installedAt: installs.installedAt })
+        .from(installs).innerJoin(repos, eq(repos.id, installs.repoId)).innerJoin(extensions, eq(extensions.repoId, repos.id))
+        .innerJoin(publishers, eq(publishers.id, repos.ownerId)).innerJoin(releases, eq(releases.id, installs.releaseId))
+        .where(and(eq(installs.userId, userId), sql`${installs.removedAt} is null`)).orderBy(desc(installs.installedAt), desc(installs.id)).limit(100),
+      target.publisher ? publisherById(c, target.publisher.id) : Promise.resolve(null),
+      target.publisher ? extensionRows(c, eq(repos.ownerId, target.publisher.id), 100) : Promise.resolve([]),
+    ]);
+    return c.json({ ...target, providers: providers.map((p) => p.provider), publisherDetails, extensions: owned,
+      sessions: sessions.map((s) => ({ ...s, createdAt: s.createdAt.toISOString(), updatedAt: s.updatedAt.toISOString(), expiresAt: s.expiresAt.toISOString() })),
+      library: library.map((i) => ({ ...i, installedAt: i.installedAt.toISOString() })),
+    });
   })
   /* Reserved handles (src/handles.ts) can only be claimed here, by an admin,
      for an existing user: this is how `powermove` gets its publisher before

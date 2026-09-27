@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { Admin, ListingDto, MeDto } from '@powermove/registry/wire';
 import { createApp } from '../src/app';
+import { account as authAccount, session as authSession, user as authUser } from '../src/db/auth-schema';
 import { admins, desktopAuth, moderationLog, publishers } from '../src/db/schema';
 import { withData } from './db';
 import { makeEnv } from './env';
@@ -19,7 +20,7 @@ test('admin routes: signed out 401, non-admin 403, admin 200; the old token head
     const admin = await seedAdmin(data, env);
     const owner = await publisher(data, env, 'alice');
     const token = { 'X-Admin-Token': 'legacy-token' };
-    const reads = ['/v1/admin/session', '/v1/admin/publishers', `/v1/admin/publishers/${owner.publisher.id}`, '/v1/admin/extensions', `/v1/admin/extensions/${crypto.randomUUID()}`, '/v1/admin/admins', '/v1/admin/log'];
+    const reads = ['/v1/admin/users', `/v1/admin/users/${someone.id}`, '/v1/admin/session', '/v1/admin/publishers', `/v1/admin/publishers/${owner.publisher.id}`, '/v1/admin/extensions', `/v1/admin/extensions/${crypto.randomUUID()}`, '/v1/admin/admins', '/v1/admin/log'];
     for (const path of reads) {
       expect((await app.request(path, {}, env)).status).toBe(401);
       expect((await app.request(path, { headers: token }, env)).status).toBe(401);
@@ -186,4 +187,49 @@ test('web sign-in hands its one-time token only to ADMIN_ORIGIN, then the PKCE e
     const unset = { ...env, ADMIN_ORIGIN: undefined } as unknown as CloudflareBindings;
     expect((await app.request(`/v1/auth/web/done?state=${state}`, { headers: browser.headers }, unset)).status).toBe(404);
     expect((await app.request(`/v1/auth/web?provider=google&state=${'a'.repeat(32)}&challenge=${challenge}`, {}, unset)).status).toBe(404);
+  }));
+
+
+test('users includes non-publishers and admins, filters and paginates, and exposes metadata without credentials', () =>
+  withData(async (data) => {
+    const env = makeEnv(data), app = createApp({ data: () => data });
+    const admin = await seedAdmin(data, env);
+    const reader = await seedSession(data, env, 'reader@example.com');
+    const alice = await publisher(data, env, 'alice');
+    await data.db.update(publishers).set({ verifiedAt: new Date() }).where(eq(publishers.id, alice.publisher.id));
+    await data.db.update(authUser).set({ emailVerified: false }).where(eq(authUser.id, reader.id));
+    await data.db.insert(authAccount).values({ id: 'private-account', accountId: 'provider-id', providerId: 'google', userId: reader.id, accessToken: 'DO-NOT-EXPOSE', refreshToken: 'PRIVATE-REFRESH', password: 'PRIVATE-PASSWORD' });
+    const get = (path: string) => app.request(path, { headers: admin.headers }, env);
+    const users = Admin.Users.Res.parse(await json(await get('/v1/admin/users')));
+    expect(users.total).toBe(3);
+    expect(users.counts).toEqual({ users: 3, admins: 1, publishers: 1, verified: 1 });
+    expect(users.items.find((u) => u.id === admin.id)).toMatchObject({ publisher: null, extensionCount: 0 });
+    expect(users.items.find((u) => u.id === admin.id)?.adminGrantedAt).not.toBeNull();
+    const filtered = async (filter: string) => Admin.Users.Res.parse(await json(await get(`/v1/admin/users?filter=${filter}`)));
+    expect((await filtered('admins')).items.map((u) => u.id)).toEqual([admin.id]);
+    expect((await filtered('publishers')).items.map((u) => u.publisher?.handle)).toEqual(['alice']);
+    expect((await filtered('verified')).items.map((u) => u.publisher?.handle)).toEqual(['alice']);
+    expect((await filtered('unverified-email')).items.some((u) => u.id === reader.id)).toBe(true);
+    const search = Admin.Users.Res.parse(await json(await get('/v1/admin/users?q=READER%40')));
+    expect(search.items.map((u) => u.id)).toEqual([reader.id]);
+    expect(Admin.Users.Res.parse(await json(await get('/v1/admin/users?q=%25'))).items).toHaveLength(0);
+    const first = Admin.Users.Res.parse(await json(await get('/v1/admin/users?limit=1')));
+    const second = Admin.Users.Res.parse(await json(await get('/v1/admin/users?limit=1&offset=1')));
+    expect(first.total).toBe(3);
+    expect(first.items[0]!.id).not.toBe(second.items[0]!.id);
+    expect(Admin.Users.Res.parse(await json(await get('/v1/admin/users?offset=50'))).items).toHaveLength(0);
+    for (const query of ['offset=-1', 'limit=101', 'filter=bogus']) expect((await get(`/v1/admin/users?${query}`)).status).toBe(400);
+    const detailRes = await get(`/v1/admin/users/${reader.id}`);
+    const raw = await detailRes.text();
+    expect(raw).not.toContain('DO-NOT-EXPOSE');
+    expect(raw).not.toContain('PRIVATE-');
+    expect(raw).not.toContain('token');
+    const detail = Admin.User.Res.parse(JSON.parse(raw));
+    expect(detail).toMatchObject({ id: reader.id, publisher: null, publisherDetails: null, providers: ['google'], extensions: [], library: [], activeSessions: 1 });
+    expect(detail.sessions).toHaveLength(1);
+    await data.db.update(authSession).set({ expiresAt: new Date(0) }).where(eq(authSession.userId, reader.id));
+    const expired = Admin.User.Res.parse(await json(await get(`/v1/admin/users/${reader.id}`)));
+    expect(expired.activeSessions).toBe(0);
+    expect(expired.sessions).toHaveLength(0);
+    expect((await get('/v1/admin/users/missing')).status).toBe(404);
   }));

@@ -10,7 +10,7 @@
 <svelte:head><title>@{p.publisher.handle} · Powermove Admin</title></svelte:head>
 
 <header class="heading">
-  <a class="back" href="/publishers">Publishers</a>
+  <a class="back" href="/users">Users</a>
   <h1>@{p.publisher.handle}</h1>
   <p>{p.user ? p.user.email : 'No account'}{p.publisher.tombstoned ? ' · Deleted' : ''}</p>
 </header>
@@ -43,6 +43,7 @@
 
 <section class="section">
   <h2 class="section-title">Account</h2>
+  {#if p.user}<p class="note"><a href="/users/{encodeURIComponent(p.user.id)}">View full user account</a></p>{/if}
   <div class="group">
     <div class="row"><div class="copy"><b>Email</b></div><span class="value">{p.user?.email ?? '—'}</span></div>
     <div class="row"><div class="copy"><b>Name</b></div><span class="value">{p.user?.name || '—'}</span></div>

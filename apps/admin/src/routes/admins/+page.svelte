@@ -26,7 +26,7 @@
     {#each data.items as a (a.user.id)}
       <form class="row" method="POST" action="?/revoke" use:enhance={submit}>
         <div class="copy">
-          <b>{a.user.email}{a.user.id === data.me ? ' (you)' : ''}</b>
+          <b><a href="/users/{encodeURIComponent(a.user.id)}">{a.user.email}{a.user.id === data.me ? ' (you)' : ''}</a></b>
           <span>Granted {date(a.grantedAt)}{a.grantedBy ? ` by ${a.grantedBy.email}` : ''}</span>
         </div>
         <input type="hidden" name="userId" value={a.user.id} />

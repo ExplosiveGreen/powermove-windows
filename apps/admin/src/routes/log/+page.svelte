@@ -5,7 +5,7 @@
   let { data } = $props();
 
   const href = (target: AdminLogEntry['target']) =>
-    target?.kind === 'repo' ? `/extensions/${target.id}` : target?.kind === 'publisher' ? `/publishers/${target.id}` : null;
+    target?.kind === 'repo' ? `/extensions/${target.id}` : target?.kind === 'publisher' ? `/publishers/${target.id}` : target?.kind === 'user' ? `/users/${encodeURIComponent(target.id)}` : null;
   const targetLabel = (target: AdminLogEntry['target']) => (target ? (target.label ?? target.id) : 'Unknown');
 </script>
 

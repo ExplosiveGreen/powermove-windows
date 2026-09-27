@@ -73,11 +73,18 @@ export const Publish = {
 const AdminUser = z.object({ id: z.string().min(1), email: z.email(), name: z.string().nullable() });
 const AdminPublisher = z.object({ publisher: PublisherDto, user: AdminUser.nullable(), claimedAt: IsoDate, verifiedAt: IsoDate.nullable(), tombstonedAt: IsoDate.nullable(), extensionCount: z.number().int().nonnegative() });
 const AdminExtension = z.object({ repoId: Uuid, owner: PublisherDto, slug: Slug, name: z.string(), tagline: z.string(), visibility: Visibility, moderation: z.enum(['none', 'hidden', 'removed']), tombstoned: z.boolean(), latestVersion: Version.nullable(), installCount: z.number().int().nonnegative(), updatedAt: IsoDate });
+const AdminAccount = AdminUser.extend({
+  emailVerified: z.boolean(), createdAt: IsoDate, updatedAt: IsoDate,
+  publisher: PublisherDto.nullable(), adminGrantedAt: IsoDate.nullable(),
+  extensionCount: z.number().int().nonnegative(), installCount: z.number().int().nonnegative(),
+  activeSessions: z.number().int().nonnegative(), lastSessionAt: IsoDate.nullable(),
+});
 const AdminGrant = z.object({ user: AdminUser, grantedAt: IsoDate, grantedBy: AdminUser.nullable() });
 const LogTarget = z.object({ kind: z.enum(['repo', 'publisher', 'user']), id: z.string(), label: z.string().nullable() });
 const LogEntry = z.object({ id: Uuid, action: z.string(), reason: z.string(), createdAt: IsoDate, actor: z.object({ id: z.string(), label: z.string().nullable() }), target: LogTarget.nullable() });
 const PublisherId = z.object({ publisherId: Uuid });
 const search = z.object({ q: z.string().max(200).optional() });
+export type AdminAccount = z.infer<typeof AdminAccount>;
 export type AdminUser = z.infer<typeof AdminUser>;
 export type AdminPublisher = z.infer<typeof AdminPublisher>;
 export type AdminExtension = z.infer<typeof AdminExtension>;
@@ -87,6 +94,18 @@ export type AdminLogEntry = z.infer<typeof LogEntry>;
 /** Every route needs a session whose user has an `admins` row: 401 signed out, 403 otherwise. */
 export const Admin = {
   /** The signed-in admin; 403 tells a signed-in user they are not one. */
+  Users: {
+    Req: Req(Empty, search.extend({ filter: z.enum(['all', 'admins', 'publishers', 'verified', 'unverified-email']).default('all'), offset: z.coerce.number().int().min(0).max(1000000).default(0), limit: z.coerce.number().int().min(1).max(100).default(50) })),
+    Res: z.object({ items: z.array(AdminAccount), total: z.number().int(), offset: z.number().int(), limit: z.number().int(), counts: z.object({ users: z.number().int(), admins: z.number().int(), publishers: z.number().int(), verified: z.number().int() }) }),
+  },
+  User: {
+    Req: Req(z.object({ userId: z.string().min(1).max(200) })),
+    Res: AdminAccount.extend({
+      providers: z.array(z.string()), publisherDetails: AdminPublisher.nullable(), extensions: z.array(AdminExtension),
+      sessions: z.array(z.object({ createdAt: IsoDate, updatedAt: IsoDate, expiresAt: IsoDate, userAgent: z.string().nullable() })),
+      library: z.array(z.object({ repoId: Uuid, name: z.string(), handle: z.string(), slug: z.string(), version: z.string(), installedAt: IsoDate })),
+    }),
+  },
   Session: { Req: Req(), Res: z.object({ user: AdminUser }) },
   /** Seeds a reserved handle (e.g. `powermove`) for an existing user; bypasses the reserved list. */
   SeedPublisher: { Req: Req(Empty, Empty, z.object({ handle: Handle, userId: z.string().min(1) })), Res: z.object({ publisher: PublisherDto }) },
