@@ -1,4 +1,5 @@
 import { user } from '../src/db/auth-schema';
+import { admins } from '../src/db/schema';
 import { createAuth } from '../src/auth';
 import type { Data } from '../src/db/client';
 export async function seedSession(data:Data, env:CloudflareBindings, email='jude@example.com') {
@@ -10,4 +11,10 @@ export async function seedSession(data:Data, env:CloudflareBindings, email='jude
   const session=await (await auth.$context).internalAdapter.createSession(id);
   if(!session) throw new Error('session not created');
   return {id,token:session.token,headers:{Authorization:`Bearer ${session.token}`}};
+}
+/** A signed-in user with an admins row. */
+export async function seedAdmin(data:Data, env:CloudflareBindings, email='admin@example.com') {
+  const s=await seedSession(data,env,email);
+  await data.db.insert(admins).values({userId:s.id});
+  return s;
 }
