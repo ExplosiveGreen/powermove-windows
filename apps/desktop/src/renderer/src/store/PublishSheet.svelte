@@ -12,7 +12,6 @@
   import { KINDS, KIND_PLURAL, publishErrorText } from './data';
   import {
     canPublish,
-    checkIconBytes,
     draftFor,
     findingLabel,
     formFor,
@@ -20,6 +19,7 @@
     progressText,
     type PublishDraft
   } from './publish-form';
+  import { ICON_INPUT_TYPES, prepareIcon } from './icon-image';
   import SandboxCheckStatus from './SandboxCheckStatus.svelte';
   import { SANDBOX_UNAVAILABLE, type SandboxCheckReport, type SandboxCheckState } from './sandbox-check';
 
@@ -80,20 +80,28 @@
     if (iconUrl) URL.revokeObjectURL(iconUrl);
   });
 
+  let iconBusy = $state(false);
+  /* Any image: prepareIcon crops, resizes and compresses it, and the
+     preview shows exactly what will be uploaded. */
   async function chooseIcon(event: Event): Promise<void> {
     const input = event.currentTarget instanceof HTMLInputElement ? event.currentTarget : null;
     const file = input?.files?.[0];
     if (!input || !file) return;
     input.value = '';
     iconError = null;
-    const checked = checkIconBytes(new Uint8Array(await file.arrayBuffer()));
-    if (!checked.ok) {
-      iconError = checked.error;
-      return;
+    iconBusy = true;
+    try {
+      const icon = await prepareIcon(file);
+      if (!icon.ok) {
+        iconError = icon.error;
+        return;
+      }
+      if (iconUrl) URL.revokeObjectURL(iconUrl);
+      iconUrl = URL.createObjectURL(icon.png);
+      draft.iconPng = icon.base64;
+    } finally {
+      iconBusy = false;
     }
-    if (iconUrl) URL.revokeObjectURL(iconUrl);
-    iconUrl = URL.createObjectURL(file);
-    draft.iconPng = checked.base64;
   }
 
   function removeIcon(): void {
@@ -258,15 +266,15 @@
             <div class="settings-row pub-row">
               <span class="settings-copy">
                 <b>Icon</b>
-                {#if iconError}<span class="pub-problem" role="alert">{iconError}</span>{:else}<span>Square PNG, up to 256 KB.</span>{/if}
+                {#if iconError}<span class="pub-problem" role="alert">{iconError}</span>{:else}<span>Any image. It’s cropped square and sized for the store.</span>{/if}
               </span>
               <span class="pub-icon">
                 {#if iconUrl}<img class="pub-icon-preview" src={iconUrl} alt="Icon preview" />{/if}
-                <input bind:this={iconInput} class="pub-file" type="file" accept="image/png" tabindex="-1" aria-hidden="true" onchange={chooseIcon} />
+                <input bind:this={iconInput} class="pub-file" type="file" accept={ICON_INPUT_TYPES} tabindex="-1" aria-hidden="true" onchange={chooseIcon} />
                 {#if iconUrl}
-                  <button class="btn ghost" type="button" disabled={busy} onclick={removeIcon}>Remove</button>
+                  <button class="btn ghost" type="button" disabled={busy || iconBusy} onclick={removeIcon}>Remove</button>
                 {/if}
-                <button class="btn" type="button" disabled={busy} onclick={() => iconInput?.click()}>{iconUrl ? 'Change…' : 'Choose…'}</button>
+                <button class="btn" type="button" disabled={busy || iconBusy} onclick={() => iconInput?.click()}>{iconBusy ? 'Preparing…' : iconUrl ? 'Change…' : 'Choose…'}</button>
               </span>
             </div>
           </div>
