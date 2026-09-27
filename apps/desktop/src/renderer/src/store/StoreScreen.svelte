@@ -382,14 +382,37 @@
 
   function scrollTop(): void {
     void tick().then(() => scrollEl?.scrollTo({ top: 0, behavior: 'instant' }));
+    keepFocus();
   }
 
+  /* A view change unmounts the button that caused it; hand focus to the
+     screen so Escape (and the next Tab) still land here. */
+  function keepFocus(): void {
+    void tick().then(() => {
+      if (rootEl && !rootEl.contains(document.activeElement)) rootEl.focus({ preventScroll: true });
+    });
+  }
+
+  /* Where Discover was scrolled when a kind page opened from it, so the
+     way back lands on the shelf you left. */
+  let browseScroll = 0;
   function show(id: StorePage): void {
-    direction = 0;
+    if (page === 'browse' && !detail && id.startsWith('kind:')) browseScroll = scrollEl?.scrollTop ?? 0;
+    direction = id.startsWith('kind:') ? 1 : 0;
     page = id;
     detail = null;
     searchText = '';
     scrollTop();
+  }
+
+  /* A kind page is one level under Discover: Back (or Escape) returns to it. */
+  function leaveKind(): void {
+    direction = -1;
+    page = 'browse';
+    searchText = '';
+    const top = browseScroll;
+    void tick().then(() => scrollEl?.scrollTo({ top, behavior: 'instant' }));
+    keepFocus();
   }
 
   function pushDetail(target: DetailTarget): void {
@@ -431,15 +454,17 @@
     detail = null;
     remote = null;
     compare = null;
+    keepFocus();
   }
 
-  /* Escape leaves a detail; otherwise it is the home's. App shortcuts such as
-     ⌘, keep working over the Store. */
+  /* Escape leaves a detail, then a kind page; otherwise it is the home's.
+     App shortcuts such as ⌘, keep working over the Store. */
   function keydown(event: KeyboardEvent): void {
-    if (event.key !== 'Escape' || !detail) return;
+    if (event.key !== 'Escape' || (!detail && (!pageKind || query))) return;
     event.stopPropagation();
     event.preventDefault();
-    back();
+    if (detail) back();
+    else leaveKind();
   }
 
   /* Lisse squircles on the cards, previews and controls while the screen is up. */
@@ -840,6 +865,9 @@
             {/if}
 
           {:else if pageKind}
+            <button class="st-back" type="button" onclick={leaveKind}>
+              <Icon {PM} name="chev" /><span>Discover</span>
+            </button>
             {@render head(KIND_PLURAL[pageKind], shelf.status === 'ready' && shelf.value.items.length ? (shelf.value.nextCursor ? `${shelf.value.items.length}+` : shelf.value.items.length) : null)}
             {#if shelf.status === 'loading'}
               {@render skeleton(6)}
