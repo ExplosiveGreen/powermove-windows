@@ -93,6 +93,8 @@ export interface StoreTrustResult { localId: string; trusted: boolean }
 
 export type StoreUpdateResult =
   | { kind: 'updated'; localId: string; version: string }
+  /** The folder was changed since install and the update merged around those changes. */
+  | { kind: 'merged'; localId: string; version: string }
   /** The folder was changed since install: the new version is beside it for the agent to merge. */
   | { kind: 'staged-for-merge'; localId: string; version: string; path: string };
 

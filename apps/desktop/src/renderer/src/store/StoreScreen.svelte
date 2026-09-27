@@ -621,7 +621,9 @@
     }
     toast(result.value.kind === 'updated'
       ? `${item.name} is updated to ${result.value.version}.`
-      : 'Update available; you changed the files. The new version is beside your folder for your agent to merge.');
+      : result.value.kind === 'merged'
+        ? `${item.name} is updated to ${result.value.version}. Your changes were kept.`
+        : 'Update available; you and the author changed the same lines. The new version is beside your folder for your agent to merge.');
   }
 
   async function uninstall(item: LibraryItemDto): Promise<void> {
@@ -1190,7 +1192,7 @@
       {#if item.update.state === 'staged-for-merge'}
         Update available; you changed the files. The new version is beside your folder for your agent to merge.
       {:else if item.update.modified}
-        You changed the files since installing {item.origin?.version}. Updating saves {item.update.version} beside your folder for your agent to merge.
+        You changed the files since installing {item.origin?.version}. Updating to {item.update.version} keeps your changes.
       {:else}
         You have {item.origin?.version}. Updating replaces the files with {item.update.version}.
       {/if}

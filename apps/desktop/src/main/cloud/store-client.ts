@@ -41,6 +41,8 @@ export interface StoreClient {
   tar(releaseId: string): Promise<Uint8Array>;
   /** One source file as text (≤ 2 MiB). */
   file(handle: string, slug: string, version: string, path: string): Promise<string>;
+  /** One file's exact bytes (≤ 2 MiB), for updates that fetch only what changed. */
+  fileBytes(handle: string, slug: string, version: string, path: string): Promise<Uint8Array>;
   compare(base: string, head: string): Promise<CompareResult>;
   versions(items: Array<{ repoId: string; releaseId: string }>): Promise<VersionsResult>;
   listInstalls(): Promise<InstallsResult>;
@@ -78,6 +80,14 @@ function encodePath(path: string): string {
 }
 
 export function createStoreClient(client: () => CloudClient): StoreClient {
+  async function fileBytes(handle: string, slug: string, version: string, path: string): Promise<Uint8Array> {
+    const current = client();
+    /* A wildcard route: the typed client cannot address it, so the URL is
+       built here from validated segments on the bound origin. */
+    const url = `${current.origin}/v1/store/x/${encodeURIComponent(handle)}/${encodeURIComponent(slug)}/r/${encodeURIComponent(version)}/file/${encodePath(path)}`;
+    const response = await current.raw((_api, fetch) => fetch(url));
+    return readCapped(response, REGISTRY_LIMITS.fileBytes);
+  }
   return {
     browse: () => client().request(Store.Browse.Res, (api) => api.v1.store.browse.$get()),
 
@@ -107,14 +117,10 @@ export function createStoreClient(client: () => CloudClient): StoreClient {
     },
 
     async file(handle, slug, version, path) {
-      const current = client();
-      /* A wildcard route: the typed client cannot address it, so the URL is
-         built here from validated segments on the bound origin. */
-      const url = `${current.origin}/v1/store/x/${encodeURIComponent(handle)}/${encodeURIComponent(slug)}/r/${encodeURIComponent(version)}/file/${encodePath(path)}`;
-      const response = await current.raw((_api, fetch) => fetch(url));
-      const bytes = await readCapped(response, REGISTRY_LIMITS.fileBytes);
-      return new TextDecoder('utf-8').decode(bytes);
+      return new TextDecoder('utf-8').decode(await fileBytes(handle, slug, version, path));
     },
+
+    fileBytes,
 
     compare: (base, head) => {
       const args = { query: { base, head } };
