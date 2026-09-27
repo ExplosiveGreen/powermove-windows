@@ -775,7 +775,8 @@
              as a chevron grows in beside it. -->
         <header class="st-head">
           <h1 class="st-title" class:is-back={titleBack}>
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <!-- Focusable only while it is role=button (titleBack). -->
+            <!-- svelte-ignore a11y_no_static_element_interactions, a11y_no_noninteractive_tabindex -->
             <span
               class="st-title-inner"
               role={titleBack ? 'button' : undefined}

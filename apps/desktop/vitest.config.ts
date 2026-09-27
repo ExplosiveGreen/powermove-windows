@@ -17,7 +17,10 @@ export default defineConfig({
     fileParallelism: false,
     include: ['src/**/*.{test,spec}.ts', 'scripts/**/*.{test,spec}.ts'],
     exclude: ['**/node_modules/**', 'out/**', 'tests/**'],
-    passWithNoTests: true
+    passWithNoTests: true,
+    // @scritto/core imports its own stylesheet; let Vite load it instead of Node.
+    server: { deps: { inline: [/@scritto\//] } },
+    setupFiles: ['src/test-setup/waapi.ts']
     // Renderer tests that need a DOM declare `// @vitest-environment happy-dom`.
   }
 });
