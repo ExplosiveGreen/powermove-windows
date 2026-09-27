@@ -18,6 +18,7 @@ test('library previews contain tall panel content without changing the live pane
   });
   const card = page.locator('[data-panel-id="fit-fixture"]');
   await expect(card).toBeVisible();
+  await expect(card.locator('.library-clone')).toBeAttached();
   const geometry = await card.evaluate(card => {
     const clone = card.querySelector<HTMLElement>('.library-clone')!;
     const body = clone.querySelector<HTMLElement>('.fit-body')!;
@@ -37,6 +38,8 @@ test('built-in Library previews fit their scrollable content', async ({ session 
   await page.setViewportSize({ width: 1600, height: 1000 });
   await page.waitForFunction(() => Boolean((window as any).PM?.GL?.gl));
   await page.evaluate(() => (window as any).PM.LibraryUI.open());
+  await expect(page.locator('#library-screen')).toHaveAttribute('data-previews', 'ready');
+  await expect(page.locator('.library-clone').first()).toBeAttached();
   const clipped = await page.locator('.library-clone').evaluateAll(clones => clones.flatMap(clone => {
     return [...clone.querySelectorAll<HTMLElement>('*')].filter(node =>
       /^(auto|scroll|hidden)$/.test(getComputedStyle(node).overflowY) && !['absolute', 'fixed'].includes(getComputedStyle(node).position) && !node.querySelector('canvas') && node.clientHeight > 0 && node.scrollHeight > node.clientHeight + 1

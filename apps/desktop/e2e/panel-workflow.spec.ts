@@ -47,19 +47,18 @@ libraryTest('library shows a panel grid, adds panels to the workspace, and edits
   const library = page.getByRole('dialog', { name: 'Panel library', exact: true });
   await expect(library).toBeVisible();
   const toolbarGeometry = await library.evaluate((screen) => {
-    const tabs = screen.querySelector<HTMLElement>('.library-top .segmented')!.getBoundingClientRect();
-    const actions = screen.querySelector<HTMLElement>('.library-top-action')!.getBoundingClientRect();
-    const actionButton = screen.querySelector<HTMLElement>('.library-top-action .btn')!.getBoundingClientRect();
-    const bounds = screen.getBoundingClientRect();
+    const title = screen.querySelector<HTMLElement>('.library-page-title')!.getBoundingClientRect();
+    const action = screen.querySelector<HTMLElement>('.library-top-action .btn')!.getBoundingClientRect();
+    const search = screen.querySelector<HTMLElement>('.library-sidebar .library-search')!.getBoundingClientRect();
     return {
-      left: tabs.left - bounds.left,
-      right: bounds.right - actions.right,
-      tabsHeight: tabs.height,
-      buttonHeight: actionButton.height
+      centers: Math.abs((title.top + title.bottom) / 2 - (action.top + action.bottom) / 2),
+      sidebarFirst: search.right <= title.left
     };
   });
-  expect(Math.abs(toolbarGeometry.left - toolbarGeometry.right)).toBeLessThan(1);
-  expect(Math.abs(toolbarGeometry.tabsHeight - toolbarGeometry.buttonHeight)).toBeLessThan(1);
+  expect(toolbarGeometry.centers).toBeLessThan(1);
+  expect(toolbarGeometry.sidebarFirst).toBe(true);
+  // Snapshots build a few per frame after the Library opens.
+  await expect(library).toHaveAttribute('data-previews', 'ready');
   const icons = await library.locator('.library-card .library-thumb-icon svg').evaluateAll(nodes => nodes.map(node => (node as SVGElement).dataset.icon));
   expect(new Set(icons).size).toBe(icons.length);
   expect(icons).not.toContain('missing');
@@ -92,6 +91,12 @@ libraryTest('library shows a panel grid, adds panels to the workspace, and edits
   expect(previewLayout.filter(item => !item.panelOnly)).toEqual([]);
   expect(previewLayout.filter(item => !item.fitted)).toEqual([]);
   expect(previewLayout.filter(item => !item.fallbackHidden)).toEqual([]);
+  // Books share one scale: the wide Timeline stays wide next to a default-width panel.
+  const shelfScale = await library.evaluate((screen) => {
+    const width = (id: string) => screen.querySelector<HTMLElement>(`[data-panel-id="${id}"] .library-live`)!.getBoundingClientRect().width;
+    return { timeline: width('timeline') / 800, notes: width('notes') / 360 };
+  });
+  expect(shelfScale.timeline).toBeCloseTo(shelfScale.notes, 2);
   const timelinePreview = library.locator('[data-panel-id="timeline"] .library-live-frame');
   await expect(timelinePreview).toHaveCSS('width', '800px');
   await expect(timelinePreview).toHaveCSS('height', '440px');
@@ -185,10 +190,10 @@ libraryTest('library shows a panel grid, adds panels to the workspace, and edits
   await expect(page.locator(`#dock-right #panel-${dragId}`)).toBeVisible();
   await page.getByRole('button', { name: 'Open panel library', exact: true }).click();
   const workspaceCount = await page.evaluate(() => (window as any).PM.WS.all.length);
-  await library.getByRole('button', { name: /^Workspaces/ }).click();
+  await library.getByRole('button', { name: 'All workspaces', exact: true }).click();
   await expect(library.locator('.library-card')).toHaveCount(workspaceCount);
   await expect(library.locator('.library-card .workspace-map').first()).toBeVisible();
-  await library.getByRole('button', { name: /^Panels/ }).click();
+  await library.getByRole('button', { name: 'All panels', exact: true }).click();
   await library.getByRole('button', { name: 'New panel', exact: true }).click();
   await expect(page.locator('#agent-composer-agent')).toHaveText('Create a new panel that ');
   expect(session.diagnostics.pageErrors).toEqual([]);

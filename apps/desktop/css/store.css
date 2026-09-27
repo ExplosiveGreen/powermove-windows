@@ -39,16 +39,7 @@
    search, Publish. */
 .st-head{width:960px;max-width:100%;margin:0 auto 32px;display:flex;flex-direction:column;gap:16px}
 .st-title{font-size:22px;line-height:28px;font-weight:var(--fw-medium);letter-spacing:-.015em;color:var(--tx)}
-/* On a kind page the title is Back: the chevron grows its own width so the
-   word slides over as it rolls from Store to Discover, on the roll's clock. */
-.st-title-inner{display:inline-flex;align-items:center;vertical-align:top;border-radius:var(--r-sm);transition:color var(--dur-1) var(--ease)}
-.st-title-chev{display:inline-flex;align-items:center;width:0;height:28px;overflow:hidden;opacity:0;color:var(--tx-3);transition:width 550ms cubic-bezier(.32,.72,0,1),opacity 300ms var(--ease),color var(--dur-1) var(--ease)}
-.st-title-chev svg{flex:none;width:17px;height:17px;transform:rotate(180deg)}
-.st-title.is-back .st-title-chev{width:22px;opacity:1}
-.st-title.is-back .st-title-inner{cursor:default;user-select:none;-webkit-user-select:none}
-.st-title.is-back .st-title-inner:hover,.st-title.is-back .st-title-inner:hover .st-title-chev{color:var(--tx-2)}
-.st-title.is-back .st-title-inner:focus-visible{outline:0;box-shadow:0 0 0 3px var(--ink-2)}
-@media (prefers-reduced-motion:reduce){.st-title-chev{transition:none}}
+/* On a kind page the title is Back: controls/BackTitle rolls Store into Discover. */
 .st-toolbar{display:flex;align-items:center;gap:8px}
 #store-screen .segmented{--segment-inset:3px;flex:none;gap:2px;margin-right:auto;padding:var(--segment-inset);background:var(--bg-field);border-radius:var(--r-md);box-shadow:none}
 #store-screen .segmented button{height:26px;padding:0 14px;border-radius:calc(var(--r-md) - var(--segment-inset));color:var(--tx-3);font-size:var(--fs-md);font-weight:var(--fw-medium);transition:background var(--dur-1),color var(--dur-1)}

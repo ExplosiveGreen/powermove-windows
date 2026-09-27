@@ -8,7 +8,8 @@
   import SlashMenu from './SlashMenu.svelte';
   import { slashCommands, type SlashCommand } from './slash-commands';
 
-  let { PM, panelId }: { PM: Record<string, any>; panelId: string } = $props();
+  /* `placeholder` names what an idle draft will change; working copy always wins. */
+  let { PM, panelId, placeholder }: { PM: Record<string, any>; panelId: string; placeholder?: string } = $props();
   let textarea = $state<HTMLDivElement>(null!);
   let editor = $state<InlinePrompt>();
   let editorThread: string | undefined;
@@ -218,7 +219,7 @@
       contenteditable={!mode.disabled}
       tabindex="0"
       id={textareaId}
-      data-placeholder={mode.placeholder}
+      data-placeholder={mode.working || mode.disabled ? mode.placeholder : placeholder ?? mode.placeholder}
       aria-label="Message Powermove agent"
       aria-controls={showCommands ? menuId : undefined}
       aria-activedescendant={showCommands ? `${menuId}-${commandIndex}` : undefined}

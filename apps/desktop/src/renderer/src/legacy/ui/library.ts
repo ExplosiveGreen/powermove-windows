@@ -79,5 +79,5 @@ PM.WorkspaceEditor = WorkspaceEditor;
 PM.bus.on('layout:applied', () => { if (PM.LibraryUI.isOpen) screen?.refresh(); });
 PM.bus.on('workspaces', () => { if (PM.LibraryUI.isOpen) screen?.refresh(); });
 PM.bus.on('project', close);
-PM.Kernel?.events?.on?.('extensions:changed', () => { if (PM.LibraryUI.isOpen) screen?.refresh(); });
+PM.Kernel?.events?.on?.('extensions:changed', () => { if (PM.LibraryUI.isOpen) screen?.refresh(true); });
 }

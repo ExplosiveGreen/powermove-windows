@@ -2,8 +2,8 @@
   import { openProjectPicker } from './project-picker';
   import { tick, untrack } from 'svelte';
   import { fade, fly } from 'svelte/transition';
-  import { cubicOut } from 'svelte/easing';
-  import Scritto from '@scritto/svelte';
+  import BackTitle from '../controls/BackTitle.svelte';
+  import { pageFly, pageSettle, reducedMotion, type PageDirection } from '../controls/page-motion';
   import type { CompareDto, CompareStatus, ListingDto, TreeFileDto } from '@powermove/registry/wire';
   import Icon from '../panels/Icon.svelte';
   import { mountSquircles, SQUIRCLE_SELECTOR } from '../settings/squircle';
@@ -34,12 +34,11 @@
                  rise; a detail slides in the way you moved and back out.
        settle    content that changes in place (data after its skeleton, the
                  carousel's next collection, a status line) fades.
-     Hover and press are CSS (store.css › motion). Reduced motion stills it all. */
-  const SLIDE = 24;
-  const RISE = 8;
-  const PAGE_MS = 200;
+     Hover and press are CSS (store.css › motion). Reduced motion stills it all.
+     The timings live in controls/page-motion, shared with the Library and the
+     home screen so every page in the app arrives the same way. */
   const SEARCH_DEBOUNCE_MS = 200;
-  const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const reduced = reducedMotion;
   const OFFLINE: LoadError = { offline: true, message: 'Can’t reach the store' };
 
   type Loadable<T> = { status: 'loading' } | { status: 'ready'; value: T } | { status: 'error'; error: LoadError };
@@ -105,11 +104,9 @@
   const titleBack = $derived((!!pageKind || !!profile) && !query);
   const titleText = $derived(titleBack ? (profile ? profile.from.label : 'Discover') : 'Store');
   const viewKey = $derived(detail ? `detail:${detail.coord ? `${detail.coord.handle}/${detail.coord.slug}` : detail.localId}` : query ? 'search' : profile ? `dev:${profile.handle}` : page);
-  const slide = $derived(reduced() ? { duration: 0 }
-    : direction === 0 ? { y: RISE, duration: PAGE_MS, easing: cubicOut }
-    : { x: direction * SLIDE, duration: PAGE_MS, easing: cubicOut });
+  const slide = $derived(pageFly(direction as PageDirection));
   /* A status line that changes under you (an update finished) fades in. */
-  const settle = $derived(reduced() ? { duration: 0 } : { duration: 180, easing: cubicOut });
+  const settle = $derived(pageSettle());
 
   const groups = $derived(groupLibrary(library));
   /* The Library: what needs you first, then what you installed and what you
@@ -871,21 +868,7 @@
              title is the way back: "Store" rolls into "Discover" (Scritto)
              as a chevron grows in beside it. -->
         <header class="st-head">
-          <h1 class="st-title" class:is-back={titleBack}>
-            <!-- Focusable only while it is role=button (titleBack). -->
-            <!-- svelte-ignore a11y_no_static_element_interactions, a11y_no_noninteractive_tabindex -->
-            <span
-              class="st-title-inner"
-              role={titleBack ? 'button' : undefined}
-              tabindex={titleBack ? 0 : undefined}
-              aria-label={titleBack ? `Back to ${titleText}` : undefined}
-              onclick={titleGo}
-              onkeydown={(event) => { if (titleBack && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); titleGo(); } }}
-            >
-              <span class="st-title-chev" aria-hidden="true"><Icon {PM} name="chev" /></span>
-              <Scritto value={titleText} />
-            </span>
-          </h1>
+<BackTitle {PM} class="st-title" text={titleText} back={titleBack} onback={titleGo} />
           <div class="st-toolbar">
             <div class="segmented" role="tablist" aria-label="Store pages">
               <button type="button" role="tab" class:on={page !== 'library'} aria-selected={page !== 'library'} onclick={() => show('browse')}>Discover</button>
