@@ -84,8 +84,11 @@
      the page you opened it from (Discover, a kind, the Library, an
      extension's page), and Back returns there exactly. */
   type ProfileFrom = { page: StorePage; detail: DetailTarget | null; search: string; scroll: number; label: string };
-  let profile = $state<{ handle: string; from: ProfileFrom } | null>(null);
+  let profile = $state<{ handle: string; verified: boolean; from: ProfileFrom } | null>(null);
   let profileItems = $state<Loadable<StoreListing[]>>({ status: 'loading' });
+  const profileVerified = $derived(!!profile && (profileItems.status === 'ready' && profileItems.value.length > 0
+    ? profileItems.value.some((listing) => listing.verified)
+    : profile.verified));
   const profileCache = new Map<string, StoreListing[]>();
 
   $effect(() => subscribeAccount((user) => {
@@ -437,12 +440,14 @@
     return 'Discover';
   }
 
-  function openProfile(handle: string): void {
+  /* `verified` comes with the name that was clicked, so the check is there
+     from the first frame; the listings confirm it once they load. */
+  function openProfile(handle: string, verified = false): void {
     if (profile?.handle === handle && !detail) return;
     const from: ProfileFrom = profile && !detail
       ? profile.from
       : { page, detail, search: searchText, scroll: scrollEl?.scrollTop ?? 0, label: hereLabel() };
-    profile = { handle, from };
+    profile = { handle, verified, from };
     direction = 1;
     detail = null;
     remote = null;
@@ -927,6 +932,7 @@
             <header class="st-dev-head">
               <span class="acct-avatar st-dev-avatar" aria-hidden="true">{dev.slice(0, 1).toUpperCase()}</span>
               <h2>{dev}</h2>
+              {#if profileVerified}{@render verifiedMark(17)}{/if}
             </header>
             <section class="st-sec">
               {@render head('Extensions', profileItems.status === 'ready' ? profileItems.value.length : null)}
@@ -1101,7 +1107,7 @@
       <b>{l.name}</b>
       <span class="st-item-line">{l.tagline}</span>
       {#if byline}
-        <span class="st-item-meta"><button class="st-item-dev" type="button" onclick={() => openProfile(l.publisher)}>by {l.publisher}</button></span>
+        <span class="st-item-meta"><button class="st-item-dev" type="button" onclick={() => openProfile(l.publisher, l.verified === true)}>by {l.publisher}{#if l.verified}{@render verifiedMark(12)}{/if}</button></span>
       {/if}
     </span>
     <span class="st-item-action">
@@ -1116,6 +1122,16 @@
       {/if}
     </span>
   </div>
+{/snippet}
+
+<!-- The blue check: a verified developer, set by a Powermove admin. It
+     sits with their name wherever the name appears, scaled to the text. -->
+{#snippet verifiedMark(size: number)}
+  <svg class="st-verified" style:width={`${size}px`} style:height={`${size}px`} viewBox="0 0 24 24" role="img" aria-label="Verified">
+    <title>Verified</title>
+    <path class="st-verified-seal" d="M9.67 3.31Q12.00 1.40 14.33 3.31Q17.30 2.82 18.36 5.64Q21.18 6.70 20.69 9.67Q22.60 12.00 20.69 14.33Q21.18 17.30 18.36 18.36Q17.30 21.18 14.33 20.69Q12.00 22.60 9.67 20.69Q6.70 21.18 5.64 18.36Q2.82 17.30 3.31 14.33Q1.40 12.00 3.31 9.67Q2.82 6.70 5.64 5.64Q6.70 2.82 9.67 3.31Z" />
+    <path class="st-verified-tick" d="M8.2 12.3l2.6 2.6 5-5.4" />
+  </svg>
 {/snippet}
 
 {#snippet head(title: string, count: number | string | null)}
@@ -1228,6 +1244,7 @@
   {@const byYou = ownPage || (!data && !preview && !!item && 'you' in item.maker)}
   <!-- Whose page "Made by" opens: the store's publisher, when there is one. -->
   {@const devHandle = data?.publisher ?? preview?.publisher ?? (item && 'handle' in item.maker ? item.maker.handle : null)}
+  {@const devVerified = (data?.verified ?? preview?.verified) === true}
   {@const storeLineage = data?.forkedFrom ?? storeLineageOf(item)}
   {@const builtinLineage = storeLineage ? undefined : builtinLineageOf(item)}
   <!-- A fork compares against the release it was forked from (P0 Q5), or
@@ -1450,7 +1467,7 @@
       {#if who}
         <div class="st-kv">
           <span>Made by</span>
-          <b>{#if devHandle}<button class="st-link st-dev-link" type="button" onclick={() => openProfile(devHandle)}>{byYou ? 'You' : devHandle}</button>{:else}{byYou ? 'You' : who.replace(/^by /, '')}{/if}</b>
+          <b class="st-kv-dev">{#if devHandle}<button class="st-link st-dev-link" type="button" onclick={() => openProfile(devHandle, devVerified)}>{byYou ? 'You' : devHandle}</button>{:else}{byYou ? 'You' : who.replace(/^by /, '')}{/if}{#if devVerified}{@render verifiedMark(14)}{/if}</b>
         </div>
       {/if}
       <div class="st-kv"><span>Kind</span><b>{KIND_LABEL[kind]}</b></div>

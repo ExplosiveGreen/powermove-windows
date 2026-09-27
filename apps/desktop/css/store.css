@@ -261,6 +261,16 @@ button.st-plus:hover{background:var(--bg-row-hi);color:var(--tx)}
 .st-link.st-dev-link{color:var(--tx);font-weight:var(--fw-regular);text-decoration-color:transparent}
 .st-link.st-dev-link:hover{text-decoration-color:var(--tx-4)}
 
+/* The blue check: macOS's own system blue, the one hue the Store uses only
+   for this, so it never reads as the accent or a state. */
+#store-screen{--verified:#007aff}
+:root[data-theme="dark"] #store-screen{--verified:#0a84ff}
+.st-verified{flex:none;display:inline-block;vertical-align:-.14em;margin-left:.3em}
+.st-verified-seal{fill:var(--verified)}
+.st-verified-tick{fill:none;stroke:#fff;stroke-width:2.1;stroke-linecap:round;stroke-linejoin:round}
+.st-kv-dev{display:inline-flex;align-items:center}
+.st-dev-head .st-verified{margin-left:-8px}
+
 /* ── developer ── */
 /* Their avatar (the account's flat ink, never a hue) and handle, on the
    text edge, the way an extension's page opens on its icon and name. */

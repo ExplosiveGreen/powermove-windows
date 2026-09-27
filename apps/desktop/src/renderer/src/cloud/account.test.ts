@@ -14,7 +14,7 @@ const NO_HANDLE: MeDto = {
 };
 const WITH_HANDLE: MeDto = {
   ...NO_HANDLE,
-  publisher: { id: '7d2a0b6e-1c3f-4a5b-8c9d-0e1f2a3b4c5d', handle: 'jude', tombstoned: false }
+  publisher: { id: '7d2a0b6e-1c3f-4a5b-8c9d-0e1f2a3b4c5d', handle: 'jude', tombstoned: false, verified: false }
 };
 
 beforeAll(() => {
