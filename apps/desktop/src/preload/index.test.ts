@@ -77,6 +77,13 @@ describe('preload bridge', () => {
     expect(electronMocks.invoke).toHaveBeenCalledExactlyOnceWith(IPC.extensionFork, { id: 'timeline' });
   });
 
+  it('writes clipboard text through main and exposes no way to read it', async () => {
+    electronMocks.invoke.mockResolvedValue(undefined);
+    await bridge().clipboardWriteText!('hello');
+    expect(electronMocks.invoke).toHaveBeenCalledExactlyOnceWith(IPC.clipboardWriteText, 'hello');
+    expect(Object.keys(bridge()).filter(key => /clipboard/i.test(key))).toEqual(['clipboardWriteText']);
+  });
+
   it('isolates progress and trace by request and removes its one listener after resolve', async () => {
     const result = { ok: true as const, text: 'done', access: 'editor' as const };
     electronMocks.invoke.mockResolvedValue(result);
