@@ -124,7 +124,8 @@ handled the same way. The extension stays off until it is turned on again, so
 split long synchronous work into chunks that return to the event loop.
 
 `powermove serve` loads every sandbox document from a single origin, so process
-isolation there is whatever the browser provides. It derives Store trust from the
+isolation there is whatever the browser provides, and there is no watchdog: one
+spinning extension would stall its siblings too, and none could be ended. It derives Store trust from the
 desktop provenance file and applies the same sandbox document and CSP. A Store
 install requesting `full-access` remains off as “needs trust”; trust it from the
 desktop app first, since serve has no trust dialog.

@@ -135,6 +135,11 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   // so it gets its own process (in development main proxies it from Vite);
   // only the browser host (powermove serve) serves it from its own origin.
   const base = sandboxOrigin(record.id, location.protocol === 'app:' || navigator.userAgent.includes('Electron') ? 'app://powermove' : location.origin);
+  /* Silence is this extension's fault, and stoppable, only when it has a
+     process of its own. Under the browser host every sandbox shares one
+     origin, so one spinning extension would make its siblings miss pings too,
+     and nothing could end it. There no fatal liveness rule runs at all. */
+  const isolated = base.startsWith('app:') && typeof bridge()?.sandboxTerminate === 'function';
   const perms = (manifest.permissions ?? []).join(',');
   if (!test?.frame) frame.src = sandboxDocumentUrl(base, record.id, perms);
   const registrations = new Map<string, Disposable>();
@@ -468,7 +473,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     } finally { clearTimeout(timeout); }
     host.setActivating(false);
     // A spinning or crashed runtime stops answering.
-    watchdog = watchSandbox({ ping: () => rpc.call('ping'), onUnresponsive: () => void (async () => {
+    if (isolated) watchdog = watchSandbox({ ping: () => rpc.call('ping'), onUnresponsive: () => void (async () => {
       await terminate();
       dispose();
       deps.reportRuntimeError(record.id, Object.assign(new Error('stopped responding'), { code: 'sandbox_fatal' }));
@@ -477,9 +482,9 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   } catch (error) {
     host.setActivating(false);
     /* A runtime still answering pings was only waiting (a slow fetch in
-       activate); one that does not is spinning and would spin again next
-       launch, so it is killed and turned off. */
-    const spinning = timedOut && !await Promise.race([rpc.call('ping').then(() => true, () => false), new Promise<boolean>(resolve => setTimeout(() => resolve(false), 1500))]);
+       activate); an isolated one that does not is spinning and would spin
+       again next launch, so it is killed and turned off. */
+    const spinning = isolated && timedOut && !await Promise.race([rpc.call('ping').then(() => true, () => false), new Promise<boolean>(resolve => setTimeout(() => resolve(false), 1500))]);
     if (spinning) await terminate();
     dispose();
     if (spinning) deps.reportRuntimeError(record.id, Object.assign(new Error('stopped responding while activating'), { code: 'sandbox_fatal' }));

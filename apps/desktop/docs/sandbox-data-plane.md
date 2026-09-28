@@ -41,7 +41,9 @@ Nothing here has shipped to Store users yet, so the sandbox contract may change.
   The editor's own CSP allows `frame-src app:`; the navigation guard allows
   sub-frame navigations only to a sandbox document on a matching host.
 - `powermove serve` (browser host) keeps a single origin; process isolation
-  there is whatever the browser gives. Documented limitation.
+  there is whatever the browser gives. Documented limitation. Without a process
+  of its own an extension cannot be blamed for missed pings (a spinning sibling
+  starves them all) nor stopped, so no watchdog runs there (§2).
 
 ### 2. Watchdog
 
@@ -60,6 +62,9 @@ Nothing here has shipped to Store users yet, so the sandbox contract may change.
   as an immediate disable (no windowed count): the extension shows
   "runtime-error" health and a toast.
 - A crashed process (OOM) looks the same: pings stop answering.
+- The watchdog runs only when the extension has its own process and main can
+  end it: an Electron `app://<host>` document and a bridge with
+  `sandboxTerminate`. Under `powermove serve` there is none.
 
 ### 3. Data plane: small state push, pull the project
 
