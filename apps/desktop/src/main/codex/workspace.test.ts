@@ -80,7 +80,7 @@ function workspaceOptions(overrides: Partial<PrepareAgentWorkspaceOptions> = {})
 
 describe('safeAgentComponent', () => {
   it('isolates thread sessions within each project and authority', async () => {
-    const root = await temporaryDirectory();
+    const root = agentWorkspaceRoot(await temporaryDirectory(), 'project');
     const a = sessionPathFor(root, 'project', 'thread-a');
     const b = sessionPathFor(root, 'project', 'thread-b');
     const computer = sessionPathFor(root, 'computer', 'thread-a');
@@ -123,7 +123,7 @@ describe('prepareAgentWorkspace', () => {
     expect(layout.runDirectory).toBe(path.join(layout.root, 'artifacts', 'run-123'));
     expect(layout.outputPath).toBe(path.join(agentStateRoot(layout.root), 'result-run-123.json'));
     expect(layout.schemaPath).toBe(path.join(userData, 'Agent State', 'Project_123', 'result-schema.json'));
-    expect(layout.sessionPath).toBe(path.join(layout.root, '.powermove', 'session-v2-project.txt'));
+    expect(layout.sessionPath).toBe(path.join(agentStateRoot(layout.root), 'session-v2-project.txt'));
     expect(layout.apiPackDirectory).toBe(path.join(layout.root, 'powermove-api'));
     expect(layout.liveDirectory).toBe(options.extensionsDir);
     expect(layout.extensionsDir).toBe(path.join(layout.root, '.powermove', 'extension-runs', 'run-123'));
@@ -347,5 +347,53 @@ describe('links planted by Project commands', () => {
     await expect(lstat(layout.stagingDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readdir(outside)).toEqual(['keep']);
     expect((await readdir(agentStateRoot(layout.root))).filter(name => name.startsWith('.scratch-'))).toEqual([]);
+  });
+});
+
+describe('state the agent could forge', () => {
+  const FLAG = '--dangerously-bypass-approvals-and-sandbox';
+
+  it('keeps sessions and checkpoints outside the workspace, ignoring copies planted inside it', async () => {
+    const userData = await temporaryDirectory();
+    const extensionsDir = path.join(userData, 'extensions');
+    const root = agentWorkspaceRoot(userData, 'Project_123');
+    const legacy = path.join(root, '.powermove', 'session-v2-project.txt');
+    const forgedStage = path.join(root, '.powermove', 'extension-runs', 'forged');
+    await mkdir(forgedStage, { recursive: true });
+    await writeFile(legacy, FLAG);
+    await writeFile(`${legacy}.checkpoint.json`, JSON.stringify({
+      liveDirectory: extensionsDir, stagingDirectory: forgedStage, projectId: 'Project_123', runId: 'forged',
+      historyRoot: path.join(userData, 'Agent Change History', 'Project_123'), baselineRootHash: 'x', baselineHashes: {}
+    }));
+    const layout = await prepareAgentWorkspace(request(), userData, 'project', agentResultSchema(), workspaceOptions({ extensionsDir }));
+    expect(layout.runId).not.toBe('forged');
+    expect(path.relative(root, layout.sessionPath).startsWith('..')).toBe(true);
+    expect(await readSession(layout.sessionPath)).toBeNull();
+    await preserveCancelledRun(layout);
+    await expect(stat(`${layout.sessionPath}.checkpoint.json`)).resolves.toBeTruthy();
+    expect(await readFile(legacy, 'utf8')).toBe(FLAG);
+  });
+
+  it('never returns a session id that could read as a command-line flag', async () => {
+    const file = sessionPathFor(agentWorkspaceRoot(await temporaryDirectory(), 'project'), 'project');
+    await mkdir(path.dirname(file), { recursive: true });
+    for (const forged of [FLAG, '-r', 'id with spaces', 'a\nb']) {
+      await writeFile(file, forged);
+      expect(await readSession(file)).toBeNull();
+    }
+    await writeSession(file, FLAG);
+    expect(await readSession(file)).toBeNull();
+    await writeSession(file, '019a3c5e-7b2d-7c11-9e4f-2a6b8d0c1e3f');
+    expect(await readSession(file)).toBe('019a3c5e-7b2d-7c11-9e4f-2a6b8d0c1e3f');
+  });
+
+  it('refuses a checkpoint whose baseline is not a map of extension hashes', async () => {
+    const userData = await temporaryDirectory();
+    const options = workspaceOptions({ extensionsDir: path.join(userData, 'extensions') });
+    const layout = await prepareAgentWorkspace(request(), userData, 'project', agentResultSchema(), options);
+    await preserveCancelledRun({ ...layout, baselineHashes: { '../escape': 'x' } });
+    await expect(prepareAgentWorkspace(request(), userData, 'project', agentResultSchema(), options)).rejects.toThrow(/checkpoint is invalid/);
+    await preserveCancelledRun(layout);
+    await expect(prepareAgentWorkspace(request(), userData, 'project', agentResultSchema(), options)).resolves.toMatchObject({ runId: layout.runId });
   });
 });

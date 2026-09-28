@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, readFile, readdir, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import { EXTENSION_ID } from '../../shared/extensions';
 import { LIMITS, type AgentProviderId, type CodexRunRequest } from '../../shared/ipc';
 import { imageExtension } from '../image-extension';
 import { prepareExtensionStage, type ExtensionStage } from './change-history';
@@ -137,6 +138,7 @@ function oneAtATime<T>(key: string, task: () => Promise<T>): Promise<T> {
   return next;
 }
 
+/** Sessions and checkpoints are main's own state (agentStateRoot), not workspace files. */
 export function sessionPathFor(
   root: string,
   authority: CodexAuthority,
@@ -145,15 +147,20 @@ export function sessionPathFor(
 ): string {
   if (threadId !== undefined && !/^[A-Za-z0-9_-]{1,120}$/.test(threadId)) throw new Error('Invalid agent thread id');
   const providerPart = provider === 'chatgpt' ? '' : `-${provider}`;
+  const state = agentStateRoot(root);
   return threadId
-    ? path.join(root, '.powermove', 'threads', threadId, `session-v${SESSION_CONTRACT_VERSION}${providerPart}-${authority}.txt`)
-    : path.join(root, '.powermove', `session-v${SESSION_CONTRACT_VERSION}${providerPart}-${authority}.txt`);
+    ? path.join(state, 'threads', threadId, `session-v${SESSION_CONTRACT_VERSION}${providerPart}-${authority}.txt`)
+    : path.join(state, `session-v${SESSION_CONTRACT_VERSION}${providerPart}-${authority}.txt`);
 }
+
+/* A native session id becomes a CLI argument; anything else is dropped so it
+   can never read as a flag. */
+const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/;
 
 export async function readSession(sessionPath: string): Promise<string | null> {
   try {
     const value = (await readFile(sessionPath, 'utf8')).trim();
-    return value.length > 0 ? value : null;
+    return SESSION_ID.test(value) ? value : null;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
@@ -165,12 +172,13 @@ export async function clearSession(sessionPath: string): Promise<void> {
 }
 
 export async function writeSession(sessionPath: string, threadId: string): Promise<void> {
-  if (!threadId.trim()) return;
-  await mkdir(path.dirname(sessionPath), { recursive: true });
-  const temporaryPath = `${sessionPath}.${process.pid}.${randomUUID()}.tmp`;
-  await writeFile(temporaryPath, threadId.trim(), { encoding: 'utf8', mode: 0o600 });
-  await rename(temporaryPath, sessionPath);
+  if (!SESSION_ID.test(threadId.trim())) return;
+  await writeAtomic(sessionPath, threadId.trim());
 }
+
+const SHA256 = /^[0-9a-f]{64}$/;
+const isBaseline = (value: unknown): value is Record<string, string> => !!value && typeof value === 'object'
+  && !Array.isArray(value) && Object.entries(value).every(([id, hash]) => EXTENSION_ID.test(id) && typeof hash === 'string' && SHA256.test(hash));
 
 export async function prepareAgentWorkspace(
   req: CodexRunRequest,
@@ -227,7 +235,7 @@ export async function prepareAgentWorkspace(
         || saved.projectId !== req.projectId || saved.liveDirectory !== options.extensionsDir
         || saved.stagingDirectory !== path.join(root, '.powermove', 'extension-runs', saved.runId)
         || saved.historyRoot !== path.join(userData, 'Agent Change History', safeAgentComponent(req.projectId))
-        || typeof saved.baselineRootHash !== 'string' || !saved.baselineHashes) {
+        || typeof saved.baselineRootHash !== 'string' || !SHA256.test(saved.baselineRootHash) || !isBaseline(saved.baselineHashes)) {
         throw new Error('The saved agent checkpoint is invalid; its files have been preserved.');
       }
       // A stage that is gone, or now a link, is not resumed.
@@ -355,12 +363,9 @@ export async function discardPartialRun(workspace: Pick<AgentWorkspace, 'root' |
 }
 
 export async function preserveCancelledRun(workspace: AgentWorkspace): Promise<void> {
-  const file = `${workspace.sessionPath}.checkpoint.json`;
-  await mkdir(path.dirname(file), { recursive: true });
-  const temporary = `${file}.${randomUUID()}.tmp`;
   const { liveDirectory, stagingDirectory, historyRoot, projectId, runId, baselineHashes, baselineRootHash } = workspace;
-  await writeFile(temporary, JSON.stringify({ liveDirectory, stagingDirectory, historyRoot, projectId, runId, baselineHashes, baselineRootHash }), { mode: 0o600 });
-  await rename(temporary, file);
+  await writeAtomic(`${workspace.sessionPath}.checkpoint.json`,
+    JSON.stringify({ liveDirectory, stagingDirectory, historyRoot, projectId, runId, baselineHashes, baselineRootHash }));
 }
 
 export async function discardExtensionStage(workspace: Pick<AgentWorkspace, 'root' | 'stagingDirectory'> & { sessionPath?: string }): Promise<void> {

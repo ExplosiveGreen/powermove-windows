@@ -221,10 +221,8 @@ export class CompatibleProvider {
       if (workspace) {
         // No command or background job outlives its run.
         await workspace.stopCommands().catch(() => undefined);
-        if (signal.aborted && !finished) {
-          await mkdir(path.dirname(workspace.layout.sessionPath), { recursive: true })
-            .then(() => preserveCancelledRun(workspace!.layout)).catch(() => undefined);
-        } else await discardExtensionStage(workspace.layout).catch(() => undefined);
+        if (signal.aborted && !finished) await preserveCancelledRun(workspace.layout).catch(() => undefined);
+        else await discardExtensionStage(workspace.layout).catch(() => undefined);
       }
       if (this.runs.get(req.id) === controller) this.runs.delete(req.id);
     }
