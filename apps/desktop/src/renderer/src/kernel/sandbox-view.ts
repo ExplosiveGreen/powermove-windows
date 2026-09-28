@@ -22,6 +22,10 @@ import { createRpc, type Rpc, type RpcBudget } from '../../../shared/sandbox-rpc
 import type { SandboxInit, SandboxKey, SandboxKeyEvent, SandboxPanelInfo, SandboxViewInit } from '../../sandbox/shim-api';
 import type { Disposable } from './api';
 import { importedFile } from './sandbox-schemas';
+import { userActivated } from './sandbox-links';
+
+/** How long a press on the app itself outweighs the app's activation for a focused view: as long as that activation lasts. */
+const HOST_PRESS_MS = 5_000;
 
 export interface ViewLink {
   rpc: Rpc;
@@ -29,6 +33,8 @@ export interface ViewLink {
   registrations: Map<string, Disposable>;
   /** The host's own reading: this view's frame has focus in a focused window. Nothing the view sends changes it. */
   focused?(): boolean;
+  /** Focused, and the app's activation is a person's click or key press in this frame, not on the app around it. */
+  acted?(): boolean;
 }
 
 export interface ViewHost {
@@ -80,8 +86,19 @@ export function mountSandboxView(host: ViewHost, panel: SandboxPanelInfo, body: 
   frame.dataset.view = panel.id;
   let live: { link: ViewLink; token: string } | null = null;
   const focus = (focused: boolean, field = false): void => host.focus?.(focused, field);
-  frame.addEventListener('focus', () => focus(true));
+  /* The app's activation cannot say where the press landed. A press on a
+     control that keeps focus off itself (it cancels pointerdown) leaves this
+     frame focused, so a real press on the app after the frame took focus
+     means the activation is the app's, until it lapses. Presses inside the
+     frame never reach this window. */
+  let focusedAt = -Infinity, pressedAt = -Infinity;
+  frame.addEventListener('focus', () => { focusedAt = performance.now(); focus(true); });
   frame.addEventListener('blur', () => focus(false));
+  const press = (event: Event): void => { if (event.isTrusted) pressedAt = performance.now(); };
+  // The window's capture phase comes first: no app listener can stop a press before it.
+  const app = frame.ownerDocument.defaultView ?? frame.ownerDocument;
+  app.addEventListener('pointerdown', press, true);
+  app.addEventListener('keydown', press, true);
 
   const disconnect = (): void => {
     if (!live) return;
@@ -104,7 +121,9 @@ export function mountSandboxView(host: ViewHost, panel: SandboxPanelInfo, body: 
     const toView = new MessageChannel();
     const brokered = new MessageChannel();
     const token = crypto.randomUUID();
-    const link = { registrations: new Map<string, Disposable>(), focused: () => frame.ownerDocument.hasFocus() && frame.ownerDocument.activeElement === frame } as ViewLink;
+    const focused = (): boolean => frame.ownerDocument.hasFocus() && frame.ownerDocument.activeElement === frame;
+    const link = { registrations: new Map<string, Disposable>(), focused,
+      acted: () => focused() && userActivated() && !(pressedAt > focusedAt && performance.now() - pressedAt < HOST_PRESS_MS) } as ViewLink;
     link.rpc = createRpc(toView.port1, {
       ...host.handlers(link),
       /* The kernel accepts only this extension's bindings. Port messages are
@@ -159,6 +178,8 @@ export function mountSandboxView(host: ViewHost, panel: SandboxPanelInfo, body: 
       if (frame.ownerDocument.activeElement === frame) focus(false);
       observer?.disconnect();
       removalObserver?.disconnect();
+      app.removeEventListener('pointerdown', press, true);
+      app.removeEventListener('keydown', press, true);
       frame.removeEventListener('load', connect);
       disconnect();
       frame.remove();

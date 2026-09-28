@@ -80,6 +80,7 @@ export const IPC = {
   codexEvent: 'codex:event', // main → renderer
   agentToolRequest: 'agent-tool:request', // main → renderer
   agentToolResponse: 'agent-tool:response', // renderer → main
+  agentToolInput: 'agent-tool:input', // main → renderer: the agent's real input into this window starts (true) or ends (false)
   chatgptStatus: 'chatgpt:status',
   chatgptModels: 'chatgpt:models',
   chatgptConnect: 'chatgpt:connect',
@@ -732,6 +733,8 @@ export interface PowermoveBridge {
   agentTools: {
     onRequest(cb: (request: AgentToolRequestEvent) => void): () => void;
     respond(response: AgentToolResponseEvent): void;
+    /** computer_use_panel starts (true) or ends (false) sending real input into this window. */
+    onInput?(cb: (active: boolean) => void): () => void;
   };
 
   chatgpt: {

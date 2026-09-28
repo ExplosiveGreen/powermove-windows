@@ -214,7 +214,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   const copy = async (text: string, view: ViewLink | null): Promise<void> => {
     if (!permissions.includes('clipboard')) denied('ui.copy requires clipboard permission', 'clipboard');
     if (!view?.focused?.()) denied('ui.copy works only from a panel that has focus');
-    if (!userActivated()) denied('ui.copy works only right after a click or key press in the panel');
+    if (!view.acted?.()) denied('ui.copy works only right after a click or key press in the panel');
     const write = bridge()?.clipboardWriteText;
     if (!write) throw new Error('The clipboard is unavailable');
     const now = Date.now();
@@ -228,7 +228,8 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
      runtime, a run the host started while the app held that activation (a
      command, a status item's click, a palette, menu or toast item) that is
      still in flight and under 5 s old. The extension's own commands.run is
-     never one. */
+     never one, nor a key its view forwarded: the host cannot see keys in the
+     frame, and the view can send any. */
   let ownRun = false, personRuns = 0, personRunAt = -Infinity;
   const forPerson = <T,>(start: () => Promise<T>): Promise<T> => {
     if (ownRun || !userActivated()) return start();
@@ -238,7 +239,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     return running.finally(() => { personRuns -= 1; });
   };
   const gesture = (view: ViewLink | null): boolean => view
-    ? view.focused?.() === true && userActivated()
+    ? view.acted?.() === true
     : personRuns > 0 && performance.now() - personRunAt < PERSON_ACTION_MS;
   const importUrl = sandboxImportUrl({ manifest: () => manifest, assets: host.api.assets, admit: admitImport });
   const invoke = (namespace: string, method: string, args: unknown, view: ViewLink | null = null): unknown => {
@@ -562,8 +563,10 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
       for (const binding of reg.bindingsFor(chord)) {
         if (binding.ownerId !== record.id || !ownId(record.id, binding.command) || reg.commands.topEntry(binding.command)?.ownerId !== record.id) continue;
         if (payload.field && !binding.inFields || payload.repeat && !binding.repeat) continue;
-        void Promise.resolve(host.api.commands.run(binding.command, ...(binding.args ?? [])))
-          .catch(error => deps.reportRuntimeError(record.id, error));
+        let running: unknown;
+        ownRun = true;
+        try { running = host.api.commands.run(binding.command, ...(binding.args ?? [])); } finally { ownRun = false; }
+        void Promise.resolve(running).catch(error => deps.reportRuntimeError(record.id, error));
         break;
       }
     },

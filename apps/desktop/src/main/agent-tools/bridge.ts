@@ -16,6 +16,7 @@ import { isRecord, isString } from '../../shared/guards';
 import { EXTENSION_ID } from '../../shared/extensions';
 import { forkBuiltinExtension } from '../extensions/fork';
 import { POWERMOVE_AGENT_TOOLS, POWERMOVE_APP_AGENT_TOOLS, type NativeMcpServerConfig } from './spec';
+import { userInput, type UserInput } from '../user-input';
 
 const TOOL_TIMEOUT_MS = 120_000;
 const MAX_SOCKET_REQUEST_BYTES = 2 * 1024 * 1024;
@@ -120,6 +121,8 @@ export interface PowermoveAgentToolBridgeOptions {
   commandArgs?: string[];
   timeoutMs?: number;
   stageForkRebase?(options: { forkId: string; stagingDirectory: string }): Promise<unknown>;
+  /** Test seam: the app windows' input record. */
+  userInput?: Pick<UserInput, 'drive'>;
 }
 
 export class PowermoveAgentToolBridge {
@@ -251,7 +254,23 @@ export class PowermoveAgentToolBridge {
     ] };
   }
 
+  /* Chromium takes this input as a person's (transient user activation, and
+     main's own input record), so the window is marked driven by the agent
+     for the whole call: main and the renderer (told before the prepare
+     request, which it reads first) give no person credit until 5 s after. */
   private async computerUsePanel(session: PowermoveAgentToolSession, args: Record<string, unknown>): Promise<AgentToolResponseEvent> {
+    const owner = session.owner;
+    const release = (this.options.userInput ?? userInput).drive(owner);
+    try {
+      owner.send(IPC.agentToolInput, true);
+      return await this.sendPanelInput(session, args);
+    } finally {
+      release();
+      if (!owner.isDestroyed()) owner.send(IPC.agentToolInput, false);
+    }
+  }
+
+  private async sendPanelInput(session: PowermoveAgentToolSession, args: Record<string, unknown>): Promise<AgentToolResponseEvent> {
     const prepared = await this.callRenderer(session, '__prepare_panel_input', args);
     if (!prepared.ok) return prepared;
     const item = prepared.content[0];

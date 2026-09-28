@@ -12,7 +12,8 @@
   let gliderOn = $state(false);
   let query = $state('');
   /* The selection is a row, not a position: rows that land late can move
-     it, and Enter must run the row that was highlighted. None means the top. */
+     it, and Enter must run the row that was highlighted. None means the top;
+     a highlighted row that leaves the list leaves nothing highlighted. */
   let selection = $state.raw<{ id: string; index: number } | null>(null);
   /* Asynchronous answers (sandboxed providers and `when`s) arrive after the
      rows for a query; they count only while that query is the one asked. */
@@ -33,7 +34,7 @@
   let selected = $derived.by(() => {
     if (!selection) return 0;
     if (items[selection.index]?.id === selection.id) return selection.index;
-    return Math.max(0, items.findIndex(item => item.id === selection!.id));
+    return items.findIndex(item => item.id === selection!.id);
   });
   // Group consecutive entries by category while keeping the flat index that
   // keyboard navigation and aria-activedescendant rely on.
@@ -84,7 +85,7 @@
       event.preventDefault();
     } else if (event.key === 'Enter') {
       event.preventDefault();
-      run(items[selected]);
+      if (selected >= 0) run(items[selected]);
     } else if (event.key === 'Escape') {
       event.preventDefault();
       onclose();

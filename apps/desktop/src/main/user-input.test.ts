@@ -73,4 +73,26 @@ describe('user input', () => {
       expect(await input.acted(window.target)).toBe(false);
     }
   });
+
+  it('counts nothing while the agent drives the window, nor for 5 seconds after', async () => {
+    let clock = 1_000;
+    const input = createUserInput(() => clock);
+    const window = contents(true);
+    input.track(window.target, window.onBlur);
+    const release = input.drive(window.target);
+    const other = input.drive(window.target);
+    window.input('mouseDown');
+    expect(await input.acted(window.target)).toBe(false);
+    release();
+    release();
+    clock += USER_INPUT_MS;
+    expect(await input.acted(window.target)).toBe(false); // the other drive still runs
+    other();
+    clock += USER_INPUT_MS - 1;
+    window.key('c');
+    expect(await input.acted(window.target)).toBe(false);
+    expect(window.executeJavaScript).not.toHaveBeenCalled();
+    clock += 1;
+    expect(await input.acted(window.target)).toBe(true);
+  });
 });

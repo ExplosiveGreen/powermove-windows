@@ -207,6 +207,40 @@ it('refuses ui.copy from a focused panel nobody just clicked or typed in (focus 
   expect(clipboardWriteText).toHaveBeenCalledWith('x');
 });
 
+/** A real press on the app document, outside every frame: the browser's own, so trusted. */
+function pressOnApp(type: 'pointerdown' | 'keydown' = 'pointerdown'): void {
+  const event = new Event(type, { bubbles: true });
+  Object.defineProperty(event, 'isTrusted', { value: true });
+  document.body.dispatchEvent(event);
+}
+
+it('refuses ui.copy after a press on the app that left the panel focused, until that activation lapses', async () => {
+  let clock = 1_000_000;
+  vi.spyOn(performance, 'now').mockImplementation(() => clock);
+  let now = 5_000_000;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const { view, clipboardWriteText } = await copier(['clipboard']);
+  view.frame.focus();
+  clock += 100;
+  // A toolbar button that cancels pointerdown keeps focus in the panel.
+  pressOnApp();
+  await expect(view.rpc.call('invoke', 'ui', 'copy', ['x'])).rejects.toMatchObject({ message: expect.stringContaining('click or key press') });
+  // Script-made presses are not the person's, and do not count against the panel.
+  clock += 5_000; now += 5_000;
+  document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+  // After the app's activation has lapsed, an active one is a press in the frame.
+  await view.rpc.call('invoke', 'ui', 'copy', ['after']);
+  expect(clipboardWriteText).toHaveBeenCalledExactlyOnceWith('after');
+  clock += 100; now += 1_000;
+  pressOnApp();
+  // Focus that moves into the frame after the press is a press in the frame.
+  view.frame.blur();
+  clock += 100;
+  view.frame.focus();
+  await view.rpc.call('invoke', 'ui', 'copy', ['refocused']);
+  expect(clipboardWriteText).toHaveBeenLastCalledWith('refocused');
+});
+
 it('opens a listed link without a sheet only from a focused panel right after a real click or key press', async () => {
   let clock = 1_000_000;
   vi.spyOn(performance, 'now').mockImplementation(() => clock);
@@ -228,5 +262,9 @@ it('opens a listed link without a sheet only from a focused panel right after a 
   view.frame.focus();
   await open();
   expect(confirm).toHaveBeenCalledTimes(2);
-  expect(deps.ui.openExternal).toHaveBeenCalledTimes(3);
+  // Focused and activated, but the press was on the app around the panel.
+  pressOnApp();
+  await open();
+  expect(confirm).toHaveBeenCalledTimes(3);
+  expect(deps.ui.openExternal).toHaveBeenCalledTimes(4);
 });
