@@ -315,12 +315,27 @@ async function directoryHash(root: string): Promise<string> {
   return hash.digest('hex');
 }
 
+const sameFile = (a: { dev: number; ino: number }, b: { dev: number; ino: number }) => a.dev === b.dev && a.ino === b.ino;
+
+/**
+ * Copy folders and regular files only. Agent processes may still swap a
+ * folder for a link while it is read, so each folder must be the same one
+ * after its listing and still resolve beneath the source, and each file read
+ * must be the file now at its place there; otherwise the copy aborts.
+ */
 async function copyRegularTree(source: string, destination: string): Promise<void> {
+  if (!(await fs.lstat(source)).isDirectory()) throw new Error('Extension staging is not a folder.');
+  const root = await fs.realpath(source);
+  const changed = () => new Error('Extension staging changed while it was being copied. Nothing was copied from it.');
   await fs.mkdir(destination, { recursive: true });
   let files = 0;
   let bytes = 0;
   async function walk(from: string, to: string): Promise<void> {
+    const expected = path.join(root, path.relative(source, from));
+    const before = await fs.lstat(from);
     const entries = await fs.readdir(from, { withFileTypes: true });
+    const after = await fs.lstat(from);
+    if (!before.isDirectory() || !after.isDirectory() || !sameFile(before, after) || await fs.realpath(from) !== expected) throw changed();
     for (const entry of entries) {
       const input = path.join(from, entry.name);
       const output = path.join(to, entry.name);
@@ -332,7 +347,13 @@ async function copyRegularTree(source: string, destination: string): Promise<voi
       }
       if (!entry.isFile()) throw new Error(`Extension staging does not allow special files: ${entry.name}`);
       // A file swapped for a link since the listing is refused, not followed.
-      const data = await fs.readFile(input, { flag: fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW });
+      const handle = await fs.open(input, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      let data: Buffer;
+      try {
+        const opened = await handle.stat();
+        if (!opened.isFile() || !sameFile(opened, await fs.lstat(input)) || await fs.realpath(from) !== expected) throw changed();
+        data = await handle.readFile();
+      } finally { await handle.close(); }
       files += 1;
       bytes += data.byteLength;
       if (files > MAX_FILES || bytes > MAX_BYTES) throw new Error('Extension staging exceeds the safe copy limits.');
