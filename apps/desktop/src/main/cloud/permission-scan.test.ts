@@ -15,4 +15,14 @@ describe('permission scan', () => {
     const files = [{ path: 'index.ts', text: 'fetch("https://example.com");\napi.media.audio.play();' }, { path: 'README.md', text: 'api.render fetch(' }];
     expect(permissionFindings(files, ['network', 'full-access'])).toEqual([]);
   });
+
+  it('reports undeclared project reads once, and accepts project:read or project:write', () => {
+    const files = [{ path: 'index.ts', text: 'const p = await api.project.get();\napi.events.on("selection", draw);\napi.on(\'time\', draw);\napi.project.revision();' }];
+    expect(permissionFindings(files, ['network'])).toEqual([
+      { path: 'index.ts', line: 1, needs: 'project:read', text: 'Uses api.project.get at index.ts:1 but doesn\'t declare the project:read permission. Add `permissions: ["project:read"]` to manifest.json.' },
+      { path: 'index.ts', line: 2, needs: 'project:read', text: 'Uses the \'selection\' event at index.ts:2 but doesn\'t declare the project:read permission. Add `permissions: ["project:read"]` to manifest.json.' }
+    ]);
+    expect(permissionFindings(files, ['project:read'])).toEqual([]);
+    expect(permissionFindings(files, ['project:write'])).toEqual([]);
+  });
 });
