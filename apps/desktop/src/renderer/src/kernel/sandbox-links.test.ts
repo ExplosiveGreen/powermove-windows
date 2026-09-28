@@ -6,7 +6,7 @@ function opener(manifest: Pick<ExtensionManifest, 'name' | 'permissions' | 'link
   let clock = 10_000;
   const confirm = vi.fn(async (_title: string, _body?: string) => answer);
   const openExternal = vi.fn(async (_url: string) => true);
-  const open = sandboxOpenExternal({ manifest: () => manifest, ui: { confirm, openExternal }, now: () => clock });
+  const open = sandboxOpenExternal({ id: manifest.name.toLowerCase(), manifest: () => manifest, ui: { confirm, openExternal }, now: () => clock });
   return { open, confirm, openExternal, tick: (ms = OPEN_EXTERNAL_INTERVAL_MS) => { clock += ms; } };
 }
 
@@ -24,7 +24,7 @@ describe('sandboxed ui.openExternal', () => {
     // Origins match exactly: not a subdomain, another port, or plain http.
     for (const url of ['https://evil.replicate.com/x', 'https://replicate.com:8443/x', 'https://replicate.com.evil.example/?q=secret']) {
       await expect(open(url)).resolves.toBe(true);
-      expect(confirm).toHaveBeenLastCalledWith('Replicate wants to open a link in your browser', url);
+      expect(confirm).toHaveBeenLastCalledWith('The extension “replicate” wants to open a link in your browser', url);
       tick();
     }
     expect(openExternal).toHaveBeenCalledTimes(3);
@@ -33,7 +33,16 @@ describe('sandboxed ui.openExternal', () => {
   it('asks for every URL, listed or not, without network', async () => {
     const { open, confirm } = opener({ name: 'Offline', permissions: ['assets'], links: ['https://replicate.com'] });
     await open('https://replicate.com/?project=exfiltrated');
-    expect(confirm).toHaveBeenCalledWith('Offline wants to open a link in your browser', 'https://replicate.com/?project=exfiltrated');
+    expect(confirm).toHaveBeenCalledWith('The extension “offline” wants to open a link in your browser', 'https://replicate.com/?project=exfiltrated');
+  });
+
+  it('names the extension by its id in fixed wording, never by the name it chose', async () => {
+    const confirm = vi.fn(async (_title: string, _body?: string) => false);
+    const open = sandboxOpenExternal({ id: 'color-tools', manifest: () => ({ name: 'Powermove', permissions: [] }), ui: { confirm, openExternal: vi.fn() } });
+    await open('https://example.com/');
+    const [title, detail] = confirm.mock.calls[0]!;
+    expect(title).toBe('The extension “color-tools” wants to open a link in your browser');
+    expect(`${title} ${detail}`).not.toContain('Powermove');
   });
 
   it('opens nothing when the person declines', async () => {
@@ -64,7 +73,7 @@ describe('sandboxed ui.openExternal', () => {
     let clock = 0;
     const confirm = vi.fn(() => new Promise<boolean>(resolve => { answer = resolve; }));
     const openExternal = vi.fn(async () => true);
-    const open = sandboxOpenExternal({ manifest: () => manifest, ui: { confirm, openExternal }, now: () => clock });
+    const open = sandboxOpenExternal({ id: 'spam', manifest: () => manifest, ui: { confirm, openExternal }, now: () => clock });
     const first = open('https://example.com/1');
     clock += 5_000;
     await expect(open('https://example.com/2')).rejects.toMatchObject({ code: 'resource_limit', message: expect.stringContaining('waiting') });

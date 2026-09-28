@@ -75,7 +75,7 @@ describe('ui.openExternal', () => {
     const { api, confirm, openExternal } = await sandbox([], ['https://replicate.com']);
     confirm.mockResolvedValueOnce(false);
     await expect(api.ui.openExternal('https://replicate.com/?q=project-data')).resolves.toBe(false);
-    expect(confirm).toHaveBeenCalledWith('Link Lab wants to open a link in your browser', 'https://replicate.com/?q=project-data');
+    expect(confirm).toHaveBeenCalledWith('The extension “link-ext” wants to open a link in your browser', 'https://replicate.com/?q=project-data');
     expect(openExternal).not.toHaveBeenCalled();
   });
 

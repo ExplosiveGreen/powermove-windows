@@ -140,8 +140,8 @@ runs every 2 s; others reject with `code: 'resource_limit'`.
   the extension also declares `network`. Origins match exactly: listing
   `https://example.com` covers neither `https://www.example.com` nor another port.
 - Every other URL, and every URL when the extension lacks `network`, opens only
-  after the person confirms a Powermove sheet that names the extension and shows
-  the whole URL. Without `network`, a link is the one way data could leave, so
+  after the person confirms a Powermove sheet that names the extension by its id
+  (not its display name) and shows the whole URL. Without `network`, a link is the one way data could leave, so
   it always asks.
 
 ```json

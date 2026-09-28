@@ -104,8 +104,8 @@ test('a sandboxed extension opens its listed origin directly and asks, showing t
   expect(await seen()).toEqual({
     opened: ['https://links.example.com/docs', 'https://elsewhere.example.org/?q=1'],
     asked: [
-      { message: 'Sandbox links fixture wants to open a link in your browser', detail: 'https://elsewhere.example.org/?q=1' },
-      { message: 'Sandbox links fixture wants to open a link in your browser', detail: 'https://declined.example.org/' }
+      { message: 'The extension “sandbox-links” wants to open a link in your browser', detail: 'https://elsewhere.example.org/?q=1' },
+      { message: 'The extension “sandbox-links” wants to open a link in your browser', detail: 'https://declined.example.org/' }
     ]
   });
   // Too soon after the last one.

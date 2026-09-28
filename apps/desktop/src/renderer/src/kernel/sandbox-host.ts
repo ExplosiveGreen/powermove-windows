@@ -218,7 +218,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     copiedAt = now;
     await write(text);
   };
-  const openExternal = sandboxOpenExternal({ manifest: () => manifest, ui: host.api.ui });
+  const openExternal = sandboxOpenExternal({ id: record.id, manifest: () => manifest, ui: host.api.ui });
   const importUrl = sandboxImportUrl({ manifest: () => manifest, assets: host.api.assets, admit: admitImport });
   const invoke = (namespace: string, method: string, args: unknown, view: ViewLink | null = null): unknown => {
     if (!SAFE_INVOKE[namespace]?.has(method)) throw new Error(`Sandbox method unavailable: ${namespace}.${method}`);

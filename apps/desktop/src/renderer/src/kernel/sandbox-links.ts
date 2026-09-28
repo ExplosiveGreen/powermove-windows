@@ -8,7 +8,9 @@
  *  - an origin listed in the manifest's `links` opens without asking, but only
  *    when the extension also declares `network`: without it, opening a URL
  *    would be its one way to send project data out, so every URL asks;
- *  - any other URL is shown in full in a host sheet that names the extension.
+ *  - any other URL is shown in full in a host sheet. The sheet names the
+ *    extension by the kernel record's id in fixed wording, never by the
+ *    manifest's display name, which the extension chooses (`"Powermove"`).
  */
 import type { ExtensionManifest } from '../../../shared/extensions';
 import { parseExtensionUrl } from '../../../shared/extension-url';
@@ -20,9 +22,16 @@ function limited(message: string): Error {
   return Object.assign(new Error(message), { name: 'PermissionError', code: 'resource_limit' });
 }
 
+/** The sheet's title: says an extension is asking, and which one. */
+export function openExternalPrompt(id: string): string {
+  return `The extension “${id}” wants to open a link in your browser`;
+}
+
 export function sandboxOpenExternal(options: {
+  /** The kernel record's id. */
+  id: string;
   /** Read on every call: the record's manifest is the only source of `permissions` and `links`. */
-  manifest: () => Pick<ExtensionManifest, 'name' | 'permissions' | 'links'>;
+  manifest: () => Pick<ExtensionManifest, 'permissions' | 'links'>;
   ui: Pick<UIAPI, 'confirm' | 'openExternal'>;
   now?: () => number;
 }): (value: unknown) => Promise<boolean> {
@@ -39,7 +48,7 @@ export function sandboxOpenExternal(options: {
     try {
       const manifest = options.manifest();
       const listed = (manifest.permissions ?? []).includes('network') && (manifest.links ?? []).includes(url.origin);
-      if (!listed && !await options.ui.confirm(`${manifest.name} wants to open a link in your browser`, url.href)) return false;
+      if (!listed && !await options.ui.confirm(openExternalPrompt(options.id), url.href)) return false;
       await options.ui.openExternal(url.href);
       return true;
     } finally { pending = false; }
