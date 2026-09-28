@@ -114,6 +114,17 @@ describe('compileExtension', () => {
     expect(output).not.toMatch(/\b(?:from\s*|import\s*)["']svelte(?:\/[^"']*)?["']/);
   });
 
+  it('compiles a typed .svelte.ts rune module', async () => {
+    const { dir, outDir } = await fixture('rune-module');
+    await writeFile(path.join(dir, 'count.svelte.ts'), 'export const count: { value: number } = $state({ value: 0 }); export function bump(by: number): void { count.value += by; }');
+    await writeFile(path.join(dir, 'index.ts'), "import { bump } from './count.svelte'; export default () => bump(1);");
+    const result = await compileExtension({ dir, entry: 'index.ts', outDir });
+    if (!result.ok) throw new Error(result.error);
+    const output = await readFile(result.bundlePath, 'utf8');
+    expect(output).toContain('globalThis.__powermove_runtime["svelte/internal/client"]');
+    expect(output).not.toContain('$state(');
+  });
+
   it('rejects traversal, absolute imports, node_modules, and symlink escapes', async () => {
     const { dir, outDir } = await fixture('safe-extension');
     const root = path.dirname(dir);

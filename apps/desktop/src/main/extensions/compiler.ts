@@ -226,7 +226,9 @@ export async function compileExtension({ dir, entry, outDir }: CompileExtensionO
           }
           if (args.path.endsWith('.svelte.ts') || args.path.endsWith('.svelte.js')) {
             const compiler = await getSvelteCompiler();
-            const compiled = compiler.compileModule(source, {
+            // compileModule parses JavaScript only: strip a .svelte.ts module's types first.
+            const script = args.path.endsWith('.ts') ? (await esbuild.transform(source, { loader: 'ts', target: 'es2022' })).code : source;
+            const compiled = compiler.compileModule(script, {
               generate: 'client',
               filename: args.path,
               runes: true
