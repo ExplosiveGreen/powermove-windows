@@ -385,7 +385,9 @@ export function createLoader(options: LoaderOptions): Loader {
     const stamps = (failures.get(id) ?? []).filter((t) => now - t < windowMs);
     stamps.push(now);
     failures.set(id, stamps);
-    if (stamps.length < limit) return;
+    // A sandbox that stopped responding is already gone: no second chance to count.
+    const fatal = (error as { code?: unknown } | null)?.code === 'sandbox_fatal';
+    if (!fatal && stamps.length < limit) return;
     failures.delete(id);
     const name = nameOf(recordFor(id), id);
     activationFailures.add(id);
