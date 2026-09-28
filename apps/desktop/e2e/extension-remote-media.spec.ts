@@ -64,7 +64,7 @@ test('a sandboxed extension imports a remote image by URL, and private hosts are
   ]);
 
   for (const url of ['https://intranet.example.com/a.png', 'https://loopback.example.com/a.png', 'https://127.0.0.1/a.png', 'https://[::1]/a.png']) {
-    expect((await run(session, 'sandbox-links.import', url)).error).toContain('not a public internet address');
+    expect((await run(session, 'sandbox-links.import', url)).error).toContain('is not reachable on the public internet');
   }
   expect((await run(session, 'sandbox-links.import', 'http://images.example.com/a.png')).error).toContain('https URL');
   // Nothing refused reached the socket.

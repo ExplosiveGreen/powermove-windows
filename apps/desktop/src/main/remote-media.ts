@@ -104,13 +104,14 @@ export const systemResolve: Resolve = (hostname) => dnsLookup(hostname, { all: t
 export async function pinAddress(url: URL, resolve: Resolve): Promise<{ address: string; family: 4 | 6 }> {
   const host = url.hostname.replace(/^\[(.*)\]$/, '$1');
   const literal = isIP(host);
+  // One message for a name that does not resolve and one that resolves privately: telling them apart would map the intranet's DNS for the extension.
+  const unreachable = (): RemoteMediaError => new RemoteMediaError(`${url.hostname} is not reachable on the public internet`);
   let answers: ReadonlyArray<{ address: string; family: number }>;
   if (literal) answers = [{ address: host, family: literal }];
   else {
-    try { answers = await resolve(host); } catch { throw new RemoteMediaError(`Could not find ${url.hostname}`); }
+    try { answers = await resolve(host); } catch { throw unreachable(); }
   }
-  if (!answers.length) throw new RemoteMediaError(`Could not find ${url.hostname}`);
-  if (answers.some(({ address }) => !isPublicAddress(address))) throw new RemoteMediaError(`${url.hostname} is not a public internet address`);
+  if (!answers.length || answers.some(({ address }) => !isPublicAddress(address))) throw unreachable();
   const { address } = answers[0]!;
   return { address, family: isIP(address) as 4 | 6 };
 }

@@ -48,8 +48,8 @@ describe('fetchRemoteMedia', () => {
 
   it('passes on main’s reason without Electron’s IPC wrapper', async () => {
     const media = remote(new Uint8Array(4));
-    media.fetch.mockRejectedValueOnce(new Error("Error invoking remote method 'media:remote-fetch': RemoteMediaError: intranet.example is not a public internet address"));
-    await expect(fetchRemoteMedia('https://intranet.example/a.png', async () => true)).rejects.toThrow(/^intranet\.example is not a public internet address$/);
+    media.fetch.mockRejectedValueOnce(new Error("Error invoking remote method 'media:remote-fetch': RemoteMediaError: intranet.example is not reachable on the public internet"));
+    await expect(fetchRemoteMedia('https://intranet.example/a.png', async () => true)).rejects.toThrow(/^intranet\.example is not reachable on the public internet$/);
   });
 
   it('checks the URL before asking main, and needs the desktop bridge', async () => {
