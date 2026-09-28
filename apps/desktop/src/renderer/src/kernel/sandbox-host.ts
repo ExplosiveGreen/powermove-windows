@@ -474,5 +474,15 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
       deps.reportRuntimeError(record.id, Object.assign(new Error('stopped responding'), { code: 'sandbox_fatal' }));
     })() });
     return { handle: host, dispose };
-  } catch (error) { host.setActivating(false); if (timedOut) await terminate(); dispose(); throw error; }
+  } catch (error) {
+    host.setActivating(false);
+    /* A runtime still answering pings was only waiting (a slow fetch in
+       activate); one that does not is spinning and would spin again next
+       launch, so it is killed and turned off. */
+    const spinning = timedOut && !await Promise.race([rpc.call('ping').then(() => true, () => false), new Promise<boolean>(resolve => setTimeout(() => resolve(false), 1500))]);
+    if (spinning) await terminate();
+    dispose();
+    if (spinning) deps.reportRuntimeError(record.id, Object.assign(new Error('stopped responding while activating'), { code: 'sandbox_fatal' }));
+    throw error;
+  }
 }
