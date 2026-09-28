@@ -63,7 +63,7 @@ describe('legacy model install', () => {
     expect(PM.TYPE_META.group.masks).not.toBe(false);
   });
 
-  it('precomposes layers with the original span and stack order', () => {
+  it('groups layers with the original span and stack order', () => {
     const PM = projectModel();
     const project = PM.mkProject({ name: 'T', w: 1920, h: 1080, fps: 30, dur: 10 });
     PM.proj = project;
@@ -72,7 +72,7 @@ describe('legacy model install', () => {
     const keep = PM.mkLayer('solid', { name: 'Keep' }, project);
     project.layers.push(a, b, keep);
 
-    const layer = PM.precompose([a.id, b.id], 'Group');
+    const layer = PM.groupLayers([a.id, b.id], 'Group');
     expect(layer.type).toBe('group');
     expect(project.comps).toEqual({});
     expect(project.layers.map((item: any) => item.name)).toEqual(['Group', 'A', 'B', 'Keep']);
@@ -107,7 +107,7 @@ describe('legacy model install', () => {
     expect(ids).not.toContain('transition');
   });
 
-  it('garbage-collects a composition with its last precomp layer', () => {
+  it('keeps a composition after its last precomp layer is deleted', () => {
     const PM = projectModel();
     const project = PM.mkProject({ name: 'T' });
     PM.proj = project;
@@ -120,6 +120,6 @@ describe('legacy model install', () => {
 
     PM.removeLayers([layer.id]);
 
-    expect(project.comps[compId]).toBeUndefined();
+    expect(project.comps[compId]).toBeDefined();
   });
 });

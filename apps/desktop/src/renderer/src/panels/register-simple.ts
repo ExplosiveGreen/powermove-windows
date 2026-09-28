@@ -13,7 +13,7 @@ type LegacyPM = Record<string, any>;
 
 /* Panel actions live in the header row, beside the options button — never as
    a floating button inside the content area. */
-function headerAction(PM: LegacyPM, hdr: HTMLElement, icon: string, label: string, run: () => void): void {
+function headerAction(PM: LegacyPM, hdr: HTMLElement, icon: string, label: string, run: (this: HTMLElement) => void): void {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'iconbtn panel-action';
@@ -21,7 +21,7 @@ function headerAction(PM: LegacyPM, hdr: HTMLElement, icon: string, label: strin
   button.setAttribute('aria-label', label);
   const glyph = PM.icon?.(icon);
   if (glyph instanceof Node) button.appendChild(glyph);
-  button.addEventListener('click', run);
+  button.addEventListener('click', () => run.call(button));
   const options = hdr.querySelector('.panel-options');
   if (options) hdr.insertBefore(button, options);
   else hdr.appendChild(button);
@@ -32,7 +32,14 @@ export function registerSimplePanels(PM: LegacyPM): void {
     title: 'Media',
     size: 200,
     component: AssetsPanel,
-    header: (hdr) => headerAction(PM, hdr, 'plus', 'Import media (⌘I)', () => PM.pickFiles())
+    /* AE's Project panel: new compositions and imported footage live together. */
+    header: (hdr) => headerAction(PM, hdr, 'plus', 'New composition or import media', function (this: HTMLElement) {
+      PM.menu(this, [
+        { label: 'New Composition…', kb: '⌘N', run: () => PM.cmd('newComposition') },
+        { label: 'Import Media…', kb: '⌘I', run: () => PM.pickFiles() },
+        { label: 'Import Image Sequence…', run: () => PM.pickFiles(true) },
+      ]);
+    })
   });
   registerSveltePanel(PM, 'fxbrowser', {
     title: 'Effects', size: 240, component: FxBrowserPanel,

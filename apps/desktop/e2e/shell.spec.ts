@@ -257,6 +257,45 @@ test.describe('@shell Svelte shell', () => {
     expect(many.overflowing).toBe(true);
   });
 
+  test('keeps a usable window drag area with crowded tabs and overlays', async ({ session }) => {
+    const { page } = session;
+    await session.openEditor();
+    await page.setViewportSize({ width: 980, height: 640 });
+    const ids = await makeProjects(page, Array.from({ length: 10 }, (_, index) => `Tab ${index + 2}`));
+    await page.evaluate(async (list) => {
+      for (const id of list) await (window as any).PM.Tabs.activate(id);
+    }, ids);
+
+    const dragArea = () => page.evaluate(() => {
+      const drag = document.querySelector<HTMLElement>('#titlebar > .titlebar-drag:not(.titlebar-drag-traffic)')!;
+      const box = drag.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return { width: box.width, hit: hit === drag || hit?.classList.contains('titlebar-overlay-drag'), region: hit ? getComputedStyle(hit).getPropertyValue('-webkit-app-region') : '' };
+    });
+    expect(await dragArea()).toMatchObject({ hit: true, region: 'drag' });
+    expect((await dragArea()).width).toBeGreaterThanOrEqual(72);
+
+    await page.evaluate(() => { (window as any).__dragModal = (window as any).PM.modal({ title: 'Move this window', body: 'Still draggable' }); });
+    expect(await dragArea()).toMatchObject({ hit: true, region: 'drag' });
+    await page.evaluate(() => { (window as any).__dragModal.close(); });
+
+    await page.evaluate(() => (window as any).PM.LibraryUI.open());
+    await expect(page.locator('#library-screen')).toHaveClass(/\bon\b/);
+    expect(await dragArea()).toMatchObject({ hit: true, region: 'drag' });
+    const libraryBounds = await page.locator('#library-screen').boundingBox();
+    expect(libraryBounds!.y).toBeGreaterThanOrEqual(44);
+    expect(libraryBounds!.y + libraryBounds!.height).toBeLessThanOrEqual(640);
+    await page.evaluate(() => (window as any).PM.LibraryUI.close());
+
+    await page.evaluate(() => {
+      const picker = document.createElement('div');
+      picker.className = 'fill-picker-layer';
+      document.body.append(picker);
+    });
+    expect(await dragArea()).toMatchObject({ hit: true, region: 'drag' });
+    await page.locator('.fill-picker-layer').evaluate(element => element.remove());
+  });
+
   test('switching back to a tab resumes it from memory instead of reloading it', async ({ session }) => {
     const { page, diagnostics } = session;
     await session.openEditor();

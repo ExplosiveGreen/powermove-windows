@@ -891,6 +891,19 @@ export function installKernel(PM: LegacyPM): InstalledKernel {
   });
 
   PM.Kernel = installed;
+  kernel.services.register('compositions', {
+    openTabs: () => PM.Comps?.openTabs() ?? [],
+    get: (id: string) => PM.Comps?.get(id) ?? null,
+    isOpen: (id: string) => PM.Comps?.isOpen(id) ?? false,
+    open: (id: string) => PM.Comps?.open(id) ?? false,
+    close: (id: string) => PM.Comps?.close(id) ?? false,
+    onChange: (listener: () => void) => PM.bus.on('comps', listener),
+  });
+  for (const location of ['viewer:context', 'timeline:context'] as const) {
+    kernel.contributeMenu('core', location, () => [
+      { label: 'New Composition…', icon: 'plus', kb: '⌘N', run: () => PM.cmd('newComposition') }
+    ]);
+  }
   return installed;
 }
 

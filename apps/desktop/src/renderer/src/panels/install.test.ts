@@ -52,10 +52,18 @@ describe('unconditional Svelte panel install', () => {
 
     PM.PANELS.assets.header(header, {});
 
+    PM.menu = vi.fn();
+    PM.cmd = vi.fn();
     const action = header.querySelector<HTMLButtonElement>('button.panel-action')!;
-    expect(action.getAttribute('aria-label')).toBe('Import media (⌘I)');
+    expect(action.getAttribute('aria-label')).toBe('New composition or import media');
     expect(action.nextElementSibling).toBe(options);
     action.click();
+    const [anchor, items] = PM.menu.mock.calls[0];
+    expect(anchor).toBe(action);
+    expect(items.map((item: any) => item.label)).toEqual(['New Composition…', 'Import Media…', 'Import Image Sequence…']);
+    items[0].run();
+    expect(PM.cmd).toHaveBeenCalledWith('newComposition');
+    items[1].run();
     expect(PM.pickFiles).toHaveBeenCalledOnce();
   });
 

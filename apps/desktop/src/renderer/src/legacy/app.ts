@@ -346,7 +346,12 @@ function hydrate(p: any) {
   });
   sanitizeLayers(base.layers, base);
   /* precomp layers whose referenced comp failed to load degrade to empty layers */
-  base.layers.forEach((L: any) => { if (L.type === 'precomp' && !(L.d && L.d.comp && base.comps[L.d.comp])) L.d.comp = null; });
+  PM.Comps?.normalize(base);
+  /* precomp layers whose referenced comp failed to load degrade to empty layers */
+  const loaded = (id: any) => !!id && (id === base.compId || !!base.comps[id]);
+  for (const container of [base, ...Object.values(base.comps)] as any[]) {
+    (container.layers || []).forEach((L: any) => { if (L.type === 'precomp' && !(L.d && loaded(L.d.comp))) L.d.comp = null; });
+  }
   return base;
 }
 /* Shared project boundary for import/open flows and deterministic regression tests. */
@@ -828,7 +833,7 @@ PM.newProject = () => {
     : {}, {
       backgroundField: (get, set) => PM.colorField(get, set, { label: 'Background', local: true })
     });
-  PM.modal({ title: 'New composition', body: form.element, width: 420, actions: [
+  PM.modal({ title: 'New project', body: form.element, width: 420, actions: [
     { label: 'Cancel' },
     { label: 'Create', pri: true, run: () => {
       const values = form.values();

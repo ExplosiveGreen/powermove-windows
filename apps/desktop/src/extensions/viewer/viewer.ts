@@ -1519,17 +1519,27 @@ function bindStage(stage: any, inner: any): () => void {
       e.preventDefault();
       e.stopPropagation();
       openTextEditor(L, { selectAll: true });
+      return;
+    }
+    /* AE: double-clicking a precomp layer in the viewer opens its composition. */
+    const hit: any = api.render.gl.pick(x, y, api.transport.time());
+    if (hit?.type === 'precomp' && hit.d?.comp) {
+      e.preventDefault();
+      e.stopPropagation();
+      api.commands.run('openComposition', hit.d.comp);
     }
   }), capture);
   /* FX browser drops (effects / transitions). Non-fx drags (OS files) are left
      untouched so the window-level import handler keeps working. */
   const setDropOver = (on: boolean) => stage.classList.toggle('fx-drop-over', on);
+  /* A composition dragged from the Project panel nests here, as in AE. */
+  const compDrag = (e: any) => !!api.dnd?.hasAssetDrag(e.dataTransfer) && api.dnd.mediaDrag?.kind === 'comp';
   listen(stage, 'dragenter', (e: any) => {
-    if (!api.dnd?.hasFxDrag(e.dataTransfer)) return;
+    if (!api.dnd?.hasFxDrag(e.dataTransfer) && !compDrag(e)) return;
     e.preventDefault(); setDropOver(true);
   });
   listen(stage, 'dragover', (e: any) => {
-    if (!api.dnd?.hasFxDrag(e.dataTransfer)) return;
+    if (!api.dnd?.hasFxDrag(e.dataTransfer) && !compDrag(e)) return;
     e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setDropOver(true);
   });
   listen(stage, 'dragleave', (e: any) => {
@@ -1539,6 +1549,12 @@ function bindStage(stage: any, inner: any): () => void {
   listen(stage, 'drop', (e: any) => {
     const payload = api.dnd?.readFxDrag(e.dataTransfer);
     setDropOver(false);
+    const asset = !payload ? api.dnd?.readAssetDrag(e.dataTransfer) : null;
+    if (asset?.kind === 'comp') {
+      e.preventDefault(); e.stopPropagation();
+      api.commands.run('addCompositionToTimeline', asset.id, { position: toComp(e) });
+      return;
+    }
     if (!payload) return;
     e.preventDefault(); e.stopPropagation();
     const [x, y] = toComp(e);

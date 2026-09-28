@@ -89,9 +89,13 @@ export function install(PM: PMRegistry): void {
     publish();
     return next.id;
   };
+  /* Entries hold composition-independent paths (see core/compositions);
+     translate them onto whichever composition is open when they replay. */
+  const realize = (patches: Patch[]) => PM.Comps?.realize ? PM.Comps.realize(patches) : patches;
   const restorePatches = (patches: Patch[]) => {
+    PM.Comps?.prepareUndo?.(patches);
     const selection = clone(PM.sel);
-    const next = applyPatch(PM.proj, patches);
+    const next = applyPatch(PM.proj, realize(patches));
     PM.replaceProject(next, { selection });
   };
   const publishProjectPatch = (patches?: Patch[], origin: any = 'interface') => {
@@ -176,6 +180,8 @@ export function install(PM: PMRegistry): void {
         patches = diff(JSON.parse(current.before), JSON.parse(afterJson));
       }
       if (!patches.forward.length) return false;
+      const live = patches.forward;
+      if (PM.Comps?.canonicalize) patches = { ...PM.Comps.canonicalize(patches.forward, patches.backward), bytes: patches.bytes };
       const bytes = patches.bytes ?? encodedBytes(patches.forward) + encodedBytes(patches.backward);
       push({
         label: label || current.label,
@@ -187,7 +193,7 @@ export function install(PM: PMRegistry): void {
         undo: () => restorePatches(patches.backward),
         redo: () => restorePatches(patches.forward),
       });
-      publishProjectPatch(patches.forward, current.origin);
+      publishProjectPatch(live, current.origin);
       PM.touch();
       PM.autosave?.();
       return true;
@@ -206,6 +212,7 @@ export function install(PM: PMRegistry): void {
       return true;
     },
     pendingSnapshot: () => pending?.before || null,
+    busy: () => !!pending,
     /** Wrap a legacy direct mutation. PM.Edit uses the same compact patch entry. */
     do(label: any, fn: any, origin: any = 'interface') {
       H.begin(label, null, origin);
@@ -217,7 +224,7 @@ export function install(PM: PMRegistry): void {
       if (idx < 0) return false;
       const entry = stack[idx--]!;
       entry.undo();
-      publishProjectPatch(entry.backward, 'interface');
+      publishProjectPatch(entry.backward && realize(entry.backward), 'interface');
       publish();
       return true;
     },
@@ -225,7 +232,7 @@ export function install(PM: PMRegistry): void {
       if (idx >= stack.length - 1) return false;
       const entry = stack[++idx]!;
       entry.redo();
-      publishProjectPatch(entry.forward, 'interface');
+      publishProjectPatch(entry.forward && realize(entry.forward), 'interface');
       publish();
       return true;
     },
@@ -293,7 +300,7 @@ export function install(PM: PMRegistry): void {
     /** Persist document edits; runtime UI callbacks belong to this session only. */
     export(options: { copy?: boolean } = {}) {
       const entries = stack.filter(entry => entry.project && entry.forward && entry.backward);
-      const saved = { version: 1,
+      const saved = { version: 1, paths: 'composition',
         index: stack.slice(0, idx + 1).filter(entry => entry.project && entry.forward && entry.backward).length - 1,
         entries: entries.map(entry => ({ label: entry.label, forward: entry.forward, backward: entry.backward })),
       };
@@ -314,6 +321,11 @@ export function install(PM: PMRegistry): void {
           || !Number.isInteger(saved.index) || saved.index < -1 || saved.index >= saved.entries.length
           || !saved.entries.every((entry: any) => typeof entry?.label === 'string'
             && validPatches(entry.forward) && validPatches(entry.backward))) return false;
+      /* Histories saved before compositions were root-relative, and such a
+         file can only have been saved with its main composition open. */
+      if (saved.paths !== 'composition' && PM.Comps?.canonicalize) {
+        saved.entries = saved.entries.map((entry: any) => ({ ...entry, ...PM.Comps.canonicalize(entry.forward, entry.backward) }));
+      }
       records.share(saved);
       for (const source of saved.entries) {
         const { label, forward, backward } = source;

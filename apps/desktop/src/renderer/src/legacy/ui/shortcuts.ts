@@ -19,6 +19,7 @@ import { hasTextSelection, isFieldTarget, selectableTextRoot, selectTextContents
 import { ensureKernel, registryView } from '../kernel-view';
 import type { PMRegistry } from '../registry';
 import { bridge as hostBridge } from '../../kernel/bridge';
+import { compositionSettingsDialog, deleteCompositionPrompt, precomposeDialog } from './compositions';
 
 export const LEGACY_OWNER = 'legacy';
 
@@ -250,7 +251,6 @@ def('selectAll', 'Select all layers', '⌘A', () => PM.selectLayers(PM.proj.laye
 def('deselect', 'Deselect', '⎋', () => { PM.selectLayers([]); PM.sel.keys = []; }, 'Edit');
 def('groupLayers', 'Group layers', '⌘G', () => PM.Edit.apply({ type: 'group_layers', targets: PM.sel.layers }, { label: 'Group layers', origin: 'timeline' }), 'Edit');
 def('ungroupLayers', 'Ungroup layers', '⌘⇧G', () => PM.Edit.apply({ type: 'ungroup_layers', targets: PM.sel.layers }, { label: 'Ungroup layers', origin: 'timeline' }), 'Edit');
-def('precompose', 'Group layers', null, () => PM.cmd('groupLayers'), 'Edit', hidden);
 
 /* ── layer clipboard ───────────────────────────────────── */
 let layerClip: any = null;
@@ -408,7 +408,18 @@ def('saveAs', 'Save project as…', '⌘⇧S', () => PM.saveProject({ saveAs: tr
 def('open', 'Open project…', '⌘O', () => PM.openProject(), 'File');
 def('export', 'Export…', '⌘E', () => PM.Export.dialog(), 'File');
 def('projects', 'Projects screen', '⌘P', () => PM.ProjectsScreen && PM.ProjectsScreen.toggle(), 'File');
-def('newProject', 'New project', '⌘N', () => PM.newProject(), 'File');
+def('newProject', 'New project', '⌥⌘N', () => PM.newProject(), 'File');
+
+/* ── compositions (After Effects) ──────────────────────── */
+def('newComposition', 'New composition…', '⌘N', () => compositionSettingsDialog(PM), 'Composition');
+def('compositionSettings', 'Composition settings…', '⌥⌘K', (id?: any) => compositionSettingsDialog(PM, typeof id === 'string' ? id : PM.Comps.active()), 'Composition');
+def('precompose', 'Pre-compose…', '⇧⌘C', () => precomposeDialog(PM), 'Layer');
+def('openComposition', 'Open composition', null, (id?: any) => PM.Comps.open(id), 'Composition', hidden);
+def('closeComposition', 'Close composition', null, (id?: any) => PM.Comps.close(id ?? PM.Comps.active()), 'Composition', hidden);
+def('addCompositionToTimeline', 'Add composition to timeline', null, (id?: any, options?: any) => PM.Comps.addToTimeline(id, options), 'Composition', hidden);
+def('duplicateComposition', 'Duplicate composition', null, (id?: any) => PM.Comps.duplicate(id ?? PM.Comps.active()), 'Composition', hidden);
+def('deleteComposition', 'Delete composition', null, (id?: any) => deleteCompositionPrompt(PM, id ?? PM.Comps.active()), 'Composition', hidden);
+def('newCompFromMedia', 'New composition from media', null, (assetId?: any) => PM.Comps.fromAsset(assetId), 'Composition', hidden);
 def('closeTab', 'Close tab', '⌘W', () => PM.Tabs?.closeCurrent(), 'File');
 def('nextTab', 'Show next tab', '⌃Tab', () => PM.Tabs?.step(1), 'View');
 def('previousTab', 'Show previous tab', '⌃⇧Tab', () => PM.Tabs?.step(-1), 'View');

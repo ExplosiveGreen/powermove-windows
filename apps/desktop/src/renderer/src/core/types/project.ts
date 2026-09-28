@@ -410,4 +410,9 @@ export interface Comp {
   notes?: string;
 }
 
-export interface Project extends Comp {}
+export interface Project extends Comp {
+  /** Id of the composition open in the Timeline; the other compositions live in `comps`. */
+  compId?: string;
+  /** Name of the open composition (`name` is the project's). */
+  compName?: string;
+}

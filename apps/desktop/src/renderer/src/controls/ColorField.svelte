@@ -17,7 +17,7 @@
      hex (#RRGGBBAA below full opacity), so a Display P3 colour outside sRGB is
      written clipped and says so. */
   import { sel } from '../state/selection.svelte';
-  import { tick, onMount, onDestroy, untrack } from 'svelte';
+  import { tick, onMount, onDestroy, untrack, type Snippet } from 'svelte';
   import { doc } from '../state/document.svelte';
   import { controlTime } from '../state/transport.svelte';
   import { EditGesture, type EditBinding } from './gesture';
@@ -38,7 +38,11 @@
     edit,
     label = 'Color',
     mixed,
-    embedded = false
+    embedded = false,
+    tabs,
+    children,
+    bare = false,
+    onclose
   }: {
     api: PowermoveAPI;
     get: () => unknown;
@@ -46,11 +50,20 @@
     label?: string;
     embedded?: boolean;
     mixed?: (edit: EditBinding, value: unknown) => boolean;
+    /** Embedded hosts may own the header's tabs; the color space then moves to a menu. */
+    tabs?: Snippet;
+    /** Embedded host content between the header and the picking surface. */
+    children?: Snippet;
+    /** Header and host content only, as for a fill of None. */
+    bare?: boolean;
+    /** Shows Close in an embedded picker; the host commits and closes. */
+    onclose?: () => void;
   } = $props();
 
   type Kind = 'plane' | 'hue' | 'alpha';
   type EyeDropperConstructor = new () => { open(): Promise<{ sRGBHex: string }> };
 
+  const spaces: Array<[Space, string]> = [['srgb', 'sRGB'], ['p3', 'Display P3']];
   const hueModes: Array<[HueMode, string]> = [['closest', 'Find closest color'], ['chroma', 'Maintain chroma'], ['lightness', 'Maintain lightness']];
   const notationNames: Record<Notation, string> = { oklch: 'OKLCH', hsl: 'HSL', rgb: 'RGB', hex: 'Hex', 'display-p3': 'Display P3' };
   const grey: Color = { r: 0.5, g: 0.5, b: 0.5, a: 1 };
@@ -66,6 +79,7 @@
   let popover = $state<HTMLDivElement>();
   let valueInput = $state<HTMLInputElement>();
   let settingsButton = $state<HTMLButtonElement>();
+  let spaceButton = $state<HTMLButtonElement>();
   let notationButton = $state<HTMLButtonElement>();
   let open = $state(false);
   let phase = $state<'open' | 'closed'>('open');
@@ -80,7 +94,7 @@
   let invalid = $state(false);
   let previewing = $state(false);
   let sampling = $state(false);
-  let menu = $state<{ kind: 'settings' | 'notation'; handle: PopoverMenuHandle } | null>(null);
+  let menu = $state<{ kind: 'settings' | 'notation' | 'space'; handle: PopoverMenuHandle } | null>(null);
   let closeTimer: number | undefined;
   let stopDrag: (() => void) | undefined;
 
@@ -351,11 +365,11 @@
     }
   }
 
-  function toggleMenu(kind: 'settings' | 'notation'): void {
+  function toggleMenu(kind: 'settings' | 'notation' | 'space'): void {
     const wasOpen = menu?.kind === kind;
     menu?.handle.close();
     if (wasOpen) return;
-    const anchor = kind === 'settings' ? settingsButton : notationButton;
+    const anchor = kind === 'settings' ? settingsButton : kind === 'space' ? spaceButton : notationButton;
     if (!anchor) return;
     const settle = (): void => anchor.focus({ preventScroll: true });
     let header: HTMLElement | undefined;
@@ -364,15 +378,17 @@
       header.className = 'cp-menu-heading';
       header.textContent = 'When changing hue…';
     }
-    const items = kind === 'settings'
+    const items = kind === 'space'
+      ? spaces.map(([id, text]) => ({ label: text, checked: prefs.space === id, run: () => { switchSpace(id); settle(); } }))
+      : kind === 'settings'
       ? hueModes.map(([id, text]) => ({ label: text, checked: prefs.hueMode === id, run: () => { prefs.hueMode = id; settle(); } }))
       : notations.map((id) => ({ label: notationNames[id], checked: prefs.notation === id, run: () => { prefs.notation = id; syncDraft(); settle(); } }));
     const handle = openPopoverMenu({
       anchor,
-      label: kind === 'settings' ? 'Picker settings' : 'Color notation',
+      label: kind === 'settings' ? 'Picker settings' : kind === 'space' ? 'Color space' : 'Color notation',
       header,
       items,
-      side: kind === 'settings' ? 'bottom' : 'top',
+      side: kind === 'notation' ? 'top' : 'bottom',
       onClose: () => { if (menu?.handle === handle) menu = null; }
     });
     menu = { kind, handle };
@@ -510,12 +526,30 @@
       onkeydown={keydown}
     >
       <div class="cp-header">
-        <div class="cp-spaces" role="tablist" aria-label="Color space">
-          <button type="button" role="tab" aria-selected={prefs.space === 'srgb'} onclick={() => switchSpace('srgb')}>sRGB</button>
-          <button type="button" role="tab" aria-selected={prefs.space === 'p3'} onclick={() => switchSpace('p3')}>Display P3</button>
-        </div>
+        {#if tabs}
+          {@render tabs()}
+        {:else}
+          <div class="cp-spaces" role="tablist" aria-label="Color space">
+            {#each spaces as [id, text] (id)}
+              <button type="button" role="tab" aria-selected={prefs.space === id} onclick={() => switchSpace(id)}>{text}</button>
+            {/each}
+          </div>
+        {/if}
         <div class="cp-actions">
+          {#if tabs && !bare}
+            <button
+              bind:this={spaceButton}
+              type="button"
+              class="cp-icon cp-space"
+              aria-label="Color space"
+              title="Color space"
+              aria-haspopup="menu"
+              aria-expanded={menu?.kind === 'space'}
+              onclick={() => toggleMenu('space')}
+            >{prefs.space === 'p3' ? 'Display P3' : 'sRGB'}</button>
+          {/if}
           <button
+            hidden={bare}
             type="button"
             class="cp-icon"
             aria-label="Sample screen color"
@@ -531,6 +565,7 @@
           </button>
           <button
             bind:this={settingsButton}
+            hidden={bare}
             type="button"
             class="cp-icon"
             aria-label="Picker settings"
@@ -544,7 +579,7 @@
               <path d="M224,128a8,8,0,0,1-8,8H40a8,8,0,0,1,0-16H216A8,8,0,0,1,224,128ZM40,72H216a8,8,0,0,0,0-16H40a8,8,0,0,0,0,16ZM216,184H40a8,8,0,0,0,0,16H216a8,8,0,0,0,0-16Z" />
             </svg>
           </button>
-          <button hidden={embedded} type="button" class="cp-icon" aria-label="Close" title="Close" onclick={commitAndClose}>
+          <button hidden={embedded && !onclose} type="button" class="cp-icon" aria-label="Close" title="Close" onclick={() => { if (!embedded) { commitAndClose(); return; } commitDraft(); onclose?.(); }}>
             <!-- Phosphor regular: X. -->
             <svg viewBox="0 0 256 256" aria-hidden="true" focusable="false" fill="currentColor">
               <path d="M205.66,194.34a8,8,0,0,1-11.32,11.32L128,139.31,61.66,205.66a8,8,0,0,1-11.32-11.32L116.69,128,50.34,61.66A8,8,0,0,1,61.66,50.34L128,116.69l66.34-66.35a8,8,0,0,1,11.32,11.32L139.31,128Z" />
@@ -553,7 +588,9 @@
         </div>
       </div>
 
-      <div class="cp-body">
+      {@render children?.()}
+
+      <div class="cp-body" hidden={bare}>
         <div
           class="cp-plane"
           role="slider"

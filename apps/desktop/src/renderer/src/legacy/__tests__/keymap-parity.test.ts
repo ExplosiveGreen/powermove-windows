@@ -90,7 +90,7 @@ const TABLE: Array<[string, KeyboardEventInit, string]> = [
   ['cmd+d duplicates', { key: 'd', metaKey: true }, 'duplicate'],
   ['cmd+shift+d splits', { key: 'd', metaKey: true, shiftKey: true }, 'split'],
   ['cmd+c copies layers', { key: 'c', metaKey: true }, 'copyLayers'],
-  ['cmd+shift+c groups', { key: 'c', metaKey: true, shiftKey: true }, 'groupLayers'],
+  ['cmd+shift+c pre-composes', { key: 'c', metaKey: true, shiftKey: true }, 'precompose'],
   ['cmd+v routes paste by editing context', { key: 'v', metaKey: true }, 'contextPaste'],
   ['cmd+a selects all', { key: 'a', metaKey: true }, 'selectAll'],
   ['cmd+shift+a deselects all', { key: 'a', metaKey: true, shiftKey: true }, 'deselect'],
@@ -100,7 +100,8 @@ const TABLE: Array<[string, KeyboardEventInit, string]> = [
   ['cmd+o opens', { key: 'o', metaKey: true }, 'open'],
   ['cmd+e exports', { key: 'e', metaKey: true }, 'export'],
   ['cmd+p shows projects', { key: 'p', metaKey: true }, 'projects'],
-  ['cmd+n makes a project', { key: 'n', metaKey: true }, 'newProject'],
+  ['cmd+n makes a composition', { key: 'n', metaKey: true }, 'newComposition'],
+  ['cmd+alt+n makes a project', { key: 'n', metaKey: true, altKey: true }, 'newProject'],
   ['F9 applies Easy Ease', { key: 'F9' }, 'easyEase'],
   ['shift+F9 applies Easy Ease In', { key: 'F9', shiftKey: true }, 'easyEaseIn'],
   ['cmd+shift+F9 applies Easy Ease Out', { key: 'F9', metaKey: true, shiftKey: true }, 'easyEaseOut'],
@@ -166,7 +167,7 @@ const TABLE: Array<[string, KeyboardEventInit, string]> = [
   /* Space remains global even when another modifier is held. */
   ['cmd+space still toggles playback', { key: ' ', metaKey: true }, 'play'],
   ['shift+Space still toggles playback', { key: ' ', shiftKey: true }, 'play'],
-  ['cmd+alt+k still opens the palette', { key: 'k', metaKey: true, altKey: true }, 'palette'],
+  ['cmd+alt+k opens composition settings', { key: 'k', metaKey: true, altKey: true }, 'compositionSettings'],
   ['cmd+ctrl+z still undoes', { key: 'z', metaKey: true, ctrlKey: true }, 'undo']
 ];
 

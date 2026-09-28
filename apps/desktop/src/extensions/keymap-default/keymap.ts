@@ -29,7 +29,7 @@ const MOD_CHORDS: Array<[string, string, boolean]> = [
   ['y', 'newSolid', false], ['shift+y', 'newShape', true],
   ['t', 'toolText', true], ['shift+t', 'toolText', true],
   ['d', 'duplicate', true], ['shift+d', 'split', true],
-  ['c', 'copyLayers', true], ['shift+c', 'groupLayers', true], ['g', 'groupLayers', true], ['shift+g', 'ungroupLayers', true],
+  ['c', 'copyLayers', true], ['shift+c', 'precompose', true], ['g', 'groupLayers', true], ['shift+g', 'ungroupLayers', true],
   /* Paste and Projects explicitly rejected Shift. */
   ['v', 'contextPaste', false],
   ['a', 'selectAll', true], ['shift+a', 'deselect', true],
@@ -38,13 +38,16 @@ const MOD_CHORDS: Array<[string, string, boolean]> = [
   ['o', 'open', true], ['shift+o', 'open', true],
   ['e', 'export', true], ['shift+e', 'export', true],
   ['p', 'projects', false],
-  ['n', 'newProject', false],
+  /* After Effects: ⌘N is New Composition, ⌥⌘N New Project, ⌥⌘K Composition Settings. */
+  ['n', 'newComposition', false],
+  ['alt+n', 'newProject', false],
+  ['alt+k', 'compositionSettings', false],
 ];
 for (const [chord, command, looseModifiers] of MOD_CHORDS) {
   /* File commands are exact so a shifted chord is never caught by the plain
      command's legacy subset matcher. Cmd/Ctrl+Shift+E remains an explicit
      export alias for now. */
-  const exactFileChord = command === 'export' || command === 'newProject';
+  const exactFileChord = command === 'export' || command === 'newProject' || command === 'newComposition';
   const loose = exactFileChord ? false : looseModifiers;
   bind(`cmd+${chord}`, command, loose);
   bind(`ctrl+${chord}`, command, loose);

@@ -209,7 +209,7 @@ describe('timeline extension', () => {
   it('builds the exact canvas skeleton and rebinds the runtime to replacement hosts', () => {
     const value = activate();
     const first = build(value);
-    expect([...first.children].filter((element) => element.tagName !== 'STYLE').map((element) => element.id)).toEqual(['tl-head', 'tl-canvas-wrap']);
+    expect([...first.children].filter((element) => element.tagName !== 'STYLE').map((element) => element.id)).toEqual(['tl-comp-tabs', 'tl-head', 'tl-canvas-wrap']);
     expect(first.querySelector('#tl-canvas-wrap > #tl-canvas')).not.toBeNull();
     expect(value.state.timeline?.cv).toBe(first.querySelector('#tl-canvas'));
 

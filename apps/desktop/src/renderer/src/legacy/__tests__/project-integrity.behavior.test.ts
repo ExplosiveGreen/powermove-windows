@@ -53,7 +53,7 @@ it('grouping retains the existing editable parent chain', () => {
   const outer = PM.mkLayer('null', { name: 'Outer' }, p);
   inner.parent = outer.id;          // parent outside the future group
   p.layers.push(outer, inner);
-  const L = PM.precompose([inner.id], 'Group');
+  const L = PM.groupLayers([inner.id], 'Group');
   assert.equal(inner.group, L.id);
   assert.equal(inner.parent, outer.id);
   assert.equal(p.layers.length, 3);

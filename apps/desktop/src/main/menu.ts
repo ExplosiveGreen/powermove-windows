@@ -11,7 +11,7 @@ import { IPC, type MenuCommand } from '../shared/ipc';
 
 const RENDERER_MENU_CHORDS = new Set([
   'KeyZ', 'shift+KeyZ',
-  'KeyX', 'KeyC', 'KeyV', 'KeyA', 'KeyD', 'shift+KeyD', 'KeyB', 'shift+KeyH',
+  'KeyX', 'KeyC', 'shift+KeyC', 'KeyV', 'KeyA', 'KeyD', 'shift+KeyD', 'KeyB', 'shift+KeyH',
   'BracketRight', 'BracketLeft', 'shift+BracketRight', 'shift+BracketLeft',
   'Equal', 'shift+Equal', 'Minus', 'Digit0', 'Digit1', 'Comma',
 ]);
@@ -101,7 +101,7 @@ export function appMenuTemplate(
     {
       label: 'File',
       submenu: [
-        commandItem('New Project', 'CommandOrControl+N', 'newProject', send),
+        commandItem('New Project', 'CommandOrControl+Alt+N', 'newProject', send),
         {
           id: 'newWindow',
           label: 'New Window',
@@ -148,6 +148,15 @@ export function appMenuTemplate(
         commandItem('Send Backward', 'CommandOrControl+[', 'sendBackward', send, false),
         commandItem('Bring to Front', 'CommandOrControl+Shift+]', 'bringToFront', send, false),
         commandItem('Send to Back', 'CommandOrControl+Shift+[', 'sendToBack', send, false)
+      ]
+    },
+    {
+      label: 'Composition',
+      submenu: [
+        commandItem('New Composition…', 'CommandOrControl+N', 'newComposition', send),
+        commandItem('Composition Settings…', 'CommandOrControl+Alt+K', 'compositionSettings', send),
+        { type: 'separator' },
+        commandItem('Pre-compose…', 'CommandOrControl+Shift+C', 'precompose', send, false)
       ]
     },
     { label: 'View', submenu: viewItems },

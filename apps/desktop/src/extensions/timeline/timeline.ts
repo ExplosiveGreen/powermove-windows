@@ -2246,6 +2246,11 @@ function bind(cv: any, wrap: any) {
     if (!asset && !files.length) return;
     e.preventDefault(); e.stopPropagation();
     const { at, index } = placement;
+    if (asset?.kind === 'comp') {
+      /* A composition from the Project panel nests as a precomp layer. */
+      api.commands.run('addCompositionToTimeline', asset.id, { from: at, index });
+      return;
+    }
     if (asset) {
       const command = api.media.commandForAsset(asset.id, at);
       if (!command || command.type !== 'add_layer') return;
@@ -3426,6 +3431,8 @@ function onDbl(e: any) {
   if (x < T.gut && y > T.ruler) {
     const hr = hitRow(y);
     if (hr?.row.kind === 'prop' && x >= T.propertyValueX - 4) { editPropertyValue(hr.row, hr.i); return; }
+    /* AE: double-clicking a precomp layer opens its source composition. */
+    if (hr && hr.row.kind === 'layer' && hr.row.L.type === 'precomp' && hr.row.L.d?.comp) { api.commands.run('openComposition', hr.row.L.d.comp); return; }
     if (hr && hr.row.kind === 'layer' && x > 90) renameLayer(hr.row.L, hr.i);
   }
 }

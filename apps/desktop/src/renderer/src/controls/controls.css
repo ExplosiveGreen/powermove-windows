@@ -429,13 +429,136 @@ select.sel {
 .onoff.mixed > button { color: var(--tx-3); }
 @media (prefers-reduced-motion: reduce) { .onoff-pill { transition: none; } }
 
-/* Fill editing shares the color editor, with gradient controls around it. */
-.color-picker.cp-embedded {
+/* Fill editing is the color picker itself: the fill types take the header's
+   tabs, gradient stops sit between the header and the plane, and the color
+   space moves to a menu in the header's actions. The popover owns the surface,
+   so the embedded picker draws no shell of its own. */
+.fill-picker {
+  position: fixed;
+  z-index: 461;
+  width: 535px;
+  overflow: hidden auto;
+  border-radius: var(--r-md);
+  background: var(--bg-float);
+  box-shadow: 0 0 0 var(--hairline) var(--line-strong), 0 8px 24px -8px rgb(var(--ink-rgb) / .22), 0 2px 6px rgb(var(--ink-rgb) / .06);
+  outline: 0;
+  animation: pm-menu-in .18s cubic-bezier(.23, 1, .32, 1) both;
+}
+:root[data-theme="dark"] .fill-picker {
+  box-shadow: 0 0 0 var(--hairline) rgb(255 255 255 / .1), 0 12px 32px -8px rgb(0 0 0 / .6), 0 2px 6px rgb(0 0 0 / .3);
+}
+.fill-picker[data-side="bottom"] { transform-origin: top right; }
+.fill-picker[data-side="top"] { transform-origin: bottom right; --pm-menu-slide: 4px; }
+:root .color-picker.cp-embedded {
   position: relative;
+  z-index: auto;
   width: 100%;
+  border-radius: inherit;
+  background: transparent;
   box-shadow: none;
-  border-radius: 0;
   animation: none;
 }
-.fill-picker:has(.cp-embedded) { width: 535px; }
 .cp-embedded [hidden] { display: none; }
+.cp-space {
+  width: auto;
+  padding: 0 7px;
+}
+
+.fill-gradient {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 11px 0;
+}
+.fill-preview {
+  position: relative;
+  height: 14px;
+  border-radius: var(--r-xs);
+  overflow: hidden;
+  box-shadow: inset 0 0 0 var(--hairline) rgb(var(--ink-rgb) / .12);
+}
+.fill-preview span { position: absolute; inset: 0; }
+.fill-stops {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fill-stop {
+  display: grid;
+  grid-template-columns: 18px 84px minmax(60px, 1fr) 34px 22px;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 4px 0 5px;
+  border-radius: var(--r-sm);
+}
+.fill-stop:hover { background: var(--cp-well); }
+.fill-stop.on { background: var(--cp-button); }
+.fill-stop-swatch.cp-checker {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--r-xs);
+  background-image:
+    linear-gradient(var(--sw-color), var(--sw-color)),
+    linear-gradient(45deg, #aaa 25%, transparent 25%, transparent 75%, #aaa 75%),
+    linear-gradient(45deg, #aaa 25%, transparent 25%, transparent 75%, #aaa 75%);
+  background-position: 0 0, 0 0, 4px 4px;
+  background-size: auto, 8px 8px, 8px 8px;
+  box-shadow: inset 0 0 0 var(--hairline) rgb(var(--ink-rgb) / .12);
+}
+.fill-stop-color {
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: var(--cp-well);
+  color: var(--tx);
+  font: var(--fs-xs) var(--f-mono);
+  outline: 0;
+}
+.fill-stop-color:focus { box-shadow: inset 0 0 0 1px var(--tx-3); }
+.fill-picker input[type=range] {
+  width: 100%;
+  min-width: 0;
+}
+.fill-stop .mono {
+  color: var(--tx-2);
+  font-size: var(--fs-xs);
+  text-align: right;
+}
+.fill-stop-remove { opacity: 0; }
+.fill-stop:hover .fill-stop-remove,
+.fill-stop-remove:focus-visible { opacity: 1; }
+.fill-stop-remove:disabled { visibility: hidden; }
+.fill-picker-tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 4px 0 5px;
+}
+.fill-angle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  color: var(--tx-2);
+  font-size: var(--fs-xs);
+}
+.fill-angle input { flex: 1; }
+.fill-angle .mono {
+  min-width: 34px;
+  font-size: var(--fs-xs);
+  text-align: right;
+}
+.fill-add-stop {
+  height: 24px;
+  margin-left: auto;
+  padding: 0 10px;
+  font-size: var(--fs-xs);
+}
+.fill-none {
+  margin: 0;
+  padding: 14px 11px 15px;
+  color: var(--tx-3);
+}
