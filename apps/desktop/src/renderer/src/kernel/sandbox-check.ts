@@ -23,8 +23,10 @@ import type { HostDeps } from './host';
 import { panelFrameOf } from './panel-frame';
 import { createKernel, type Kernel } from './registries';
 import { createSandboxRuntime, type SandboxObserver, type SandboxRuntime, type SandboxRuntimeOptions } from './sandbox-host';
+import { PROJECT_READ_MEMBERS } from '../../sandbox/shim-api';
 
-export interface SandboxPermissionHit { namespace: string; member: string; count: number }
+/** `needs` names the permission that would allow it; absent, the member is trusted-only (full access). */
+export interface SandboxPermissionHit { namespace: string; member: string; count: number; needs?: 'project:read' }
 export interface SandboxCspHit { directive: string; blockedUri: string }
 export interface SandboxAsyncHit { member: string; count: number }
 export interface SandboxPanelResult { id: string; mounted: boolean; error?: string }
@@ -34,7 +36,7 @@ export interface SandboxCheckReport {
   /** Set when the manifest declares `full-access`: it never runs sandboxed, so nothing ran. */
   skipped?: 'full-access';
   activation: 'ok' | { error: string };
-  /** Trusted-only members reached (they throw `PermissionError('full-access')`). */
+  /** Trusted-only members reached (they throw `PermissionError('full-access')`), and project reads without `project:read`. */
   permissionErrors: SandboxPermissionHit[];
   cspViolations: SandboxCspHit[];
   /** apiVersion ≤ 2 code that read a sync result from a method that returns a Promise in the sandbox. */
@@ -221,7 +223,7 @@ export async function runSandboxCheck(record: ExtensionRecord, options: SandboxC
     registry.dispose();
   }
 
-  report.permissionErrors = [...permissionCounts].map(([path, count]) => ({ ...splitMember(path), count }));
+  report.permissionErrors = [...permissionCounts].map(([path, count]) => ({ ...splitMember(path), count, ...(PROJECT_READ_MEMBERS.has(path) ? { needs: 'project:read' as const } : {}) }));
   report.asyncMisuse = [...asyncCounts].map(([member, count]) => ({ member, count }));
   report.cspViolations = [...csp.values()];
   /* A PermissionError that aborted activation is already a permission hit. */

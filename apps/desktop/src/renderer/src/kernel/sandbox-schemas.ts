@@ -22,7 +22,8 @@ export const registrationSchemas = {
   status: shape({ id, text: handle, title: small.optional(), side: z.enum(['left', 'right']).optional(), onClick: handle.optional() }),
   palette: shape({ provider: handle }),
   menus: shape({ location: z.enum(['titlebar:right', 'panel:context', 'layer:context', 'timeline:context', 'viewer:context']), items: handle }),
-  events: shape({ event: id, fn: handle }),
+  // Interest in an event name; listeners stay in the sandbox document.
+  events: shape({ event: id }),
   panels: shape({ id, title: label, icon: small.optional(), size: z.number().finite().optional(), min: z.number().finite().optional(), flush: z.boolean().optional(), noscroll: z.boolean().optional() })
 } as const;
 

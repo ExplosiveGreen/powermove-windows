@@ -16,7 +16,8 @@ export class SandboxTimeoutError extends Error {
 }
 export interface RpcBudget { windowStart: number; received: number; excessSince: number; reported: boolean; handles: Set<number> }
 export const createRpcBudget = (): RpcBudget => ({ windowStart: Date.now(), received: 0, excessSince: 0, reported: false, handles: new Set() });
-export interface RpcLimits { maxIncomingBytes?: number; maxMirrorBytes?: number; maxIncomingPerSecond?: number; maxHandles?: number; budget?: RpcBudget; onSustainedLimit?(): void; onRemoteHandleRelease?(id: number): void }
+/** `trusted` is for a sandbox document's port to the kernel: what the kernel sends is not metered, only what the sandbox sends. */
+export interface RpcLimits { maxIncomingBytes?: number; maxIncomingPerSecond?: number; maxHandles?: number; trusted?: boolean; budget?: RpcBudget; onSustainedLimit?(): void; onRemoteHandleRelease?(id: number): void }
 function messageBytes(value: unknown, limit: number, depth = 0, seen = new WeakSet<object>()): number {
   if (depth > 64) return Infinity;
   if (typeof value === 'string') return value.length * 2;
@@ -77,13 +78,13 @@ export function createRpc(port: MessagePort, handlers: Record<string, (...args: 
     const message = event.data as Record<string, any>;
     if (!message || typeof message !== 'object' || closed) return;
     const now = Date.now();
-    if (now - budget.windowStart >= 1000) { if (budget.received <= (limits.maxIncomingPerSecond ?? 200)) budget.excessSince = 0; budget.windowStart = now; budget.received = 0; }
-    const byteLimit = message.t === 'notify' && message.m === 'mirror' ? (limits.maxMirrorBytes ?? limits.maxIncomingBytes ?? 1024 * 1024) : (limits.maxIncomingBytes ?? 1024 * 1024);
-    const tooLarge = messageBytes(message, byteLimit) > byteLimit;
+    if (!limits.trusted && now - budget.windowStart >= 1000) { if (budget.received <= (limits.maxIncomingPerSecond ?? 200)) budget.excessSince = 0; budget.windowStart = now; budget.received = 0; }
+    const byteLimit = limits.maxIncomingBytes ?? 1024 * 1024;
+    const tooLarge = !limits.trusted && messageBytes(message, byteLimit) > byteLimit;
     // Replies to our own requests are already bounded by `pending`; unknown
     // replies consume the same budget as calls and notifications.
     const unsolicited = message.t !== 'reply' || !pending.has(message.id);
-    const tooFast = unsolicited && ++budget.received > (limits.maxIncomingPerSecond ?? 200);
+    const tooFast = !limits.trusted && unsolicited && ++budget.received > (limits.maxIncomingPerSecond ?? 200);
     if (tooLarge || tooFast) {
       if (tooFast) { if (!budget.excessSince) budget.excessSince = now; if (!budget.reported && now - budget.excessSince >= 3000) { budget.reported = true; limits.onSustainedLimit?.(); } }
       const error = { name: 'ResourceLimitError', message: tooLarge ? 'Sandbox RPC payload exceeds 1 MiB or nesting limit' : 'Sandbox RPC rate exceeds 200 messages per second', code: 'resource_limit' };

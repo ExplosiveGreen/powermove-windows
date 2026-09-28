@@ -4,11 +4,13 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createRpc } from '../../../shared/sandbox-rpc';
-import { createSandboxAPI, PermissionError, sandboxControl } from '../../sandbox/shim-api';
+import { createSandboxAPI, PermissionError, sandboxControl, type SandboxEvent, type SandboxInit } from '../../sandbox/shim-api';
 import { installSandboxRuntime } from '../../sandbox/boot';
-import { cached, createSandboxRuntime, projectMirror } from './sandbox-host';
+import { cached, coalesceEvents, createSandboxRuntime } from './sandbox-host';
 import { createKernel } from './registries';
 import { parseHostEvent } from './sandbox-schemas';
+import { sandboxStats } from './project-snapshots';
+import { syntheticProject } from './__fixtures__/synthetic-project';
 import type { HostDeps } from './host';
 import type { ExtensionRecord, ProjectAPI } from './api';
 const close: Array<() => void | Promise<void>> = [];
@@ -79,9 +81,6 @@ it('registers across a real MessageChannel, caches sync callbacks, scopes vars, 
   expect(apply).toHaveBeenCalled();
   expect(() => childApi.host.pm).toThrow(PermissionError);
   expect(childApi.vars.keys()).toEqual(['TOKEN']);
-  const cloneStart = performance.now();
-  for (let i = 0; i < 100; i++) projectMirror(runtime.handle.api);
-  console.info(`sandbox fixture mirror clone: ${((performance.now() - cloneStart) / 100).toFixed(3)} ms`);
   runtime.dispose();
   expect(kernel.effects.has('sandboxed-ext.tint')).toBe(false);
   expect(kernel.commands.has('sandboxed-ext.command')).toBe(false);
@@ -134,7 +133,12 @@ it('refuses malicious port calls before they touch the host', async () => {
   await errorCode(client!.call('register', 'commands', 'sibling', { id: 'evil-ext-other.command', label: 'Sibling', run: 1 }), 'id_collision');
   await expect(client!.call('register', 'commands', 'malformed', { id: 'evil-ext.malformed', label: 'Malformed', run: 'callback' })).rejects.toMatchObject({ name: 'ZodError' });
   await errorCode(client!.call('invoke', 'events', 'emit', ['project:changed', {}]), 'permission_denied');
-  await errorCode(client!.call('register', 'events', 'foreign-event', { event: 'other-ext:secret', fn: 1 }), 'permission_denied');
+  await errorCode(client!.call('register', 'events', 'foreign-event', { event: 'other-ext:secret' }), 'permission_denied');
+  // No read permission: the kernel refuses project reads whatever the shim did.
+  await errorCode(client!.call('register', 'events', 'changes', { event: 'project:changed' }), 'project:read');
+  await errorCode(client!.call('register', 'events', 'selection', { event: 'selection' }), 'project:read');
+  await errorCode(client!.call('project-snapshot'), 'project:read');
+  await expect(client!.call('register', 'events', 'with-handle', { event: 'time', fn: 1 })).rejects.toMatchObject({ name: 'ZodError' });
   await errorCode(client!.call('register', 'keybindings', 'bad-key', { key: 'cmd+s', command: 'delete' }), 'permission_denied');
   const ownHandle = client!.handle(() => 'ok');
   await client!.call('register', 'commands', 'own', { id: 'evil-ext.own', label: 'Own', run: ownHandle });
@@ -179,9 +183,9 @@ it('refuses malicious port calls before they touch the host', async () => {
   expect(scoped).toHaveBeenCalledWith({ safe: true });
   expect(hostEvent).not.toHaveBeenCalled();
   await new Promise(resolve => setTimeout(resolve, 1100));
-  for (let index = 0; index < 197; index++) await client!.call('register', 'events', `event-${index}`, { event: 'tick', fn: 1 });
+  for (let index = 0; index < 197; index++) await client!.call('register', 'events', `event-${index}`, { event: 'tick' });
   await new Promise(resolve => setTimeout(resolve, 1100));
-  await expect(client!.call('register', 'events', 'event-201', { event: 'tick', fn: 1 })).rejects.toThrow('registration limit');
+  await expect(client!.call('register', 'events', 'event-201', { event: 'tick' })).rejects.toThrow('registration limit');
   const burst = await Promise.allSettled(Array.from({ length: 500 }, () => client!.call('extensions-list')));
   expect(burst.some(result => result.status === 'rejected' && (result.reason as { code?: string }).code === 'resource_limit')).toBe(true);
   expect(deletes).not.toHaveBeenCalled();
@@ -204,39 +208,13 @@ it('refuses malicious port calls before they touch the host', async () => {
   } finally { clock.mockRestore(); }
 });
 
-it('redacts asset sources and secret-shaped project fields, and rejects an oversized mirror', () => {
-  const shared = { blob: 'private bytes', sourcePath: '/private/file', name: 'safe' };
-  const project = { loose: shared, assets: { a: shared },
-    comps: { nested: { assets: { a: shared }, library: { accessToken: 'secret', title: 'nested' }, notes: { password: 'secret', body: 'safe' } } },
-    library: { token: 'secret', nested: { apiKey: 'secret', title: 'safe' } }, notes: { password: 'secret', body: 'safe' } };
-  const api = { project: { get: () => project, revision: () => 7, selection: () => [], time: () => 0, playing: () => false } } as unknown as Parameters<typeof projectMirror>[0];
-  const mirror = projectMirror(api);
-  expect(mirror.project).toEqual({ loose: shared, assets: { a: { name: 'safe' } },
-    comps: { nested: { assets: { a: { name: 'safe' } }, library: { title: 'nested' }, notes: { body: 'safe' } } },
-    library: { nested: { title: 'safe' } }, notes: { body: 'safe' } });
-  expect(project.library.token).toBe('secret'); // the source project was not mutated
-  const huge = { project: { get: () => ({ notes: 'x'.repeat(9 * 1024 * 1024) }), revision: () => 8, selection: () => [], time: () => 0, playing: () => false } } as unknown as Parameters<typeof projectMirror>[0];
-  expect(projectMirror(huge).project).toEqual({ tooLarge: true, revision: 8 });
-});
-
-it('makes an oversized mirror explicit at the shim read boundary', () => {
+it('does not allocate callback handles for view-local registration replays or event listeners', () => {
   const channel = new MessageChannel();
-  const rpc = createRpc(channel.port1, {});
-  const peer = createRpc(channel.port2, {});
-  close.push(() => { rpc.close(); peer.close(); });
-  const init = { id: 'evil-ext', apiVersion: 3, manifest: { id: 'evil-ext', name: 'Test', version: '1.0.0', apiVersion: 3, permissions: [] }, vars: {},
-    theme: { scheme: 'dark', tokens: {} }, project: { project: { tooLarge: true, revision: 9 }, revision: 9, selection: [], time: 0, playing: false }, bundleUrl: '' } as Parameters<typeof createSandboxAPI>[1];
-  const api = createSandboxAPI(rpc, init);
-  expect(() => api.project.get()).toThrow('exceeds 8 MiB');
-});
-
-it('does not allocate callback handles for view-local registration replays', () => {
-  const channel = new MessageChannel();
-  const rpc = createRpc(channel.port1, {}, 100, { maxHandles: 1 });
+  const rpc = createRpc(channel.port1, {}, 100, { maxHandles: 0 });
   const peer = createRpc(channel.port2, { register: () => undefined });
   close.push(() => { rpc.close(); peer.close(); });
   const init = { id: 'evil-ext', apiVersion: 3, manifest: { id: 'evil-ext', name: 'Test', version: '1.0.0', apiVersion: 3, permissions: [] }, vars: {},
-    theme: { scheme: 'dark', tokens: {} }, project: { project: {}, revision: 1, selection: [], time: 0, playing: false }, bundleUrl: '' } as Parameters<typeof createSandboxAPI>[1];
+    theme: { scheme: 'dark', tokens: {} }, state: { time: 0, playing: false, revision: 1, generation: 1, selection: null }, bundleUrl: '' } as Parameters<typeof createSandboxAPI>[1];
   const api = createSandboxAPI(rpc, init, 'view');
   api.commands.register({ id: 'evil-ext.one', label: 'One', run: () => {} });
   api.commands.register({ id: 'evil-ext.two', label: 'Two', run: () => {} });
@@ -245,6 +223,131 @@ it('does not allocate callback handles for view-local registration replays', () 
   api.menus.contribute('panel:context', () => []);
   const events = api.events as unknown as { on(event: string, fn: () => void): { dispose(): void } };
   events.on('one', () => {});
-  expect(() => events.on('two', () => {})).toThrow('handle limit');
+  events.on('two', () => {});
+  events.on('time', () => {});
   sandboxControl(api).dispose();
+});
+
+it('coalesces one flush: last time and selection, one project:changed per kind, the rest in order', () => {
+  expect(coalesceEvents([['time', 1], ['a', 1], ['project:changed', { kind: 'values' }], ['time', 2], ['selection', 's1'],
+    ['project:changed', { kind: 'structure' }], ['a', 2], ['project:changed', { kind: 'values' }], ['selection', 's2']]))
+    .toEqual([['a', 1], ['time', 2], ['project:changed', { kind: 'structure' }], ['a', 2], ['project:changed', { kind: 'values' }], ['selection', 's2']]);
+});
+
+/* Data plane (docs/sandbox-data-plane.md §3): real shim documents on real ports. */
+function planeDeps(live: { proj: Record<string, any>; time: number; playing: boolean }) {
+  const project = { get: () => live.proj, revision: () => Number(live.proj.revision), selection: () => ({ layers: ['l1'], keys: [], chan: null }),
+    time: () => live.time, playing: () => live.playing, apply: vi.fn(), select: vi.fn(), setTime: vi.fn(), play: vi.fn(), pause: vi.fn(), undo: vi.fn(), redo: vi.fn(), snapshot: async () => '' } as unknown as ProjectAPI;
+  return { pm: {}, state: { doc: {}, sel: {}, transport: {}, perf: {} }, project,
+    ui: { controls: {}, toast: vi.fn(), confirm: async () => true, menu: vi.fn(), modal: vi.fn(), icon: () => '' },
+    assets: { pick: async () => [], import: async () => ({ id: 'x', name: 'x', kind: 'image' }), get: () => undefined, readText: async () => '' },
+    storage: () => ({ get: () => undefined, set: vi.fn(), delete: vi.fn() }),
+    extensions: { list: () => [], setEnabled: async () => {}, remove: async () => {}, reload: async () => {}, reveal: async () => {}, requestFix: vi.fn(), rebase: vi.fn() },
+    panelsBackend: { open: vi.fn(), close: vi.fn(), isOpen: () => false, refresh: vi.fn(), list: () => [] }, paletteOpen: vi.fn(), reportRuntimeError: vi.fn()
+  } as unknown as HostDeps;
+}
+async function planeRuntime(kernel: ReturnType<typeof createKernel>, deps: HostDeps, id: string, permissions: string[], activate: (api: any) => void = () => {}) {
+  const record = { id, trust: 'store', scope: 'user', manifest: { id, name: id, version: '1.0.0', apiVersion: 3, permissions }, dir: `/tmp/${id}`, enabled: true, bundleUrl: `/ext/${id}/bundle.js`, bundleHash: 'x', health: { state: 'ok' }, updatedAt: 0 } as unknown as ExtensionRecord;
+  const frame = document.createElement('iframe');
+  const ticks: string[] = [];
+  let api!: any;
+  let init!: SandboxInit;
+  const pending = createSandboxRuntime(kernel, record, deps, {}, { frame, onPostInit(port, message) {
+    init = message;
+    let control: ReturnType<typeof sandboxControl> | undefined;
+    const child = createRpc(port, { tick: (delta: unknown, events: SandboxEvent[]) => { ticks.push(JSON.stringify([delta, events])); control?.tick(delta as never, events); } }, 10_000, { trusted: true });
+    close.push(() => child.close());
+    api = createSandboxAPI(child, message);
+    control = sandboxControl(api);
+    activate(api);
+    child.notify('activated');
+  } });
+  frame.dispatchEvent(new Event('load'));
+  const runtime = await pending;
+  close.push(() => runtime.dispose());
+  return { runtime, api, ticks, init: () => init };
+}
+const flushed = () => new Promise(resolve => setTimeout(resolve, 0));
+
+it('inits with state and no project, ticks small deltas, and forwards only subscribed events, coalesced', async () => {
+  const kernel = createKernel();
+  const live = { proj: { revision: 1, layers: [] } as Record<string, any>, time: 0, playing: false };
+  const deps = planeDeps(live);
+  const heard: unknown[] = [];
+  const reader = await planeRuntime(kernel, deps, 'reader-ext', ['project:read'], api => {
+    api.events.on('project:changed', (payload: unknown) => heard.push(['changed', payload, api.project.revision()]));
+    api.events.on('time', (time: number) => heard.push(['time', time]));
+  });
+  const blind = await planeRuntime(kernel, deps, 'blind-ext', []);
+  expect(reader.init().state).toEqual({ time: 0, playing: false, revision: 1, generation: expect.any(Number), selection: { layers: ['l1'], keys: [], chan: null } });
+  expect(blind.init().state.selection).toBeNull();
+  expect(reader.init()).not.toHaveProperty('project');
+  await flushed();
+  reader.ticks.length = 0; blind.ticks.length = 0;
+  live.time = 1; kernel.events.emit('time', 1);
+  live.time = 2; kernel.events.emit('time', 2);
+  live.proj.revision = 2;
+  kernel.events.emit('project:changed', { kind: 'values' });
+  kernel.events.emit('project:changed', { kind: 'values' });
+  kernel.events.emit('ext:reader-ext:unheard' as never, 1 as never);
+  await flushed();
+  expect(reader.ticks).toHaveLength(1);
+  expect(JSON.parse(reader.ticks[0]!)).toEqual([{ time: 2, revision: 2, generation: expect.any(Number) }, [['time', 2], ['project:changed', { kind: 'values' }]]]);
+  expect(heard).toEqual([['time', 2], ['changed', { kind: 'values' }, 2]]);
+  // Nothing subscribed: the state alone, and no selection without read access.
+  expect(blind.ticks.map(tick => JSON.parse(tick)[1])).toEqual([[]]);
+  expect(JSON.parse(blind.ticks[0]!)[0]).not.toHaveProperty('selection');
+  kernel.events.emit('time', 2); // state unchanged, no subscriber for the blind one
+  await flushed();
+  expect(blind.ticks).toHaveLength(1);
+  expect(reader.api.project.time()).toBe(2);
+});
+
+it('costs a playing project nothing but tiny ticks when an extension reads nothing', async () => {
+  const kernel = createKernel();
+  const live = { proj: syntheticProject(), time: 0, playing: true };
+  await planeRuntime(kernel, planeDeps(live), 'idle-ext', ['project:read']);
+  await flushed();
+  const stats = sandboxStats();
+  const builds = stats.snapshotBuilds, ticks = stats.ticks;
+  let hostMs = 0;
+  for (let frame = 1; frame <= 120; frame++) {
+    const start = performance.now();
+    live.time = frame / 60; kernel.events.emit('time', live.time);
+    await Promise.resolve(); // the flush runs as the microtask queued first
+    hostMs += performance.now() - start;
+  }
+  await flushed();
+  expect(stats.snapshotBuilds - builds).toBe(0);
+  expect(stats.ticks - ticks).toBe(120);
+  console.info(`[bench] playback, idle extension on a ${(JSON.stringify(live.proj).length / 1e6).toFixed(2)} MB project: ${(hostMs / 120 * 1000).toFixed(1)} µs host time per frame, 0 snapshot builds`);
+});
+
+it('sends small ticks during playback and builds one snapshot for three extensions reading after a change', async () => {
+  const kernel = createKernel();
+  const live = { proj: syntheticProject(), time: 0, playing: true };
+  const deps = planeDeps(live);
+  const docs = await Promise.all(['one-ext', 'two-ext', 'three-ext'].map(id => planeRuntime(kernel, deps, id, id === 'two-ext' ? ['project:write'] : ['project:read'])));
+  for (let frame = 1; frame <= 120; frame++) { live.time = frame / 60; kernel.events.emit('time', live.time); await Promise.resolve(); }
+  for (let wait = 0; wait < 100 && docs.some(doc => doc.ticks.length < 120); wait++) await new Promise(resolve => setTimeout(resolve, 10));
+  for (const doc of docs) {
+    expect(doc.ticks.length).toBeGreaterThanOrEqual(120);
+    expect(Math.max(...doc.ticks.map(tick => tick.length))).toBeLessThan(200);
+  }
+  const stats = sandboxStats();
+  const first = await Promise.all(docs.map(doc => doc.api.project.get()));
+  const builds = stats.snapshotBuilds;
+  live.proj.revision += 1;
+  live.proj.layers[0].name = 'Renamed';
+  kernel.events.emit('project:changed', { kind: 'values' });
+  await flushed();
+  const second = await Promise.all(docs.map(doc => doc.api.project.get()));
+  expect(stats.snapshotBuilds - builds).toBe(1);
+  expect(second.map(project => project.layers[0].name)).toEqual(['Renamed', 'Renamed', 'Renamed']);
+  expect(second[0]).not.toBe(first[0]);
+  expect(Object.isFrozen(second[1].layers[0].p)).toBe(true);
+  expect(second[2]).not.toHaveProperty('edits');
+  // Unchanged generation: no message, the same frozen object.
+  expect(await docs[0]!.api.project.get()).toBe(second[0]);
+  expect(stats.snapshotBuilds - builds).toBe(1);
 });

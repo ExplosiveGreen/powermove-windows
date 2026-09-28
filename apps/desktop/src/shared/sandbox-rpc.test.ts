@@ -61,17 +61,17 @@ it('rejects an oversized reply from a sandbox callback', async () => {
   const { left } = pair({}, { huge: () => 'x'.repeat(2 * 1024 * 1024) }, 500);
   await expect(left.call('huge')).rejects.toMatchObject({ code: 'resource_limit' });
 });
-it('accepts the documented larger project mirror only on a trusted receiver', async () => {
+it('does not meter what the kernel sends on a trusted port', async () => {
   const channel = new MessageChannel();
-  const mirror = vi.fn(), other = vi.fn();
-  const host = createRpc(channel.port1 as unknown as MessagePort, {});
-  const view = createRpc(channel.port2 as unknown as MessagePort, { mirror, other }, 100, { maxMirrorBytes: 16 * 1024 * 1024 + 8192 });
-  close.push(() => { host.close(); view.close(); });
-  host.notify('mirror', { project: 'x'.repeat(2 * 1024 * 1024) });
-  host.notify('other', 'x'.repeat(2 * 1024 * 1024));
-  await new Promise(resolve => setTimeout(resolve, 10));
-  expect(mirror).toHaveBeenCalledTimes(1);
-  expect(other).not.toHaveBeenCalled();
+  const tick = vi.fn();
+  const host = createRpc(channel.port1 as unknown as MessagePort, { big: () => 'x'.repeat(4 * 1024 * 1024) });
+  const doc = createRpc(channel.port2 as unknown as MessagePort, { tick }, 1000, { trusted: true });
+  close.push(() => { host.close(); doc.close(); });
+  host.notify('tick', { time: 1 }, [['note', 'x'.repeat(2 * 1024 * 1024)]]);
+  for (let index = 0; index < 300; index++) host.notify('tick', { time: index }, []);
+  expect(await doc.call('big')).toHaveLength(4 * 1024 * 1024); // replies from the host side are not metered either
+  await new Promise(resolve => setTimeout(resolve, 20));
+  expect(tick).toHaveBeenCalledTimes(301);
 });
 it('shares the message rate budget across an extension runtime and view', async () => {
   const budget = createRpcBudget();

@@ -3,7 +3,7 @@
  *
  * Message topology (the kernel only brokers):
  *
- *   kernel ──(view port)──────── view iframe      data, theme, size, keys, events
+ *   kernel ──(view port)──────── view iframe      state ticks, snapshots, theme, size, keys
  *   kernel ──(runtime RPC)────── runtime iframe   mountPanel / unmountPanel
  *   runtime iframe ──(brokered)── view iframe      panel definition lookup
  *
@@ -13,6 +13,10 @@
  * channel to the runtime iframe and posts `init` with the other ends to the
  * view. Tearing a view down closes the kernel's port and tells the runtime to
  * close its end.
+ *
+ * A view speaks the same data plane as the runtime (sandbox-host.ts): its
+ * init carries the state, the kernel ticks it on the view port, and it pulls
+ * `project-snapshot` itself.
  */
 import { createRpc, type Rpc, type RpcBudget } from '../../../shared/sandbox-rpc';
 import type { SandboxInit, SandboxKey, SandboxKeyEvent, SandboxPanelInfo, SandboxViewInit } from '../../sandbox/shim-api';
@@ -20,15 +24,17 @@ import type { Disposable } from './api';
 
 export interface ViewLink {
   rpc: Rpc;
-  /** Event subscriptions this view made; released with the view. */
+  /** Event interest this view registered; released with the view. */
   registrations: Map<string, Disposable>;
 }
 
 export interface ViewHost {
   /** Document URL for a panel's view, or null to leave `src` unset (tests). */
   src(panelId: string): string | null;
-  /** A fresh init snapshot (project mirror, vars, catalog, bundle URL). */
-  snapshot(): SandboxInit;
+  /** A fresh init (state, vars, catalog, bundle URL); from now on the link gets ticks against the state it carries. */
+  init(link: ViewLink): SandboxInit;
+  /** The link's document is gone: no more ticks. */
+  detach(link: ViewLink): void;
   /** Theme as the host document currently shows it. */
   theme(): SandboxInit['theme'];
   /** The host's keybindings, reduced to what a view needs to filter keydowns. */
@@ -38,7 +44,7 @@ export interface ViewHost {
   releaseRemoteHandle(id: number): void;
   forwardKey(payload: SandboxKeyEvent): void;
   outsideClick(): void;
-  /** Live views, for mirror/theme/keys broadcasts. */
+  /** Live views, for theme and keys broadcasts. */
   links: Set<ViewLink>;
   connectRuntime(panelId: string, token: string, port: MessagePort): void;
   disconnectRuntime(token: string): void;
@@ -78,6 +84,7 @@ export function mountSandboxView(host: ViewHost, panel: SandboxPanelInfo, body: 
     const { link, token } = live;
     live = null;
     host.links.delete(link);
+    host.detach(link);
     try { link.rpc.notify('dispose'); } catch { /* already closed */ }
     // Let the queued disposal notification cross the port before closing it.
     queueMicrotask(() => link.rpc.close());
@@ -121,7 +128,7 @@ export function mountSandboxView(host: ViewHost, panel: SandboxPanelInfo, body: 
     live = { link, token };
     host.connectRuntime(panel.id, token, brokered.port2);
     const message: SandboxViewInit & { t: 'init' } = {
-      t: 'init', ...host.snapshot(), theme: host.theme(), mode: 'view',
+      t: 'init', ...host.init(link), theme: host.theme(), mode: 'view',
       panelId: panel.id, spec: JSON.parse(JSON.stringify(inst?.spec ?? {})) as Record<string, unknown>,
       keys: host.keys(), size: sizeOf(body), ...(panel.noscroll ? { noscroll: true } : {})
     };

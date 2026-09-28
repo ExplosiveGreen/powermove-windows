@@ -26,6 +26,14 @@ it('renders each blocked reason as a separate row', async () => {
   target.remove();
 });
 
+it('names project:read for an undeclared project read', () => {
+  const lines = sandboxCheckLines(report({
+    permissionErrors: [{ namespace: 'project', member: 'get', count: 1, needs: 'project:read' }],
+    runtimeErrors: ['project.get requires project:read permission. Declare "project:read" in the manifest\'s permissions.']
+  }));
+  expect(lines).toEqual(['Reads the project with api.project.get without permission. Declare `permissions: ["project:read"]`.']);
+});
+
 it('renders the success line', async () => {
   const target = document.createElement('div');
   document.body.append(target);
