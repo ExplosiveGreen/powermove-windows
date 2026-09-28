@@ -323,7 +323,9 @@ is closed. Do not wire `events.on` into `$state` for these values.
 - In the sandbox it is the newest snapshot this document has pulled: `undefined`
   until the first pull, then the deep-frozen copy `await project.get()` returns. A
   reactive read starts a pull when there is none for the current project and
-  re-runs when it lands, and again after every change. Handle `undefined`.
+  re-runs when it lands, and again after changes: at most once a frame, so a
+  drag that edits on every pointer move lands as one copy a frame, ending with
+  its last change. Handle `undefined`.
 
 `project.get()` is unchanged: synchronous in the editor, a Promise in the sandbox.
 Use it in `activate`, commands and status providers, where no component reads

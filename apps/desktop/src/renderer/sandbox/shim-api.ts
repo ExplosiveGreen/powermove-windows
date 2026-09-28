@@ -164,8 +164,8 @@ export function panelInfo(def: Record<string, any>): SandboxPanelInfo {
  *
  * Reactive reads (time, playing, revision, selection, latest, theme) cost
  * nothing new on the port: they re-run their readers from the ticks and theme
- * pushes that arrive anyway, and only `latest()` pulls, once per generation,
- * while it has a reader.
+ * pushes that arrive anyway, and only `latest()` pulls, once per generation and
+ * at most once a frame, while it has a reader.
  */
 export type SandboxMode = 'runtime' | 'view';
 const VIEW_READS = new Set(['storage.get', 'assets.get', 'assets.readText', 'media.getImportDefaults', 'ui.icon', 'panels.isOpen']);
@@ -203,6 +203,13 @@ function replyHandles(handle: (fn: (...args: any[]) => unknown) => HandleId, rel
     },
     dispose() { disposed = true; for (const reply of kept.splice(0)) for (const id of reply.ids) release(id); }
   };
+}
+/* The runtime iframe is hidden, where a frame callback may never come; the timer bounds the wait. */
+function nextFrame(fn: () => void): void {
+  let done = false;
+  const run = (): void => { if (!done) { done = true; fn(); } };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+  setTimeout(run, 50);
 }
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
@@ -343,9 +350,23 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     if (snapshot.tooLarge) throw new Error('The project is larger than the 8 Mi character sandbox snapshot limit, so project.get() is unavailable until it shrinks');
     return snapshot.value;
   };
-  /* A `latest()` reader keeps this document's copy at the current generation;
-     a failed pull leaves what `latest()` returns as it was. */
-  const pullLatest = (): void => { if (!(snapshot && snapshot.generation >= state.generation)) pullProject().catch(() => {}); };
+  /* A `latest()` reader keeps this document's copy at the current generation.
+     A drag changes the project on every pointer move, and each pull builds a
+     whole-project copy on the host, so pulls wait for the one in flight and
+     for the next frame: at most one a frame, the newest change always among
+     them. A failed pull leaves what `latest()` returns as it was. */
+  let latestBusy = false, latestWanted = false;
+  const pullLatest = (): void => {
+    if (snapshot && snapshot.generation >= state.generation) return;
+    if (latestBusy) { latestWanted = true; return; }
+    latestBusy = true;
+    void Promise.all([pullProject().catch(() => {}), new Promise<void>(nextFrame)]).then(() => {
+      latestBusy = false;
+      if (!latestWanted) return;
+      latestWanted = false;
+      if (reads.project.live()) pullLatest();
+    });
+  };
   const reads = { time: reactiveSource(), playing: reactiveSource(), revision: reactiveSource(), selection: reactiveSource(),
     project: reactiveSource(pullLatest), theme: reactiveSource() };
   const reactive = <T,>(source: { read(): void }, value: () => T) => (): T => { source.read(); return value(); };
