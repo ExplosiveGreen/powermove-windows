@@ -377,14 +377,19 @@ export interface Selection {
 }
 
 export interface ProjectAPI {
-  /** Current project object graph. Stays synchronous against the sandbox mirror; mutate through `apply`. */
+  /** Current project object graph; mutate through `apply`. Returns a Promise when the extension runs sandboxed
+   * (Store installs): a deep-frozen snapshot without `edits`, asset blob/source fields or `library`/`notes`
+   * secrets, cached until the project changes. Sandboxed, it needs `project:read` (or `project:write`). */
   get(): Project;
+  /** Synchronous in the sandbox; needs no permission. */
   revision(): number;
   /** Typed, validated, undoable edit. `meta.origin` is forced to `ext:<id>`. Returns a Promise when sandboxed. */
   apply(commands: EditCommand | EditCommand[], meta?: Omit<EditMeta, 'origin'>): EditResult;
+  /** Synchronous in the sandbox; needs `project:read` (or `project:write`) there. */
   selection(): Selection;
   /** Returns a Promise when the extension runs sandboxed (Store installs). */
   select(layerIds: string[], add?: boolean): void;
+  /** Synchronous in the sandbox; needs no permission. */
   time(): number;
   /** Returns a Promise when the extension runs sandboxed (Store installs). */
   setTime(t: number): void;
@@ -392,6 +397,7 @@ export interface ProjectAPI {
   play(): void;
   /** Returns a Promise when the extension runs sandboxed (Store installs). */
   pause(): void;
+  /** Synchronous in the sandbox; needs no permission. */
   playing(): boolean;
   /** Returns a Promise when the extension runs sandboxed (Store installs). */
   undo(): void;
@@ -934,6 +940,8 @@ export interface KernelEvents {
 }
 
 export interface EventsAPI {
+  /** Sandboxed, listeners run in the extension's document and occurrences arrive batched once per host flush
+   * (`time` and `selection` keep the latest value). `project:changed` and `selection` need `project:read`. */
   on<K extends keyof KernelEvents>(event: K, fn: (payload: KernelEvents[K]) => void): Disposable;
   emit<K extends keyof KernelEvents>(event: K, payload: KernelEvents[K]): void;
 }
