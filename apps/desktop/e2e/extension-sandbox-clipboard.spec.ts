@@ -22,7 +22,7 @@ test('a sandboxed panel imports a 5 MB image, and copies only with the clipboard
   await app.evaluate(({ BrowserWindow, clipboard }) => {
     const copied: string[] = [];
     (globalThis as { __copied?: string[] }).__copied = copied;
-    const write = (text: string) => { copied.push(text); };
+    const write = async (text: string) => { copied.push(text); };
     clipboard.writeText = write;
     if (clipboard.writeText !== write) throw new Error('could not stub the clipboard');
     for (const window of BrowserWindow.getAllWindows()) window.isFocused = () => true;
