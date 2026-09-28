@@ -35,6 +35,8 @@ export function parseRegistration(kind: string, value: unknown): Record<string, 
 }
 
 const anyArgs = z.array(data).max(32);
+/* A toast's callbacks arrive as the calling document's handles (shim-api.ts). */
+const toastOptions = z.object({ action: shape({ label, run: handle }).optional(), onDismiss: handle.optional() }).catchall(data);
 const oneId = z.tuple([id]);
 const storageKey = z.string().min(1).max(1024);
 export const invokeSchemas: Record<string, z.ZodType> = {
@@ -44,7 +46,7 @@ export const invokeSchemas: Record<string, z.ZodType> = {
   'transport.step': z.tuple([z.number().finite()]),
   'assets.pick': anyArgs, 'assets.import': z.tuple([z.custom<File>(value => typeof File !== 'undefined' && value instanceof File), data.optional()]), 'assets.get': oneId, 'assets.readText': oneId,
   'storage.get': z.tuple([storageKey]), 'storage.set': z.tuple([storageKey, data]), 'storage.delete': z.tuple([storageKey]),
-  'ui.toast': anyArgs, 'ui.confirm': anyArgs, 'ui.icon': anyArgs,
+  'ui.toast': z.tuple([data, toastOptions.optional()]), 'ui.confirm': anyArgs, 'ui.icon': anyArgs,
   'panels.open': anyArgs, 'panels.close': oneId, 'panels.refresh': oneId,
   'keybindings.unbind': oneId, 'theme.activate': oneId,
   'palette.open': anyArgs, 'media.getImportDefaults': z.tuple([]),

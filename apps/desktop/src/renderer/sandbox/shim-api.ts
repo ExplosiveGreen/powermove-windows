@@ -280,6 +280,23 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     return { dispose };
   };
   const handle = (fn: (...args: any[]) => unknown): HandleId => rpc.handle(fn);
+  /* Callbacks cannot cross the port, so a toast's `action.run` and
+     `onDismiss` go as handles. The host releases them when the toast closes,
+     however it closes; one the host refuses releases them here. */
+  const toast = (message: string, options?: unknown): void => {
+    if (!options || typeof options !== 'object') { fire('invoke', 'ui', 'toast', options === undefined ? [message] : [message, options]); return; }
+    if (quiet) return;
+    const input = options as Record<string, any>;
+    const value: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(input)) if (key !== 'action' && key !== 'onDismiss' && typeof item !== 'function') value[key] = item;
+    const ids: HandleId[] = [];
+    const release = (): void => { for (const id of ids) { try { rpc.release(id); } catch { /* port closed */ } } };
+    try {
+      if (input.action && typeof input.action.run === 'function') { const run = handle(input.action.run); ids.push(run); value.action = { label: input.action.label, run }; }
+      if (typeof input.onDismiss === 'function') { const dismiss = handle(input.onDismiss); ids.push(dismiss); value.onDismiss = dismiss; }
+    } catch (error) { release(); throw error; }
+    void send('invoke', 'ui', 'toast', [message, value]).catch(error => { release(); raise(error); });
+  };
   /* The parsed snapshot of the newest generation fetched; see the data plane comment above. */
   let snapshot: { generation: number; value?: unknown; tooLarge?: true } | null = null;
   let inflight: Promise<void> | null = null;
@@ -399,7 +416,7 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     storage: { get: (key: string) => later('storage.get', 'invoke', 'storage', 'get', [key]), set: (key: string, value: unknown) => later('storage.set', 'invoke', 'storage', 'set', [key, value]), delete: (key: string) => later('storage.delete', 'invoke', 'storage', 'delete', [key]) },
     media: partlyTrusted('media', { registerImportDefaults: simpleRegister('media-defaults'), getImportDefaults: () => later('media.getImportDefaults', 'invoke', 'media', 'getImportDefaults', []) }, report),
     events: { on: listen, emit: (event: string, payload: unknown) => fire('invoke', 'events', 'emit', [event, payload]) },
-    ui: partlyTrusted('ui', { toast: (message: string, options?: unknown) => fire('invoke', 'ui', 'toast', options === undefined ? [message] : [message, options]), confirm: (...args: unknown[]) => send('invoke', 'ui', 'confirm', args), icon: (...args: unknown[]) => later('ui.icon', 'invoke', 'ui', 'icon', args), controls: trustedOnly('ui.controls', report), modal: trustedOnly('ui.modal', report), menu: trustedOnly('ui.menu', report), drag: trustedOnly('ui.drag', report), gesture: trustedOnly('ui.gesture', report), mount: trustedOnly('ui.mount', report) }, report),
+    ui: partlyTrusted('ui', { toast, confirm: (...args: unknown[]) => send('invoke', 'ui', 'confirm', args), icon: (...args: unknown[]) => later('ui.icon', 'invoke', 'ui', 'icon', args), controls: trustedOnly('ui.controls', report), modal: trustedOnly('ui.modal', report), menu: trustedOnly('ui.menu', report), drag: trustedOnly('ui.drag', report), gesture: trustedOnly('ui.gesture', report), mount: trustedOnly('ui.mount', report) }, report),
     vars: { get: (key: string) => vars[key], has: (key: string) => Object.hasOwn(vars, key), keys: () => Object.keys(vars) },
     extensions: { list: () => later('extensions.list', 'extensions-list'), setUp: (id: string) => send('invoke', 'extensions', 'setUp', [id]),
       fork: restricted('extensions.fork'), setEnabled: restricted('extensions.setEnabled'), remove: restricted('extensions.remove'), reload: restricted('extensions.reload'), reveal: restricted('extensions.reveal'), requestFix: restricted('extensions.requestFix'), rebase: restricted('extensions.rebase') },
