@@ -1,3 +1,4 @@
+import { createSubscriber } from 'svelte/reactivity';
 import type { PowermoveAPI, Selection } from '../src/kernel/api';
 import type { PMRegistry } from '../src/legacy/registry';
 import { createRpc, serializeRpcError, type Rpc, type HandleId } from '../../shared/sandbox-rpc';
@@ -21,6 +22,8 @@ export class ProjectWritePermissionError extends Error {
 export interface SandboxControl {
   /** The kernel's one notification per flush: apply `delta`, then dispatch `events` to local listeners in order. */
   tick(delta: Partial<SandboxState>, events: SandboxEvent[]): void;
+  /** The kernel's theme push, for `theme.active()` and `theme.scheme()`. */
+  theme(theme: SandboxInit['theme']): void;
   ready(): Promise<unknown>;
   dispose(): void;
   setQuiet(on: boolean): void;
@@ -40,7 +43,8 @@ export type SandboxEvent = [name: string, payload: unknown];
 export type SandboxSnapshot = { generation: number; json: string } | { generation: number; tooLarge: true } | { generation: number; unchanged: true };
 export interface SandboxInit {
   id: string; apiVersion: number; manifest: PowermoveAPI['manifest']; vars: Record<string, string>;
-  theme: { scheme: string; tokens: Record<string, string> }; state: SandboxState; bundleUrl: string;
+  /** `id` is the active theme; pushes carry it too. */
+  theme: { id?: string; scheme: string; tokens: Record<string, string> }; state: SandboxState; bundleUrl: string;
   catalog?: Record<string, Array<Record<string, any>>>;
   activeTheme?: string;
 }
@@ -155,9 +159,24 @@ export function panelInfo(def: Record<string, any>): SandboxPanelInfo {
  * the kernel and the last one withdraws it, so no callback handle crosses and
  * an occurrence costs no round trip. Reading the project needs no
  * permission; `network` is what gates sending it anywhere.
+ *
+ * Reactive reads (time, playing, revision, selection, latest, theme) cost
+ * nothing new on the port: they re-run their readers from the ticks and theme
+ * pushes that arrive anyway, and only `latest()` pulls, once per generation,
+ * while it has a reader.
  */
 export type SandboxMode = 'runtime' | 'view';
 const VIEW_READS = new Set(['storage.get', 'assets.get', 'assets.readText', 'media.getImportDefaults', 'ui.icon']);
+/*
+ * A reactive read calls `read()`: inside a template, $derived or $effect that
+ * subscribes the reader (the first one runs `start`), anywhere else it does
+ * nothing. `bump()` re-runs the current readers; with none it is a null check.
+ */
+function reactiveSource(start?: () => void): { read(): void; bump(): void; live(): boolean } {
+  let update: (() => void) | null = null;
+  const read = createSubscriber(next => { update = next; start?.(); return () => { update = null; }; });
+  return { read, bump: () => update?.(), live: () => update !== null };
+}
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
     Object.freeze(value);
@@ -169,6 +188,7 @@ function deepFreeze<T>(value: T): T {
 /** A per-iframe API. Only serializable values and callback ids cross the port. */
 export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode = 'runtime'): PowermoveAPI {
   const state: SandboxState = { ...init.state, selection: deepFreeze(init.state.selection ?? null) };
+  const theme = { active: init.theme.id ?? init.activeTheme ?? '', scheme: init.theme.scheme };
   /** True while a view's `activate` replays; see the mode comment above. */
   let quiet = false;
   const panelPorts = new Map<string, Rpc>();
@@ -267,6 +287,7 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     // `unchanged` names the generation already held here: the copy stands.
     if ('unchanged' in reply || snapshot && reply.generation < snapshot.generation) return;
     snapshot = 'json' in reply ? { generation: reply.generation, value: deepFreeze(JSON.parse(reply.json)) } : { generation: reply.generation, tooLarge: true };
+    reads.project.bump();
   }).finally(() => { inflight = null; });
   const pullProject = async (): Promise<unknown> => {
     const wanted = state.generation;
@@ -277,6 +298,12 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     if (snapshot.tooLarge) throw new Error('The project is larger than the 8 Mi character sandbox snapshot limit, so project.get() is unavailable until it shrinks');
     return snapshot.value;
   };
+  /* A `latest()` reader keeps this document's copy at the current generation;
+     a failed pull leaves what `latest()` returns as it was. */
+  const pullLatest = (): void => { if (!(snapshot && snapshot.generation >= state.generation)) pullProject().catch(() => {}); };
+  const reads = { time: reactiveSource(), playing: reactiveSource(), revision: reactiveSource(), selection: reactiveSource(),
+    project: reactiveSource(pullLatest), theme: reactiveSource() };
+  const reactive = <T,>(source: { read(): void }, value: () => T) => (): T => { source.read(); return value(); };
   const raise = (error: unknown): void => { try { rpc.notify('runtime-error', serializeRpcError(error)); } catch { /* port closed */ } };
   /* Listeners live here; the kernel only learns which names have one. */
   const listeners = new Map<string, { fns: Set<{ fn: (payload: unknown) => unknown }>; interest: { dispose(): void } }>();
@@ -304,7 +331,7 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     effects: { register: simpleRegister('effects'), list: () => list('effects'), get: (id: string) => list('effects').find(item => item.id === id) },
     transitions: { register: simpleRegister('transitions'), list: () => list('transitions'), get: (id: string) => list('transitions').find(item => item.id === id) },
     layers: { register: simpleRegister('layers'), list: () => list('layers'), get: (id: string) => list('layers').find(item => item.id === id) },
-    theme: { register: simpleRegister('theme'), activate: (id: string) => fire('invoke', 'theme', 'activate', [id]), setScheme: () => { report('permission', 'theme.setScheme'); throw new PermissionError('theme.setScheme'); }, active: () => init.activeTheme ?? '', scheme: () => init.theme.scheme, list: () => list('theme') },
+    theme: { register: simpleRegister('theme'), activate: (id: string) => fire('invoke', 'theme', 'activate', [id]), setScheme: () => { report('permission', 'theme.setScheme'); throw new PermissionError('theme.setScheme'); }, active: reactive(reads.theme, () => theme.active), scheme: reactive(reads.theme, () => theme.scheme), list: () => list('theme') },
     keybindings: { bind: simpleRegister('keybindings'), unbind: (key: string) => fire('invoke', 'keybindings', 'unbind', [key]), list: () => list('keybindings'), chordOf: (event: KeyboardEvent) => {
       const parts = [event.metaKey && 'cmd', event.ctrlKey && 'ctrl', event.altKey && 'alt', event.shiftKey && 'shift', event.key.toLowerCase()].filter(Boolean);
       return parts.join('+');
@@ -362,11 +389,12 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
          the icon on the extension's art. */
       return registration('panels', panelInfo(def), [], def);
     }, list: () => list('panels').map(item => item.id), open: (id: string, options?: unknown) => fire('invoke', 'panels', 'open', options === undefined ? [id] : [id, options]), close: (id: string) => fire('invoke', 'panels', 'close', [id]), refresh: (id: string) => fire('invoke', 'panels', 'refresh', [id]), isOpen: () => false },
-    project: { get: () => legacy ? watchPromise(pullProject(), 'project.get', report) : pullProject(), revision: () => state.revision, selection: () => state.selection,
-      time: () => state.time, playing: () => state.playing,
+    project: { get: () => legacy ? watchPromise(pullProject(), 'project.get', report) : pullProject(),
+      latest: reactive(reads.project, () => snapshot?.value), revision: reactive(reads.revision, () => state.revision), selection: reactive(reads.selection, () => state.selection),
+      time: reactive(reads.time, () => state.time), playing: reactive(reads.playing, () => state.playing),
       apply: (...args: unknown[]) => later('project.apply', 'invoke', 'project', 'apply', args), select: (...args: unknown[]) => later('project.select', 'invoke', 'project', 'select', args),
       setTime: (time: number) => later('project.setTime', 'invoke', 'project', 'setTime', [time]), play: () => later('project.play', 'invoke', 'project', 'play', []), pause: () => later('project.pause', 'invoke', 'project', 'pause', []), undo: () => later('project.undo', 'invoke', 'project', 'undo', []), redo: () => later('project.redo', 'invoke', 'project', 'redo', []), snapshot: (...args: unknown[]) => send('invoke', 'project', 'snapshot', args) },
-    transport: { time: () => state.time, playing: () => state.playing, setTime: (time: number) => later('transport.setTime', 'invoke', 'project', 'setTime', [time]), play: () => later('transport.play', 'invoke', 'project', 'play', []), pause: () => later('transport.pause', 'invoke', 'project', 'pause', []), toggle: () => later('transport.toggle', 'invoke', 'project', state.playing ? 'pause' : 'play', []), step: (frames: number) => later('transport.step', 'invoke', 'transport', 'step', [frames]) },
+    transport: { time: reactive(reads.time, () => state.time), playing: reactive(reads.playing, () => state.playing), setTime: (time: number) => later('transport.setTime', 'invoke', 'project', 'setTime', [time]), play: () => later('transport.play', 'invoke', 'project', 'play', []), pause: () => later('transport.pause', 'invoke', 'project', 'pause', []), toggle: () => later('transport.toggle', 'invoke', 'project', state.playing ? 'pause' : 'play', []), step: (frames: number) => later('transport.step', 'invoke', 'transport', 'step', [frames]) },
     assets: { pick: (...args: unknown[]) => send('invoke', 'assets', 'pick', args), import: (...args: unknown[]) => send('invoke', 'assets', 'import', args), get: (id: string) => later('assets.get', 'invoke', 'assets', 'get', [id]), readText: (id: string) => send('invoke', 'assets', 'readText', [id]) },
     storage: { get: (key: string) => later('storage.get', 'invoke', 'storage', 'get', [key]), set: (key: string, value: unknown) => later('storage.set', 'invoke', 'storage', 'set', [key, value]), delete: (key: string) => later('storage.delete', 'invoke', 'storage', 'delete', [key]) },
     media: partlyTrusted('media', { registerImportDefaults: simpleRegister('media-defaults'), getImportDefaults: () => later('media.getImportDefaults', 'invoke', 'media', 'getImportDefaults', []) }, report),
@@ -392,11 +420,19 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
       if (delta) {
         Object.assign(state, delta);
         if ('selection' in delta) state.selection = deepFreeze(delta.selection ?? null);
+        for (const key of ['time', 'playing', 'revision', 'selection'] as const) if (key in delta) reads[key].bump();
+        if ('generation' in delta && reads.project.live()) pullLatest();
       }
       for (const [name, payload] of events ?? []) {
         const entry = listeners.get(name);
         if (entry) for (const { fn } of [...entry.fns]) { try { void fn(payload); } catch (error) { raise(error); } }
       }
+    },
+    theme(next) {
+      const active = next.id ?? theme.active;
+      if (active === theme.active && next.scheme === theme.scheme) return;
+      theme.active = active; theme.scheme = next.scheme;
+      reads.theme.bump();
     },
     ready: async () => { await Promise.all([...registrations]); if (registrationFailure) throw registrationFailure; },
     dispose() {
