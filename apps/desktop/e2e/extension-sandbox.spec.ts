@@ -191,3 +191,120 @@ test('a sandboxed Svelte panel follows the playhead and the project through reac
   await expect.poll(readout).toEqual({ ...changed, faded: true });
   expect(session.diagnostics.pageErrors).toEqual([]);
 });
+
+/* A store extension without network, written here so the shared fixture stays
+   as it is. Playwright cannot evaluate inside its out-of-process frames, so it
+   reports through effect data and extension events. */
+const PERMS_INDEX = `import type { PowermoveAPI } from 'powermove';
+import Form from './Form.svelte';
+
+export default function activate(api: PowermoveAPI) {
+  api.panels.register({ id: \`\${api.id}.form\`, title: 'Form proof', size: 200, component: Form });
+  void (async () => {
+    const violations: string[] = [];
+    const onViolation = (event: Event) => violations.push((event as SecurityPolicyViolationEvent).violatedDirective);
+    globalThis.addEventListener('securitypolicyviolation', onViolation);
+    const dataText = await fetch('data:text/plain,powermove').then(response => response.text()).catch(() => 'failed');
+    const blobText = await fetch(URL.createObjectURL(new Blob(['blob-ok']))).then(response => response.text()).catch(() => 'failed');
+    // A bundled font is a data: URL. These bytes are no font, so only CSP is being asked.
+    await new FontFace('probe', 'url(data:font/woff2;base64,AAAA)').load().catch(() => {});
+    // Three distinct blocked remote loads; two within 10 s used to turn the extension off.
+    for (const host of ['a', 'b', 'c']) { const image = new Image(); image.src = \`https://\${host}.example.com/beacon.png\`; }
+    await new Promise(resolve => setTimeout(resolve, 500));
+    globalThis.removeEventListener('securitypolicyviolation', onViolation);
+    const label = JSON.stringify({ dataText, blobText, fontBlocked: violations.some(directive => directive.startsWith('font-src')), imagesBlocked: violations.filter(directive => directive.startsWith('img-src')).length });
+    api.effects.register({ id: \`\${api.id}.proof\`, label, group: 'Test', params: [], frag: 'o = texture(u_tex, v_uv);' });
+  })();
+}
+`;
+const PERMS_FORM = `<script lang="ts">
+  import type { PanelProps } from 'powermove';
+
+  let { api }: PanelProps = $props();
+  let form: HTMLFormElement;
+  let value = $state('typed');
+  let submits = 0;
+  let formActionBlocked = false;
+  globalThis.addEventListener('securitypolicyviolation', event => { if (event.violatedDirective === 'form-action') formActionBlocked = true; });
+
+  function onsubmit(event: SubmitEvent): void {
+    submits += 1;
+    const via = event.submitter ? 'button' : 'script';
+    // Reported after the dispatch, once the window listener has had its turn.
+    setTimeout(() => api!.events.emit('submitted', { submits, value, via, prevented: event.defaultPrevented, formActionBlocked }), 100);
+  }
+  $effect(() => { form.requestSubmit(); });
+</script>
+
+<form bind:this={form} {onsubmit}>
+  <input name="q" bind:value aria-label="Query" />
+  <button type="submit">Submit</button>
+</form>
+
+<style>
+  form { display: flex; flex-direction: column; gap: 6px; padding: 8px; }
+  input, button { height: 28px; margin: 0; box-sizing: border-box; }
+</style>
+`;
+
+test('a sandboxed panel submits its form, fetches data: URLs, and survives blocked loads', async ({ session }) => {
+  const extensions = path.join(session.userData, 'extensions');
+  const dir = path.join(extensions, 'sandbox-perms');
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, 'manifest.json'), JSON.stringify({ id: 'sandbox-perms', name: 'Sandbox permissions', version: '1.0.0', apiVersion: 3, entry: 'index.ts', permissions: [] }));
+  await writeFile(path.join(dir, 'index.ts'), PERMS_INDEX);
+  await writeFile(path.join(dir, 'Form.svelte'), PERMS_FORM);
+  await writeFile(path.join(session.userData, 'extensions-provenance.json'), JSON.stringify({
+    'sandbox-perms': { localId: 'sandbox-perms', envKey: 'external-repo-perms', origin: { ...origin, repoId: 'external-repo-perms', coordinate: 'someone/sandbox-perms' } }
+  }));
+  await session.relaunch();
+  await session.openEditor();
+  const { page } = session;
+  const record = () => page.evaluate(() => {
+    const found = ((window as any).PM?.Kernel?.loader?.records?.() ?? []).find((r: any) => r.id === 'sandbox-perms');
+    return found ? { enabled: found.enabled, health: found.health?.error ?? found.health?.state } : null;
+  });
+  await expect.poll(record, { timeout: 15_000 }).toEqual({ enabled: true, health: 'ok' });
+  expect(await page.evaluate(() => document.querySelector('iframe[src*="id=sandbox-perms"]')?.getAttribute('sandbox'))).toBe('allow-scripts allow-forms');
+
+  await page.waitForFunction(() => (window as any).PM?.Kernel?.effects?.has('sandbox-perms.proof'), undefined, { timeout: 15_000 });
+  const proof = await page.evaluate(() => JSON.parse((window as any).PM.Kernel.effects.get('sandbox-perms.proof').label));
+  expect(proof).toEqual({ dataText: 'powermove', blobText: 'blob-ok', fontBlocked: false, imagesBlocked: 3 });
+  // Three blocked loads later the extension is still on and its contributions stay.
+  await page.waitForTimeout(1_000);
+  expect(await record()).toEqual({ enabled: true, health: 'ok' });
+  expect(await page.evaluate(() => (window as any).PM.Kernel.effects.has('sandbox-perms.proof'))).toBe(true);
+  expect(session.diagnostics.console.some(line => line.text.includes('[ext:sandbox-perms] The sandbox blocked https://a.example.com/beacon.png'))).toBe(true);
+
+  const panelId = 'sandbox-perms.form';
+  await page.evaluate((id) => {
+    const PM = (window as any).PM;
+    (window as any).__submits = [];
+    PM.Kernel.api('e2e-forms').events.on('ext:sandbox-perms:submitted', (value: unknown) => (window as any).__submits.push(value));
+    PM.WS.mutate((workspace: any) => PM.Layout.addPanel(workspace, id, 'right'));
+  }, panelId);
+  const frame = page.locator(`[id="panel-${panelId}"] iframe.ext-panel-frame`);
+  await expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-forms');
+  await expect(frame).toHaveAttribute('data-state', 'ready', { timeout: 15_000 });
+  const submits = () => page.evaluate(() => (window as any).__submits);
+  const handled = { value: 'typed', prevented: true, formActionBlocked: false };
+  // requestSubmit() on mount reached the Svelte onsubmit handler.
+  await expect.poll(submits).toEqual([{ ...handled, submits: 1, via: 'script' }]);
+
+  // A real click on the submit button, then Enter in the field.
+  const loads = await frame.getAttribute('data-loads');
+  const box = (await frame.boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + 8 + 28 + 6 + 14);
+  await expect.poll(submits).toHaveLength(2);
+  await page.mouse.click(box.x + box.width / 2, box.y + 8 + 14);
+  await page.keyboard.press('Enter');
+  await expect.poll(submits).toHaveLength(3);
+  expect((await submits()).slice(1)).toEqual([{ ...handled, submits: 2, via: 'button' }, { ...handled, submits: 3, via: 'button' }]);
+  // No submission navigated the view (a navigation would reload it and submit again on mount).
+  await page.waitForTimeout(300);
+  expect(await frame.getAttribute('data-loads')).toBe(loads);
+  expect(await submits()).toHaveLength(3);
+  await expect(frame).toHaveAttribute('data-state', 'ready');
+  expect(await record()).toEqual({ enabled: true, health: 'ok' });
+  expect(session.diagnostics.pageErrors).toEqual([]);
+});
