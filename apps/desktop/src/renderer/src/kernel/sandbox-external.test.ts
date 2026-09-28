@@ -53,15 +53,30 @@ async function sandbox(permissions: ExtensionPermission[], links?: string[]) {
   let api!: PowermoveAPI;
   let client!: ReturnType<typeof createRpc>;
   const kernel = createKernel();
+  const views: Array<{ frame: HTMLIFrameElement; rpc: ReturnType<typeof createRpc> }> = [];
   const pending = createSandboxRuntime(kernel, record, deps, {}, { frame, onPostInit(port, init) {
     client = createRpc(port, {});
     api = createSandboxAPI(client, init);
     client.notify('activated');
+  }, onViewInit(viewFrame, _message, ports) {
+    const rpc = createRpc(ports[0]!, {});
+    close.push(() => rpc.close());
+    views.push({ frame: viewFrame, rpc });
   } });
   frame.dispatchEvent(new Event('load'));
   const runtime = await pending;
   close.push(() => { runtime.dispose(); client.close(); });
-  return { api, client, record, deps, confirm, openExternal, kernel };
+  /* A docked panel's view on its own port. */
+  const openView = async () => {
+    await client.call('register', 'panels', 'link-ext.panel', { id: 'link-ext.panel', title: 'Panel' });
+    const body = document.createElement('div');
+    document.body.append(body);
+    kernel.panels.get('link-ext.panel')!.build!(body, { spec: {} } as never);
+    await vi.waitFor(() => expect(views).toHaveLength(1));
+    views[0]!.frame.tabIndex = 0;
+    return views[0]!;
+  };
+  return { api, client, record, deps, confirm, openExternal, kernel, openView };
 }
 
 /** The app document's transient user activation, which only the browser sets. */
@@ -112,6 +127,19 @@ describe('ui.openExternal', () => {
     await slow;
     expect(confirm).toHaveBeenCalledTimes(4);
     vi.mocked(performance.now).mockRestore();
+  });
+
+  it('asks for a listed origin from a command a view’s forwarded key ran, since the view can send any key', async () => {
+    const { api, kernel, confirm, openExternal, openView } = await sandbox(['network'], ['https://replicate.com']);
+    api.commands.register({ id: 'link-ext.docs', label: 'Docs', run: () => api.ui.openExternal('https://replicate.com/?from=key') });
+    api.keybindings.bind({ key: 'h', command: 'link-ext.docs' });
+    await vi.waitFor(() => expect(kernel.bindingsFor('h')).toHaveLength(1));
+    const view = await openView();
+    view.frame.focus();
+    activation(true);
+    view.rpc.notify('key', { key: 'h', code: 'KeyH', metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, repeat: false, field: false });
+    await vi.waitFor(() => expect(openExternal).toHaveBeenCalledWith('https://replicate.com/?from=key'));
+    expect(confirm).toHaveBeenCalledTimes(1);
   });
 
   it('asks first, on the host, for an unlisted URL and for every URL without network', async () => {

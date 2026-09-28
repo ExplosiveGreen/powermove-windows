@@ -113,9 +113,10 @@ sandbox.
   URLs and bundled `data:` fonts load, since neither leaves the machine.
 - `clipboard` allows `ui.copy(text)`, which writes plain text (up to 500,000
   characters, at most once a second) from one of the extension's panels while
-  that panel has focus and within 5 seconds of a click or key press (a modifier
-  key alone does not count, and neither does focus coming back to the window,
-  as after Command-Tab). The runtime never copies. No permission lets an
+  that panel has focus and within 5 seconds of a click or key press in it (a
+  modifier key alone does not count, and neither does focus coming back to the
+  window, as after Command-Tab, a press on the app around the panel, or input
+  from Powermove's agent). The runtime never copies. No permission lets an
   extension read the clipboard. `document.execCommand('copy')` in a panel is
   no way around it: Chromium lets it write only right after a click or key
   press in that panel, the same kind of gate.
@@ -143,9 +144,10 @@ while Powermove's window is in the background.
 - An origin listed in the manifest's `links` opens without asking only when the
   extension also declares `network` and the call answers something the person
   just did: from one of the extension's panels while it has focus, within 5
-  seconds of a click or key press, or from a command, status item, palette,
-  menu or toast item the person started, within 5 seconds of starting it (not
-  from the extension's own `commands.run`, a timer or an event). At most 3
+  seconds of a click or key press in it, or from a command, status item,
+  palette, menu or toast item the person started, within 5 seconds of starting
+  it (not from the extension's own `commands.run`, a keybinding pressed in its
+  own panel, a timer, an event, or input from Powermove's agent). At most 3
   links a minute open this way. Origins match exactly: listing
   `https://example.com` covers neither `https://www.example.com` nor another port.
 - Every other call, and every call when the extension lacks `network`, opens
