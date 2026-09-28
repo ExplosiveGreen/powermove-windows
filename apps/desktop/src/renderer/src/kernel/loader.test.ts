@@ -85,6 +85,7 @@ function fakeDeps(): { deps: Omit<HostDeps, 'reportRuntimeError'>; toasts: strin
         controls: {} as HostDeps['ui']['controls'],
         toast: (text) => void toasts.push(text),
         confirm: async () => true,
+        openExternal: async () => true,
         menu: () => {},
         modal: () => ({ close: () => {}, body: document.createElement('div') }),
         icon: () => ''

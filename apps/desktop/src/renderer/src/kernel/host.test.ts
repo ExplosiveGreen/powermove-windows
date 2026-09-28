@@ -58,6 +58,7 @@ function harness(kernel: Kernel = createKernel()) {
       controls: {} as HostDeps['ui']['controls'],
       toast: (text, opts) => { toasts.push(text); toastCalls.push({ text, opts }); },
       confirm: async () => true,
+      openExternal: async () => true,
       menu: vi.fn(),
       modal: () => ({ close: () => {}, body: document.createElement('div') }),
       icon: (name) => `<svg data-icon="${name}"></svg>`

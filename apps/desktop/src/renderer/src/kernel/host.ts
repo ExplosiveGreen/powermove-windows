@@ -110,6 +110,7 @@ export interface HostDeps {
     controls: UIAPI['controls'];
     toast: UIAPI['toast'];
     confirm: UIAPI['confirm'];
+    openExternal: UIAPI['openExternal'];
     menu: UIAPI['menu'];
     modal: UIAPI['modal'];
     icon: UIAPI['icon'];

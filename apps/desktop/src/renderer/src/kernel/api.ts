@@ -807,7 +807,7 @@ export interface ControlsAPI {
  * UI exposes kernel controls, overlays, menus and pointer helpers. Most members only mutate transient interface state; parent picking can apply an edit, shader opening mutates workspace state, and gesture coordinates the backing edit/history transaction.
  */
 export interface UIAPI {
-  /** Only toast, confirm and icon are sandbox-safe; other UI members require full access. */
+  /** Only toast, confirm, openExternal and icon are sandbox-safe; other UI members require full access. */
   /** Requires the full-access permission for Store extensions. */
   readonly controls: ControlsAPI;
   toast(
@@ -835,6 +835,14 @@ export interface UIAPI {
     }
   ): void;
   confirm(title: string, body?: string): Promise<boolean>;
+  /**
+   * Open an https URL (at most 2 KB, no credentials) in the person's browser.
+   * Resolves false when they decline. Sandboxed, one call may be pending and
+   * at most one runs every 2 s; origins in the manifest's `links` open without
+   * asking when the extension declares `network`, and any other URL is shown
+   * in full for the person to confirm first.
+   */
+  openExternal(url: string): Promise<boolean>;
   /** Requires the full-access permission for Store extensions. */
   menu(anchor: HTMLElement | { x: number; y: number }, items: MenuContribution[]): void;
   /** Requires the full-access permission for Store extensions. */

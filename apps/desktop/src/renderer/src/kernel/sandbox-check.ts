@@ -96,7 +96,7 @@ export function quietDeps(deps: Omit<HostDeps, 'reportRuntimeError'>, onError: (
     ...deps,
     project,
     transport: deps.transport ? { ...deps.transport, setTime: noop, play: noop, pause: noop, toggle: noop, step: noop, invalidate: noop } : undefined,
-    ui: { ...deps.ui, toast: noop, confirm: async () => false, menu: noop },
+    ui: { ...deps.ui, toast: noop, confirm: async () => false, openExternal: async () => false, menu: noop },
     assets: {
       pick: async () => [],
       import: async () => { throw new Error('Importing is off during a sandbox check'); },

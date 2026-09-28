@@ -12,6 +12,7 @@ import { plain, projectSnapshots, sandboxStats } from './project-snapshots';
 import { sandboxBundleUrl, sandboxDocumentUrl, sandboxOrigin } from '../../../shared/sandbox-origin';
 import { watchSandbox } from './sandbox-watchdog';
 import { menuEntriesSchema, paletteEntriesSchema, parseHostEvent, parseInvoke, parseRegistration } from './sandbox-schemas';
+import { sandboxOpenExternal } from './sandbox-links';
 
 /** Kernel events that can change a document's SandboxState. */
 const STATE_EVENTS = ['project:changed', 'selection', 'time', 'transport'] as const;
@@ -19,7 +20,7 @@ export interface SandboxRuntime { handle: ExtensionHandle; dispose(): void }
 const SAFE_INVOKE: Record<string, Set<string>> = {
   commands: new Set(['run']), project: new Set(['apply', 'select', 'setTime', 'play', 'pause', 'undo', 'redo', 'snapshot']),
   transport: new Set(['step']), assets: new Set(['pick', 'import', 'get', 'readText']),
-  storage: new Set(['get', 'set', 'delete']), ui: new Set(['toast', 'confirm', 'icon']),
+  storage: new Set(['get', 'set', 'delete']), ui: new Set(['toast', 'confirm', 'icon', 'openExternal']),
   panels: new Set(['open', 'close', 'refresh']), keybindings: new Set(['unbind']),
   theme: new Set(['activate']), palette: new Set(['open']),
   media: new Set(['getImportDefaults']), events: new Set(['emit']),
@@ -164,6 +165,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   const persistedStorage = (deps.pm as { store?: { get?: (key: string, fallback: unknown) => unknown } }).store?.get?.(`ext.${record.id}`, {});
   const storageValues = new Map<string, unknown>(persistedStorage && typeof persistedStorage === 'object' && !Array.isArray(persistedStorage)
     ? Object.entries(persistedStorage) : []);
+  const openExternal = sandboxOpenExternal({ manifest: () => manifest, ui: host.api.ui });
   const invoke = (namespace: string, method: string, args: unknown): unknown => {
     if (!SAFE_INVOKE[namespace]?.has(method)) throw new Error(`Sandbox method unavailable: ${namespace}.${method}`);
     const parsed = parseInvoke(namespace, method, args);
@@ -182,6 +184,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
       return host.api.events.emit(`ext:${record.id}:${String(parsed[0])}` as Parameters<typeof host.api.events.emit>[0], parsed[1] as never);
     }
     if (namespace === 'keybindings') { reg.unbind(record.id, String(parsed[0]), false); return; }
+    if (namespace === 'ui' && method === 'openExternal') return openExternal(parsed[0]);
     if (namespace === 'panels' && !ownId(record.id, String(parsed[0]))) denied('panels may act only on your own ids');
     if (namespace === 'theme' && method === 'activate' && !ownId(record.id, String(parsed[0]))) denied('theme.activate accepts only your themes');
     if (namespace === 'assets' && method !== 'get' && !permissions.includes('assets')) {
