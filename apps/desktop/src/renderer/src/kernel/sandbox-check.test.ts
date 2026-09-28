@@ -62,6 +62,27 @@ it('reports trusted-only membership probes during the compatibility check', asyn
   expect(report.ok).toBe(false);
 });
 
+it('reports project reads without project:read, naming the permission, and allows them with it', async () => {
+  const reads = async (api: PowermoveAPI) => {
+    try { await (api.project.get() as unknown as Promise<unknown>); } catch { /* fixture recovers */ }
+    try { api.events.on('project:changed', () => {}); } catch { /* fixture recovers */ }
+    void api.project.time();
+    api.events.on('time', () => {});
+  };
+  const denied = await harness(reads);
+  expect(denied.activation).toBe('ok');
+  expect(denied.permissionErrors).toEqual([
+    { namespace: 'project', member: 'get', count: 1, needs: 'project:read' },
+    { namespace: 'events', member: "on('project:changed')", count: 1, needs: 'project:read' }
+  ]);
+  expect(denied.ok).toBe(false);
+  let read: unknown;
+  const allowed = await harness(async api => { read = await (api.project.get() as unknown as Promise<unknown>); }, ['project:read' as ExtensionPermission]);
+  expect(allowed.permissionErrors).toEqual([]);
+  expect(allowed.ok).toBe(true);
+  expect(read).toEqual({ id: 'test' });
+});
+
 it('reports a panel that throws while mounting', async () => {
   const report = await harness(api => api.panels.register({ id: 'check-fixture.broken', title: 'Broken', build() { throw new Error('panel boom'); } }));
   expect(report.activation).toBe('ok');

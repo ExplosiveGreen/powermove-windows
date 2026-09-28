@@ -53,6 +53,7 @@ const NETWORK_DIRECTIVES = new Set(['connect-src', 'img-src', 'media-src', 'font
 
 function permissionLine(hit: SandboxCheckReport['permissionErrors'][number]): string {
   const name = hit.namespace === 'powermove' ? `${hit.member} from 'powermove'` : `api.${hit.namespace}${hit.member ? `.${hit.member}` : ''}`;
+  if (hit.needs === 'project:read') return `Reads the project with ${name} without permission. Declare \`permissions: ["project:read"]\`.`;
   const alternative = ALTERNATIVE[hit.namespace];
   return alternative
     ? `Calls ${name}, which needs full access. Declare ${FULL_ACCESS} or ${alternative}.`
@@ -75,7 +76,7 @@ export function sandboxCheckLines(report: SandboxCheckReport): string[] {
   if (report.skipped || report.ok) return [];
   const lines: string[] = [];
   const permission = report.permissionErrors.length > 0;
-  const covered = (message: string): boolean => permission && /requires full access/.test(message);
+  const covered = (message: string): boolean => permission && /requires (?:full access|project:read permission)/.test(message);
   for (const hit of report.permissionErrors) lines.push(permissionLine(hit));
   if (report.activation !== 'ok' && !covered(report.activation.error)) lines.push(`Failed to start in the sandbox: ${report.activation.error}`);
   for (const hit of report.cspViolations) lines.push(cspLine(hit));
