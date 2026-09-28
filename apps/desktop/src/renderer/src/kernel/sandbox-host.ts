@@ -403,6 +403,9 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   themeWatch?.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'data-theme'] });
   let disposed = false;
   let watchdog: { dispose(): void } | null = null;
+  /* Removing a spinning sandbox's iframe does not stop its process: main
+     kills it, while the frames still exist to find it by. */
+  const terminate = async (): Promise<void> => { try { await bridge()?.sandboxTerminate?.(record.id); } catch { /* disposing still frees the kernel side */ } };
   const dispose = (): void => {
     if (disposed) return; disposed = true;
     watchdog?.dispose();
@@ -432,10 +435,11 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   };
   for (const event of MIRROR_EVENTS) host.api.events.on(event as 'project:changed', push);
   host.api.events.on('theme:changed', () => { try { rpc.notify('theme', themeSnapshot(kernel)); } catch { /* disposed */ } });
+  let timedOut = false;
   try {
     host.setActivating(true);
     const loaded = new Promise<void>((resolve, reject) => { frame.addEventListener('load', () => resolve(), { once: true }); frame.addEventListener('error', () => reject(new Error('Sandbox document failed to load')), { once: true }); });
-    const timeout = setTimeout(() => { const error = new Error('Sandbox document or activation timed out'); rejected(error); frame.dispatchEvent(new Event('error')); }, 9_000);
+    const timeout = setTimeout(() => { timedOut = true; const error = new Error('Sandbox document or activation timed out'); rejected(error); frame.dispatchEvent(new Event('error')); }, 9_000);
     document.body.append(frame);
     try {
       await loaded;
@@ -445,13 +449,12 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
       await ready;
     } finally { clearTimeout(timeout); }
     host.setActivating(false);
-    /* A spinning or crashed runtime stops answering. Main kills its process
-       while the frames still exist to find it, then the kernel side goes. */
+    // A spinning or crashed runtime stops answering.
     watchdog = watchSandbox({ ping: () => rpc.call('ping'), onUnresponsive: () => void (async () => {
-      try { await bridge()?.sandboxTerminate?.(record.id); } catch { /* disposing still frees the kernel side */ }
+      await terminate();
       dispose();
       deps.reportRuntimeError(record.id, Object.assign(new Error('stopped responding'), { code: 'sandbox_fatal' }));
     })() });
     return { handle: host, dispose };
-  } catch (error) { host.setActivating(false); dispose(); throw error; }
+  } catch (error) { host.setActivating(false); if (timedOut) await terminate(); dispose(); throw error; }
 }
