@@ -105,6 +105,10 @@ sandboxed extension and view in the window:
   keys matching `/blob|source/i` at any depth, `library` and `notes` drop keys
   matching `/token|secret|password|key$/i` at any depth, each comp gets the same
   project rules, functions drop out. The limit is 8 Mi characters of JSON.
+  The redacted copies are kept by identity of the live objects and reused
+  until a `project:changed` of kind `library`, `assets`, `project` or
+  `replace` (or any unknown kind) or a replaced project; `values`,
+  `structure` and `history` changes pay only the native `JSON.stringify`.
 - The pushed `selection` is copied and stringified once per kernel
   `selection` or `project:changed` (or project object / revision change), and
   that copy is shared by every document; a `time`-only flush does no work
