@@ -1,3 +1,4 @@
+import { whenCheck } from '../kernel/registries';
 import type { OverlayPM } from './types';
 
 export type PaletteEntry = {
@@ -22,20 +23,23 @@ const isThenable = (value: unknown): value is PromiseLike<unknown> =>
 
 /**
  * The palette's rows for one query, in legacy order and capped at 60.
- * Asynchronous answers (sandboxed providers and command `when`s) are left
- * out of the returned list; as each settles, `onLate` gets the whole list
- * again with it in place. A caller keeps those only while it still shows
- * `query`.
+ * Asynchronous answers are placed at once with what is known now: a
+ * sandboxed command by its last `when` answer, a provider's rows not at
+ * all. When one settles to something different, `onLate` gets the whole
+ * list again with it in place. A caller keeps those only while it still
+ * shows `query`.
  */
 export function paletteEntries(PM: OverlayPM, query: string, onLate?: (entries: PaletteEntry[]) => void): PaletteEntry[] {
   const hasQuery = query.toLowerCase().trim().length > 0;
   const matches = (value: unknown): boolean => scorePaletteMatch(value, query) != null;
-  /* Rows in order, a run of them per part; a part still answering is a Promise. */
-  const parts: Array<PaletteEntry[] | PromiseLike<PaletteEntry[]>> = [];
+  /* Rows in order, a run of them per part; a part still answering holds what is known now. */
+  const parts: PaletteEntry[][] = [];
+  const answers: Array<{ index: number; answer: PromiseLike<PaletteEntry[]> }> = [];
   let entries: PaletteEntry[] = [];
   parts.push(entries);
-  const later = (answer: PromiseLike<PaletteEntry[]>): void => {
-    parts.push(answer);
+  const later = (now: PaletteEntry[], answer: PromiseLike<PaletteEntry[]>): void => {
+    answers.push({ index: parts.length, answer });
+    parts.push(now);
     entries = [];
     parts.push(entries);
   };
@@ -48,10 +52,15 @@ export function paletteEntries(PM: OverlayPM, query: string, onLate?: (entries: 
       kb: command.kb,
       run: () => PM.cmd(command.id)
     };
-    /* `when` is the kernel's "runnable by id, but not offered here" flag. */
-    const shown = typeof command.when === 'function' ? command.when() : true;
-    if (isThenable(shown)) later(Promise.resolve(shown).then(value => value ? [entry] : [], () => []));
-    else if (shown) entries.push(entry);
+    /* `when` is the kernel's "runnable by id, but not offered here" flag.
+       Its registered form answers at once with the last reply; the palette
+       asks afresh. */
+    const check = whenCheck(PM.Kernel?.commands?.get?.(command.id));
+    const shown = check ? check.ask() : typeof command.when === 'function' ? command.when() : true;
+    if (isThenable(shown)) {
+      const now = check?.last() ? [entry] : [];
+      later(now, Promise.resolve(shown).then(value => value ? [entry] : [], () => now));
+    } else if (shown) entries.push(entry);
   }
   for (const layer of PM.proj?.layers ?? []) {
     if (hasQuery && matches(layer.name)) {
@@ -103,20 +112,20 @@ export function paletteEntries(PM: OverlayPM, query: string, onLate?: (entries: 
       continue;
     }
     if (isThenable(produced)) {
-      later(Promise.resolve(produced).then(providerEntries, error => {
+      later([], Promise.resolve(produced).then(providerEntries, error => {
         console.error('[palette] provider failed', error);
         return [];
       }));
     } else entries.push(...providerEntries(produced));
   }
-  const assemble = (): PaletteEntry[] => parts.flatMap(part => Array.isArray(part) ? part : []).slice(0, 60);
-  parts.forEach((part, index) => {
-    if (Array.isArray(part)) return;
-    void Promise.resolve(part).then(settled => {
+  const assemble = (): PaletteEntry[] => parts.flat().slice(0, 60);
+  for (const { index, answer } of answers) {
+    void Promise.resolve(answer).then(settled => {
+      const before = parts[index]!;
       parts[index] = settled;
-      onLate?.(assemble());
+      if (settled.length !== before.length || settled.some((entry, at) => entry !== before[at])) onLate?.(assemble());
     });
-  });
+  }
   return assemble();
 }
 

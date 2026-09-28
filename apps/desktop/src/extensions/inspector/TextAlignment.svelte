@@ -1,11 +1,10 @@
 <script lang="ts">
   import { inspectorContext } from './context';
-  import { inspectorMixed } from './multi-edit';
 
   let { value = 'center', layer }: { value?: string; layer: any } = $props();
-  const { api, doc, sel, transport, edit: inspectorEdit } = inspectorContext();
+  const { api, doc, sel, transport, edit: inspectorEdit, mixed: isMixed } = inspectorContext();
   const binding = $derived(api.ui.controls.binding.contentBinding(layer.id, 'align', { label: 'Text alignment', origin: 'inspector' }));
-  const mixed = $derived((sel.layers, doc.tick.values, doc.proj, transport.time, inspectorMixed(api, binding, value)));
+  const mixed = $derived((sel.layers, doc.tick.values, doc.proj, transport.time, isMixed(binding, value)));
   const options = ['left', 'center', 'right'] as const;
 
   function align(next: string) {

@@ -53,7 +53,12 @@ export interface PaletteProviderEntry {
 export interface MenuEntry {
   ownerId: string;
   items: (ctx: Record<string, unknown>) => MenuContribution[] | Promise<MenuContribution[]>;
+  /** Only ever answers asynchronously (a sandboxed contributor), so `collectMenu` never asks it. */
+  async?: boolean;
 }
+
+/** Marks a contributor function whose answer always crosses a port; `menus.contribute` registers it `async`. */
+export const ASYNC_CONTRIBUTOR: unique symbol = Symbol('powermove.asyncContributor');
 
 /** How long an open menu waits for asynchronous contributions (sandboxed
     extensions answer over a port). Enforced here, so a slow or hostile
@@ -64,6 +69,50 @@ const isThenable = (value: unknown): value is PromiseLike<unknown> =>
   !!value && typeof (value as { then?: unknown }).then === 'function';
 const flatMenu = (answers: unknown[]): MenuContribution[] =>
   answers.flatMap(answer => Array.isArray(answer) ? answer as MenuContribution[] : []);
+
+/* ── command `when` ──────────────────────────────────────── */
+
+/** A command's `when` as the kernel keeps it: `last()` is its newest answer (`true` before any), `ask()` asks it now. */
+export interface WhenCheck { last(): boolean; ask(): boolean | Promise<boolean> }
+const WHEN_CHECK: unique symbol = Symbol('powermove.whenCheck');
+
+/**
+ * The registered `when` is synchronous for every caller (`commands.list()`
+ * filters, menus): one that answers with a Promise (a sandboxed extension's)
+ * reads as its last answer and asks again in the background, one ask at a
+ * time. The palette asks afresh through `whenCheck`.
+ */
+export function settledWhen(ask: () => boolean | Promise<boolean>): { when: () => boolean; check: WhenCheck } {
+  let last = true, asked = 0, answered = 0, waiting = false;
+  const check: WhenCheck = {
+    last: () => last,
+    ask() {
+      const turn = ++asked;
+      // An older ask answering after a newer one does not overwrite it.
+      const land = (value: unknown): boolean => { if (turn > answered) { answered = turn; last = Boolean(value); } return Boolean(value); };
+      const answer = ask();
+      return isThenable(answer) ? Promise.resolve(answer).then(land) : land(answer);
+    }
+  };
+  const when = (): boolean => {
+    if (waiting) return last;
+    const answer = check.ask();
+    if (typeof answer === 'boolean') return answer;
+    waiting = true;
+    void answer.catch(() => {}).finally(() => { waiting = false; });
+    return last;
+  };
+  return { when, check };
+}
+
+/** Attach `check` to a registered definition without it showing up in copies (`{ ...def }`, the sandbox catalog). */
+export function withWhenCheck<T extends object>(definition: T, check: WhenCheck): T {
+  return Object.defineProperty(definition, WHEN_CHECK, { value: check });
+}
+
+export function whenCheck(definition: unknown): WhenCheck | undefined {
+  return definition && typeof definition === 'object' ? (definition as { [WHEN_CHECK]?: WhenCheck })[WHEN_CHECK] : undefined;
+}
 
 /* ── events ──────────────────────────────────────────────── */
 
@@ -161,8 +210,8 @@ export interface Kernel {
   registerPaletteProvider(ownerId: string, provider: PaletteProvider): Disposable;
   paletteProviders(): PaletteProviderEntry[];
 
-  contributeMenu(ownerId: string, location: MenuLocation, items: MenuEntry['items']): Disposable;
-  /** The synchronous contributions for one open; asynchronous ones are left out. */
+  contributeMenu(ownerId: string, location: MenuLocation, items: MenuEntry['items'], options?: { async?: boolean }): Disposable;
+  /** The synchronous contributions for one open; asynchronous ones are left out, and `async` entries are not asked at all. */
   collectMenu(location: MenuLocation, ctx?: Record<string, unknown>): MenuContribution[];
   /**
    * Every contribution for one open, in registration order. Returns the list
@@ -203,9 +252,10 @@ export function createKernel(): Kernel {
   const paletteProviders: PaletteProviderEntry[] = [];
   const menus = new Map<MenuLocation, MenuEntry[]>();
   /* Each contribution asked once for this open; a throw leaves that one out. */
-  const menuAnswers = (location: MenuLocation, ctx: Record<string, unknown>): Array<{ ownerId: string; answer: unknown }> => {
+  const menuAnswers = (location: MenuLocation, ctx: Record<string, unknown>, syncOnly = false): Array<{ ownerId: string; answer: unknown }> => {
     const answers: Array<{ ownerId: string; answer: unknown }> = [];
     for (const entry of menus.get(location) ?? []) {
+      if (syncOnly && entry.async) continue;
       try {
         answers.push({ ownerId: entry.ownerId, answer: entry.items(ctx) });
       } catch (error) {
@@ -312,14 +362,14 @@ export function createKernel(): Kernel {
       return [...paletteProviders];
     },
 
-    contributeMenu(ownerId, location, items) {
+    contributeMenu(ownerId, location, items, options = {}) {
       if (typeof items !== 'function') throw new Error('menus: items must be a function');
       let list = menus.get(location);
       if (!list) {
         list = [];
         menus.set(location, list);
       }
-      const entry: MenuEntry = { ownerId, items };
+      const entry: MenuEntry = { ownerId, items, ...(options.async ? { async: true } : {}) };
       list.push(entry);
       return {
         dispose: () => {
@@ -331,8 +381,10 @@ export function createKernel(): Kernel {
       };
     },
 
+    /* Asking a sandboxed contributor here would only discard its reply, and
+       every ask replaces the handles an open menu's items still run through. */
     collectMenu(location, ctx = {}) {
-      return flatMenu(menuAnswers(location, ctx).map(({ answer }) => {
+      return flatMenu(menuAnswers(location, ctx, true).map(({ answer }) => {
         if (isThenable(answer)) Promise.resolve(answer).catch(() => {}); // left out here, and so are its failures
         return answer;
       }));

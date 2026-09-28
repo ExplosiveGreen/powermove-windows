@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { flushSync, mount, tick, unmount } from 'svelte';
+import { createSubscriber } from 'svelte/reactivity';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ControlsAPI, InspectorService, PowermoveAPI, ShaderHooks } from 'powermove';
 import type { InspectorRuntimeService } from './context';
@@ -424,6 +425,31 @@ describe('InspectorPanel', () => {
     api.events.emit('time', time);
     flushSync();
     expect(labelledSpinbutton('Rotation').value).toBe('2');
+  });
+
+  it('checks a multi-selection for mixed values on the readout clock, never on a playback frame', () => {
+    const { api, runtime } = setup([layer('L0', 50), layer('L1', 80)]);
+    let time = 0, now = 0;
+    // The host's transport.time is reactive: a reader in $derived re-runs on every `time` event.
+    const frames = createSubscriber(update => { const off = api.events.on('time', update); return () => off.dispose(); });
+    api.transport.time = () => { frames(); return time; };
+    api.transport.playing = () => true;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    api.events.emit('transport', { playing: true });
+    flushSync();
+    const evaluate = vi.mocked(runtime.evP);
+    evaluate.mockClear();
+    for (let frame = 1; frame <= 120; frame++) {
+      time = frame / 120; now = frame * 1000 / 120;
+      api.events.emit('time', time);
+      flushSync();
+    }
+    // Frames alone re-run nothing that evaluates the selection...
+    expect(evaluate).not.toHaveBeenCalled();
+    // ...the controls' readout clock (15 Hz while playing) does, once per field.
+    transport.time = 1;
+    flushSync();
+    expect(evaluate).toHaveBeenCalled();
   });
 
   it('updates animated values on time events without rebuilding parenting choices', () => {

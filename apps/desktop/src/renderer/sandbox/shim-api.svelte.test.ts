@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { flushSync } from 'svelte';
-import { afterEach, expect, it } from 'vitest';
-import { createRpc } from '../../shared/sandbox-rpc';
+import { afterEach, expect, it, vi } from 'vitest';
+import { createRpc, type Rpc } from '../../shared/sandbox-rpc';
 import { createSandboxAPI, sandboxControl, type SandboxInit, type SandboxSnapshot } from './shim-api';
 
 const close: Array<() => void> = [];
@@ -104,6 +104,34 @@ it('pulls latest() once per generation while it has readers, re-running them whe
   expect(count('project-snapshot')).toBe(2); // the last reader took the pulls with it
   await api.project.get();
   expect(api.project.latest()).toEqual({ generation: 3 }); // latest() is whatever this document pulled last
+});
+
+it('pulls latest() at most once a frame while a drag changes the project on every move, ending on the last change', async () => {
+  vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'setTimeout'] });
+  try {
+    let generation = 1;
+    const pulls: number[] = [];
+    const rpc = { call: async (method: string) => { if (method !== 'project-snapshot') return undefined; pulls.push(generation); return { generation, json: JSON.stringify({ generation }) }; },
+      notify() {}, handle: () => 0, release() {}, invokeHandle: async () => undefined, close() {} } as unknown as Rpc;
+    const init = { id: 'shim-ext', apiVersion: 3, manifest: { id: 'shim-ext', name: 'Shim', version: '1.0.0', apiVersion: 3 }, vars: {},
+      theme: { scheme: 'dark', tokens: {} }, bundleUrl: '', state: { time: 0, playing: false, revision: 1, generation: 1, selection: null } } as unknown as SandboxInit;
+    const api = createSandboxAPI(rpc, init) as any;
+    const control = sandboxControl(api);
+    const latest = watch(() => api.project.latest()?.generation);
+    await vi.advanceTimersByTimeAsync(16);
+    expect(pulls).toEqual([1]);
+    // Five frames of a drag, four pointer moves (four new generations) in each.
+    for (let frame = 0; frame < 5; frame++) {
+      for (let move = 0; move < 4; move++) control.tick({ generation: ++generation }, [['project:changed', { kind: 'values' }]]);
+      await vi.advanceTimersByTimeAsync(16);
+    }
+    await vi.advanceTimersByTimeAsync(16);
+    flushSync();
+    expect(pulls.length).toBeLessThanOrEqual(7); // the first reader's, then one a frame of the six
+    expect(pulls.at(-1)).toBe(21);
+    expect(latest.seen.at(-1)).toBe(21);
+    latest.stop();
+  } finally { vi.useRealTimers(); }
 });
 
 it('starts latest() readers from a copy get() already pulled', async () => {

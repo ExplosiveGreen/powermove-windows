@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { createRpc } from '../../../shared/sandbox-rpc';
 import { createSandboxAPI, sandboxControl, type SandboxEvent } from '../../sandbox/shim-api';
 import { createSandboxRuntime, freshWhen, WHEN_DEADLINE_MS } from './sandbox-host';
-import { createKernel, MENU_DEADLINE_MS } from './registries';
+import { createKernel, MENU_DEADLINE_MS, whenCheck } from './registries';
 import type { HostDeps } from './host';
 import type { ExtensionRecord, MenuContribution, ProjectAPI } from './api';
 
@@ -106,18 +106,104 @@ it('answers a sandboxed palette provider for the query asked, the first one incl
   expect(ran).toEqual(['beta', 'alpha']);
 });
 
+/* A controllable answer per key: `answer(key)` settles the one asked for it. */
+function gates() {
+  const open = new Map<string, () => void>();
+  return {
+    wait: (key: string) => new Promise<void>(resolve => open.set(key, resolve)),
+    answer: async (key: string) => { open.get(key)!(); await new Promise(resolve => setTimeout(resolve, 5)); }
+  };
+}
+
+it('keeps the handles of the newest palette query however the replies land', async () => {
+  const ran: string[] = [];
+  const gate = gates();
+  const kernel = await sandboxed(api => {
+    api.palette.registerProvider(async (query: string) => {
+      await gate.wait(query);
+      return [{ id: `menu-ext.${query}`, label: query, category: 'Find', run: () => { ran.push(query); } }];
+    });
+  });
+  const provider = kernel.paletteProviders()[0]!.provider;
+  // Typed a, ab, abc; abc answers first, then the slower ab and a.
+  const ask = (query: string) => provider(query) as Promise<Array<{ label: string; run(): unknown }>>;
+  const a = ask('a'), ab = ask('ab'), abc = ask('abc');
+  await new Promise(resolve => setTimeout(resolve, 5));
+  await gate.answer('abc');
+  await gate.answer('ab');
+  await gate.answer('a');
+  const shown = await abc;
+  await shown[0]!.run(); // the palette shows abc's rows
+  expect(ran).toEqual(['abc']);
+  expect(await a).toEqual([]); // two newer queries already answered: nothing to run
+  expect((await ab).map(entry => entry.label)).toEqual(['ab']);
+});
+
+it('keeps the handles of the newest menu open however the replies land', async () => {
+  const ran: string[] = [];
+  const gate = gates();
+  const kernel = await sandboxed(api => {
+    api.menus.contribute('layer:context', async (ctx: { layerId: string }) => {
+      await gate.wait(ctx.layerId);
+      return [{ label: `Tag ${ctx.layerId}`, run: () => { ran.push(ctx.layerId); } }];
+    });
+  });
+  const opens = ['A', 'B', 'C'].map(layerId => kernel.gatherMenu('layer:context', { layerId }, 1000) as Promise<MenuContribution[]>);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  await gate.answer('C');
+  await gate.answer('A');
+  await gate.answer('B');
+  const [, onB, onC] = await Promise.all(opens);
+  await run(onC!, 'Tag C');
+  await run(onB!, 'Tag B');
+  expect(ran).toEqual(['C', 'B']);
+});
+
+it('never asks a sandboxed contributor for the synchronous collectMenu, so an open menu keeps its items', async () => {
+  const ran: string[] = [];
+  let asked = 0;
+  const kernel = await sandboxed(api => {
+    api.menus.contribute('layer:context', (ctx: { layerId: string }) => { asked += 1; return [{ label: `Tag ${ctx.layerId}`, run: () => { ran.push(ctx.layerId); } }]; });
+  });
+  const open = await kernel.gatherMenu('layer:context', { layerId: 'A' });
+  kernel.contributeMenu('in-realm', 'layer:context', () => [{ label: 'Trusted' }]);
+  for (let index = 0; index < 3; index++) expect(kernel.collectMenu('layer:context', { layerId: 'B' }).map(label)).toEqual(['Trusted']);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  expect(asked).toBe(1);
+  await run(open, 'Tag A');
+  expect(ran).toEqual(['A']);
+});
+
 it('asks a sandboxed when() afresh on every check', async () => {
   const kernel = await sandboxed(api => {
     let enabled = true;
     api.commands.register({ id: 'menu-ext.go', label: 'Go', run: () => {}, when: () => enabled });
     api.commands.register({ id: 'menu-ext.toggle', label: 'Toggle', run: () => { enabled = !enabled; } });
   });
-  const when = kernel.commands.get('menu-ext.go')!.when!;
-  expect(await when()).toBe(true);
+  const check = whenCheck(kernel.commands.get('menu-ext.go'))!;
+  expect(await check.ask()).toBe(true);
   await kernel.commands.get('menu-ext.toggle')!.run();
-  expect(await when()).toBe(false);
+  expect(await check.ask()).toBe(false);
   await kernel.commands.get('menu-ext.toggle')!.run();
-  expect(await when()).toBe(true);
+  expect(await check.ask()).toBe(true);
+});
+
+it('keeps a sandboxed when() synchronous for in-realm readers, answering with the last reply', async () => {
+  let enabled = false;
+  const kernel = await sandboxed(api => {
+    api.commands.register({ id: 'menu-ext.go', label: 'Go', run: () => {}, when: async () => enabled });
+    api.commands.register({ id: 'menu-ext.toggle', label: 'Toggle', run: () => { enabled = !enabled; } });
+  });
+  const shown = () => kernel.commands.list().filter(command => !command.when || command.when()).map(command => command.id);
+  const go = kernel.commands.get('menu-ext.go')!;
+  expect(go.when!()).toBe(true); // nothing answered yet
+  await new Promise(resolve => setTimeout(resolve, 5));
+  expect(shown()).toEqual(['menu-ext.toggle']);
+  expect(whenCheck(go)!.last()).toBe(false);
+  await kernel.commands.get('menu-ext.toggle')!.run();
+  expect(shown()).toEqual(['menu-ext.toggle']); // the last answer, while the next one is asked
+  await new Promise(resolve => setTimeout(resolve, 5));
+  expect(shown()).toEqual(['menu-ext.go', 'menu-ext.toggle']);
 });
 
 it('falls back to the last when() answer only when the fresh one is late', async () => {

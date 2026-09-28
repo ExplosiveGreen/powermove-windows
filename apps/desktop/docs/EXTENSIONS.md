@@ -323,7 +323,9 @@ is closed. Do not wire `events.on` into `$state` for these values.
 - In the sandbox it is the newest snapshot this document has pulled: `undefined`
   until the first pull, then the deep-frozen copy `await project.get()` returns. A
   reactive read starts a pull when there is none for the current project and
-  re-runs when it lands, and again after every change. Handle `undefined`.
+  re-runs when it lands, and again after changes: at most once a frame, so a
+  drag that edits on every pointer move lands as one copy a frame, ending with
+  its last change. Handle `undefined`.
 
 `project.get()` is unchanged: synchronous in the editor, a Promise in the sandbox.
 Use it in `activate`, commands and status providers, where no component reads
@@ -410,7 +412,7 @@ in-realm API after the person installing the extension accepts the trust dialog.
 
 - **panels** — `register({ id, title, component?, build?, size, min, flush, noscroll, headless })`, `open(id, dock?)` or `open(id, { dock, index })`, `close`, `isOpen`, `refresh`, `list`.
   `component` is a Svelte 5 component receiving `{ panelId, spec, api }` (see [Writing UI with Svelte 5](#writing-ui-with-svelte-5)). `build(body)` is the imperative alternative.
-- **commands** — `register({ id, label, category, run, when? })`, `run(id, …args)`, `has`, `list`. Commands appear in the palette (⌘K).
+- **commands** — `register({ id, label, category, run, when? })`, `run(id, …args)`, `has`, `list`. Commands appear in the palette (⌘K) unless `when()` returns false. `when` may return a Promise (a Store extension's always does, over the port): the palette asks it on every open, and every other reader, `list()` included, gets a synchronous `when()` that returns its last answer (`true` before the first), so `!c.when || c.when()` filters.
 - **keybindings** — `bind({ key, command, args?, inFields?, looseModifiers?, repeat?, priority? })`. Chords: `cmd+shift+k`, `space`, `shift+f9`, `alt+up`. Lower priority runs first; return `false` from the command to pass through. Repeated browser keydowns are ignored by default; set `repeat: true` only for continuous, repeat-safe actions such as frame stepping or nudging. Suppressed repeats do not prevent the browser's default behavior.
 - **effects** — `register({ id, label, group, params, frag, passes?, keepOrig?, backdrop? })`.
   Write only the body of `main()`. Available: `v_st` (uv), `u_tex`, `u_res`, `u_texel`, `u_time`, `u_pass`, helpers `src() luma() noise() fbm() hash() rgb2hsv() hsv2rgb()`. Each param `k` is a uniform `u_<k>` (float, or vec3 for `type:'color'`). Output `o` (vec4).
@@ -422,7 +424,7 @@ in-realm API after the person installing the extension accepts the trust dialog.
 - **assets** — `pick({ accept, multiple? })`, `import(file, { layerDefinition? })`, `importUrl(url)` (see [Opening links and importing from a URL](#opening-links-and-importing-from-a-url)), `get(id)`, and `readText(id)`. Imported files live in Powermove's durable media store and are embedded when the `.pmv` is saved. Use an asset id in structured layer data instead of storing binary or large text in the project JSON.
 - **theme** — `register({ id, name, scheme, tokens, darkTokens?, css?, rootAttributes? })`, `activate(id)`, `active()`, `scheme()` (both reactive in components). Tokens are CSS custom properties (see "Theme tokens"). `css` may restyle anything.
 - **palette** — `registerProvider(query => entries[])`. The provider may return a Promise; its entries appear when it settles, if the palette still shows that query.
-- **menus** — `contribute(location, ctx => items[])`, `collect(location, ctx?)` (in a Store sandbox, only your own contributions); locations: `panel:context`, `layer:context`, `timeline:context`, `viewer:context`. The function runs on every open with that open's `ctx`; it may return a Promise, which the menu waits for at most 100 ms. `gather(location, ctx)` resolves every contribution for one open, for `ui.menu`. Titlebar extension shortcuts are retired; registered panels appear in the panel Library automatically.
+- **menus** — `contribute(location, ctx => items[])`, `collect(location, ctx?)` (in a Store sandbox, only your own contributions); locations: `panel:context`, `layer:context`, `timeline:context`, `viewer:context`. The function runs on every open with that open's `ctx`; it may return a Promise, which the menu waits for at most 100 ms. `gather(location, ctx)` resolves every contribution for one open, for `ui.menu`; `collect` returns only the ones that answer synchronously and never asks a Store extension's. Titlebar extension shortcuts are retired; registered panels appear in the panel Library automatically.
 - **status** — `register({ id, text: () => string|null, side?, onClick? })` for the status bar.
 - **project** — `get()`, `latest()`, `revision()`, `apply(commands, meta?)`, `selection()`, `select()`, `time()`, `setTime()`, `play/pause/playing`, `undo/redo`, `snapshot(t?, maxWidth?)`. `latest()`, `revision()`, `selection()`, `time()` and `playing()` are reactive in components.
   `apply` takes the typed edit commands (`set_property`, `replace_keyframes`, `set_easing`, `set_expression`, `set_content`, `set_layer`, `set_composition`, `add_layer`, `delete_layers`, `reorder_layer`, `add_effect`, `remove_effect`, `set_effect`, `set_scene_parameter`, `add_marker`, `create_section`, `update_section`, `transform_layers`). Every apply is one undo step, validated, lock-aware.

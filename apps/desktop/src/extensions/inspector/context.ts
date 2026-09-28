@@ -163,7 +163,11 @@ export function provideInspectorContext(api: PowermoveAPI): InspectorContext {
     api: editingApi,
     ...state,
     edit,
-    mixed: (binding, value) => inspectorMixed(api, binding, value),
+    /* Controls ask from a $derived that already re-runs at the inspector's
+       own cadence (15 Hz while playing). Untracked, the transport read inside
+       it and inside a binding's command cannot tie every field to every
+       frame, each one evaluating the whole selection. */
+    mixed: (binding, value) => untrack(() => inspectorMixed(api, binding, value, state.transport.time)),
     inspector: () => api.services.get<InspectorRuntimeService>('inspector'),
     timeline: () => api.services.get<InspectorTimelineService>('timeline'),
     tools: () => api.services.get<ToolService>('tool'),

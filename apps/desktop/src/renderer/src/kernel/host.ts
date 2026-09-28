@@ -68,7 +68,7 @@ import type { ExtensionLayerDefinition } from './api';
 import type { Component } from 'svelte';
 import { createSubscriber } from 'svelte/reactivity';
 import { chordOfEvent } from './keychord';
-import { runKernelCommand, type Kernel } from './registries';
+import { ASYNC_CONTRIBUTOR, runKernelCommand, settledWhen, withWhenCheck, type Kernel } from './registries';
 import { mountComponent } from './runtime-globals';
 import { performanceMonitor } from '../runtime/performance-monitor';
 import { IMPORT_DEFAULTS_SERVICE, validatedImportDefaults } from './import-defaults';
@@ -369,16 +369,18 @@ export function createExtensionAPI(
       if (typeof def.run !== 'function') throw new Error(`[ext:${id}] command "${def.id}" requires run()`);
       const run = def.run;
       const when = def.when;
+      const settled = typeof when === 'function' ? settledWhen(guard(polled(() => when()), `command ${def.id} when`, false)) : null;
       const guarded: CommandDefinition = {
         ...def,
         run: guard((...args: unknown[]) => run(...args), `command ${def.id}`, undefined),
-        ...(typeof when === 'function' ? { when: guard(polled(() => when()), `command ${def.id} when`, false) } : {})
+        ...(settled ? { when: settled.when } : {})
       };
-      return collect(kernel.commands.register(id, guarded));
+      return collect(kernel.commands.register(id, settled ? withWhenCheck(guarded, settled.check) : guarded));
     },
     run: (commandId, ...args) => runKernelCommand(kernel, commandId, args),
     has: (commandId) => kernel.commands.has(commandId),
-    list: () => kernel.commands.list()
+    // Every registration path leaves `when` synchronous (settledWhen above; legacy commands are).
+    list: () => kernel.commands.list() as ReturnType<CommandsAPI['list']>
   };
 
   /* ── keybindings ───────────────────────────────────────── */
@@ -442,7 +444,8 @@ export function createExtensionAPI(
     contribute(location: MenuLocation, items: (ctx: Record<string, unknown>) => MenuContribution[] | Promise<MenuContribution[]>) {
       if (typeof items !== 'function') throw new Error(`[ext:${id}] menus.contribute requires a function`);
       const guarded = guard(polled((ctx: Record<string, unknown>) => items(ctx) ?? []), `menu ${location}`, [] as MenuContribution[]);
-      return collect(kernel.contributeMenu(id, location, guarded));
+      const async = (items as { [ASYNC_CONTRIBUTOR]?: boolean })[ASYNC_CONTRIBUTOR] === true;
+      return collect(kernel.contributeMenu(id, location, guarded, { async }));
     },
     collect: (location, ctx) => kernel.collectMenu(location, ctx),
     gather: async (location, ctx) => kernel.gatherMenu(location, ctx)
