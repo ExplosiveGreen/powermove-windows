@@ -12,9 +12,6 @@
  * happy-dom document with MessageChannel ports.
  */
 import * as svelte from 'svelte';
-// @ts-expect-error -- Svelte's internal client entry has no declaration
-import * as svelteInternalClient from 'svelte/internal/client';
-import * as svelteStore from 'svelte/store';
 import type { Component } from 'svelte';
 import { createRpc, serializeRpcError } from '../../shared/sandbox-rpc';
 import { createSandboxAPI, sandboxControl, sandboxReporter, type SandboxEvent, type SandboxReporter, type SandboxInit, type SandboxKey, type SandboxKeyEvent, type SandboxState, type SandboxViewInit } from './shim-api';
@@ -25,6 +22,7 @@ import { expressionDiagnostic, EXPRESSION_NAMES } from '../src/legacy/core/expre
 import { axisContentKey, axisPath, isAxisTag } from '../src/typography/font-catalog';
 import { CHANNELS_3D, projectPoint, inversePlane } from '../src/legacy/core/space-3d';
 import { propertyShortcuts } from '../src/kernel/property-shortcuts';
+import { svelteRuntime } from '../src/kernel/svelte-runtime';
 import { chordMatches, chordOfEvent, isFieldTarget } from '../src/kernel/keychord';
 import { EDITOR_HELPER_EXPORTS } from '../../shared/extension-runtime';
 import type { PowermoveAPI } from '../src/kernel/api';
@@ -49,10 +47,7 @@ export function installSandboxRuntime(): void {
     const error = new Error(`${name} requires full access. Use project.apply or commands in a sandboxed extension.`);
     error.name = 'PermissionError'; (error as Error & { code: string }).code = 'full-access'; throw error;
   }]));
-  Reflect.set(globalThis, '__powermove_runtime', {
-    svelte, 'svelte/internal/client': svelteInternalClient, 'svelte/store': svelteStore,
-    'svelte/internal/disclose-version': {}, powermove: helpers
-  });
+  Reflect.set(globalThis, '__powermove_runtime', { ...svelteRuntime, powermove: helpers });
 }
 
 /** Applies the host's theme; removes whatever the previous push set. */
