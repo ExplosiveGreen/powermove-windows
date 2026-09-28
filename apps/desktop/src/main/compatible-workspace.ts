@@ -302,9 +302,6 @@ export async function startWorkspaceCommand(root: string, access: 'project' | 'c
   // Project access keeps outbound network for research and downloads (the
   // footage chip depends on it); only the filesystem is confined.
   const profile = `(version 1)(allow default)(allow network-outbound)(deny appleevent-send)`
-    // Stay in the process group the host kills; posix_spawn escapes are
-    // found through their parents by killProcessFamily.
-    + '(deny syscall-unix (syscall-number SYS_setsid SYS_setpgid))'
     + `(deny file-write*)(allow file-write* (subpath ${JSON.stringify(await realpath(root))}) (literal "/dev/null") (literal "/dev/tty")`
     // Inherited stdio only; a broad /dev subpath would expose devices.
     + ' (literal "/dev/stdout") (literal "/dev/stderr") (regex #"^/dev/fd/[0-9]+$"))';
