@@ -9,6 +9,8 @@ import type { PowermoveBridge } from '../../../shared/ipc';
 
 type MenuInstance = ReturnType<typeof mount> & { element(): HTMLElement };
 
+const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Fn']);
+
 function nativeMenuBridge(): NonNullable<PowermoveBridge['menu']> | null {
   try {
     const menu = bridge()?.menu;
@@ -38,14 +40,32 @@ export class MenuController {
 
   /** `items` may be a Promise (contributions that answer asynchronously); the
       menu then opens when it settles with any, unless another open or a close
-      came first. */
+      came first, or the person pressed, typed or changed the selection
+      meanwhile: its items act on what was true when it was asked. */
   open(anchor: HTMLElement, items: MenuItem[] | PromiseLike<MenuItem[]>, options: MenuOptions = {}): HTMLElement {
     this.close(false);
     if (!Array.isArray(items)) {
       const asked = this.generation;
+      const stale = (): void => { if (asked === this.generation) this.generation += 1; };
+      const typed = (event: KeyboardEvent): void => { if (!MODIFIER_KEYS.has(event.key)) stale(); };
+      let offSelection: (() => void) | undefined;
+      // From the next task on, so the press that asked for this menu is not one.
+      const listening = window.setTimeout(() => {
+        document.addEventListener('pointerdown', stale, true);
+        document.addEventListener('keydown', typed, true);
+        const off = this.PM.bus?.on?.('sel', stale);
+        offSelection = typeof off === 'function' ? off : undefined;
+      }, 0);
+      const settled = (): void => {
+        window.clearTimeout(listening);
+        document.removeEventListener('pointerdown', stale, true);
+        document.removeEventListener('keydown', typed, true);
+        offSelection?.();
+      };
       void Promise.resolve(items).then((ready) => {
+        settled();
         if (asked === this.generation && ready.length) this.open(anchor, ready, options);
-      }, () => undefined);
+      }, settled);
       return document.createElement('div');
     }
     this.removeForeignMenus();

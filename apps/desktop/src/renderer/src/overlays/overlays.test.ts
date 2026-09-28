@@ -310,6 +310,31 @@ describe('installSvelteOverlays', () => {
     expect(document.querySelector('.drop')).toBeNull();
   });
 
+  it('drops a menu whose items arrive after a press, a key or a selection change', async () => {
+    const trigger = document.querySelector<HTMLButtonElement>('#trigger')!;
+    const selection = new Set<() => void>();
+    PM.bus = { on: (event: string, fn: () => void) => { if (event === 'sel') selection.add(fn); return () => selection.delete(fn); } };
+    const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+    const pending = async (act: () => void) => {
+      let answer!: (items: unknown[]) => void;
+      PM.menu(trigger, new Promise<unknown[]>(resolve => { answer = resolve; }));
+      await settle(); // the right-click that asked is over
+      act();
+      answer([{ label: 'Delete' }]);
+      await settle();
+      const drop = document.querySelector('.drop');
+      PM.closeMenus();
+      return drop;
+    };
+
+    expect(await pending(() => {})).not.toBeNull();
+    expect(await pending(() => document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 2 })))).toBeNull();
+    expect(await pending(() => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift', bubbles: true })))).not.toBeNull();
+    expect(await pending(() => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true })))).toBeNull();
+    expect(await pending(() => { for (const fn of [...selection]) fn(); })).toBeNull();
+    expect(selection.size).toBe(0);
+  });
+
   it('closes a menu on an outside pointer and restores its trigger', () => {
     vi.useFakeTimers();
     const trigger = document.querySelector<HTMLButtonElement>('#trigger')!;
