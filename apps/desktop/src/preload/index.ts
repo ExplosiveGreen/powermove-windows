@@ -222,6 +222,11 @@ const bridge: PowermoveBridge = {
     },
     respond: (response) => {
       ipcRenderer.send(IPC.agentToolResponse, response);
+    },
+    onInput: (cb) => {
+      const listener = (_event: IpcRendererEvent, active: unknown): void => cb(active === true);
+      ipcRenderer.on(IPC.agentToolInput, listener);
+      return () => ipcRenderer.removeListener(IPC.agentToolInput, listener);
     }
   },
 

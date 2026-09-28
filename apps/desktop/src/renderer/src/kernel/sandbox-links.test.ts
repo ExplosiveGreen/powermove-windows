@@ -140,3 +140,33 @@ describe('sandboxed ui.openExternal', () => {
     expect(confirm).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('the agent’s real input', () => {
+  it('holds back the app’s activation while main says the agent drives the window, and for 5 s after', async () => {
+    vi.resetModules();
+    let clock = 1_000;
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    Object.defineProperty(navigator, 'userActivation', { configurable: true, value: { isActive: true, hasBeenActive: true } });
+    let send!: (active: boolean) => void;
+    const { installBridgeForTests, resetBridgeForTests } = await import('./bridge');
+    installBridgeForTests({ agentTools: { onInput: (cb: (active: boolean) => void) => { send = cb; return () => {}; } } } as never);
+    try {
+      const { userActivated, AGENT_INPUT_HOLD_MS } = await import('./sandbox-links');
+      expect(userActivated()).toBe(true);
+      send(true); send(true);
+      expect(userActivated()).toBe(false);
+      send(false);
+      clock += AGENT_INPUT_HOLD_MS;
+      expect(userActivated()).toBe(false); // one drive still runs
+      send(false);
+      clock += AGENT_INPUT_HOLD_MS - 1;
+      expect(userActivated()).toBe(false);
+      clock += 1;
+      expect(userActivated()).toBe(true);
+    } finally {
+      resetBridgeForTests();
+      delete (navigator as { userActivation?: unknown }).userActivation;
+      vi.mocked(performance.now).mockRestore();
+    }
+  });
+});

@@ -20,6 +20,7 @@
 import type { ExtensionManifest } from '../../../shared/extensions';
 import { parseExtensionUrl } from '../../../shared/extension-url';
 import type { UIAPI } from './api';
+import { bridge } from './bridge';
 
 export const OPEN_EXTERNAL_INTERVAL_MS = 2_000;
 /** Links opened without asking, per minute; past it each one asks. */
@@ -27,12 +28,30 @@ export const OPEN_EXTERNAL_DIRECT_PER_MINUTE = 3;
 /** After a person declines, how long the extension's links are refused without asking. */
 export const OPEN_EXTERNAL_DECLINED_MS = 30_000;
 
+/** How long the agent's input keeps the window from counting as a person's action: as long as an activation lasts. */
+export const AGENT_INPUT_HOLD_MS = 5_000;
+let agentDriving = 0;
+let agentDrivenAt = -Infinity;
+
+/** Main says the agent's computer_use_panel input into this window starts or ends. */
+export function noteAgentInput(active: boolean): void {
+  if (active) agentDriving += 1;
+  else { agentDriving = Math.max(0, agentDriving - 1); agentDrivenAt = performance.now(); }
+}
+
+/* Only the preload's IPC reaches this; no sandbox can. Main sends the start
+   before the input's prepare request, so it lands here first. */
+bridge()?.agentTools?.onInput?.(noteAgentInput);
+
 /**
  * The app document's transient user activation: a real click or key press in
  * it, or in any frame inside it (a sandboxed view's included), within the
- * last 5 s. The browser keeps it; nothing a sandbox sends can set it.
+ * last 5 s. The browser keeps it; nothing a sandbox sends can set it. The
+ * agent's computer_use_panel input sets it as well, so while that runs and
+ * until its activation has lapsed, nothing counts.
  */
 export function userActivated(): boolean {
+  if (agentDriving > 0 || performance.now() - agentDrivenAt < AGENT_INPUT_HOLD_MS) return false;
   return (globalThis.navigator as { userActivation?: { isActive?: boolean } } | undefined)?.userActivation?.isActive === true;
 }
 
