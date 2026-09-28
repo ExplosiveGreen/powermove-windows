@@ -10,6 +10,7 @@ import {
 } from '../agent-tools/spec';
 
 import type { UserMcpServers } from '../agent-tools/user-mcp';
+import { AGENT_SHELL_NETWORK_HOSTS } from '../agent-network';
 
 const PROJECT_TOOLS = 'Read,Glob,Grep,Write,Edit,Bash,WebSearch,WebFetch,Skill,Agent,Task';
 const EDITOR_TOOLS = 'Read,Glob,Grep,Skill,Agent,Task';
@@ -23,31 +24,9 @@ const STRICT_SANDBOX_SETTINGS = {
 
 const STRICT_SANDBOX = JSON.stringify({ sandbox: STRICT_SANDBOX_SETTINGS });
 
-/** Hosts sandboxed Bash may reach in project mode: read-only media, font and
- * package CDNs, so research-and-download work (the "Find useful footage" chip)
- * can finish. The sandbox proxy filters by host, not method, so a host that
- * accepts authenticated writes (github.com, registry.npmjs.org, archive.org)
- * would be a bulk upload channel for files the agent can read; none is listed.
- * WebSearch and WebFetch stay available for research on any site. */
-export const CLAUDE_PROJECT_NETWORK_HOSTS = [
-  'assets.mixkit.co',
-  'cdn.freesound.org',
-  'cdn.jsdelivr.net',
-  'cdn.pixabay.com',
-  'codeload.github.com',
-  'files.pythonhosted.org',
-  'fonts.googleapis.com',
-  'fonts.gstatic.com',
-  'images-assets.nasa.gov',
-  'images.pexels.com',
-  'images.unsplash.com',
-  'live.staticflickr.com',
-  'objects.githubusercontent.com',
-  'raw.githubusercontent.com',
-  'unpkg.com',
-  'upload.wikimedia.org',
-  'videos.pexels.com'
-] as const;
+/** Claude project Bash shares the one agent shell allowlist. WebSearch and
+ * WebFetch stay available for research on any site. */
+export const CLAUDE_PROJECT_NETWORK_HOSTS = AGENT_SHELL_NETWORK_HOSTS;
 
 // strictAllowlist denies every other host outright instead of prompting, and
 // stops a command's allowed_domains parameter from widening the list.
