@@ -89,7 +89,7 @@ describe('assistant word reveal', () => {
     expect(target.querySelector('.shimmer-text')).toBeNull();
   });
 
-  it.each([false, true])('collapses completed work above the final reply (tools: %s)', (withTools) => {
+  it.each([false, true])('preserves the complete response in stream order after archiving (tools: %s)', (withTools) => {
     render({
       role: 'trace', durationMs: 543000,
       steps: [
@@ -100,25 +100,13 @@ describe('assistant word reveal', () => {
         { kind: 'text', id: 'reply', text: 'Both stems are ready.' }
       ]
     });
-    const work = target.querySelector<HTMLDetailsElement>('details.agent-work-log')!;
-    expect(work).not.toBeNull();
-    expect(work.open).toBe(false);
-    expect(work.querySelector('summary')?.textContent).toBe('Worked for 9m 3s');
-    expect(work.textContent).toContain('Inspecting the original audio.');
-    expect(work.textContent).toContain('Check the original timing.');
-    expect(work.textContent).toContain('Keep both stems aligned.');
-    expect(work.textContent).not.toContain('Both stems are ready.');
-    const tools = work.querySelector<HTMLDetailsElement>('details.agent-tool-activity');
-    expect(Boolean(tools)).toBe(withTools);
-    if (tools) expect(tools.querySelector('summary')?.textContent).toContain('1 tool call');
-    expect(target.querySelector('.is-archived > .agent-trace-prose')?.textContent).toBe('Both stems are ready.');
-  });
-
-  it('uses recorded tool timestamps for older history and omits empty work disclosures', () => {
-    render({ role: 'trace', steps: [
-      { kind: 'tool', id: 'tool', toolName: 'bash', label: 'Inspect', status: 'done', startedAt: 1000, endedAt: 5100 }
-    ] });
-    expect(target.querySelector('.agent-work-log > summary')?.textContent).toBe('Worked for 4s');
+    expect(target.querySelector('.agent-work-log')).toBeNull();
+    expect([...target.querySelectorAll('.agent-trace-text')].map(row => row.textContent)).toEqual([
+      'Inspecting the original audio.', 'Check the original timing.',
+      'Keep both stems aligned.', 'Both stems are ready.'
+    ]);
+    expect(target.querySelectorAll('.agent-tool-activity')).toHaveLength(withTools ? 1 : 0);
+    expect(target.querySelector('.shimmer-text')).toBeNull();
   });
 
   it('keeps archived tool details expandable without live motion', () => {
@@ -225,4 +213,13 @@ it('shows a readable error with the raw diagnostic behind details', () => {
   expect(toggle.getAttribute('aria-expanded')).toBe('true');
   expect(target.querySelector('pre')?.textContent).toBe(raw);
   expect(target.querySelector('p')?.textContent).not.toContain('-32600');
+});
+
+
+it('formats user prose alongside inline attachments', () => {
+  render({ role: 'user', text: '**Review** [Attachment: clip.mp4] and *trim* it.',
+    attachments: [{ name: 'clip.mp4', path: '/tmp/clip.mp4' }] });
+  expect(target.querySelector('.agent-bubble .is-bold')?.textContent).toBe('Review');
+  expect(target.querySelector('.agent-bubble .is-italic')?.textContent).toBe('trim');
+  expect(target.querySelector('.agent-inline-attachment')?.textContent).toContain('clip');
 });

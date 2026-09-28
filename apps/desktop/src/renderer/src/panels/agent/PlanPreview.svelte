@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Markdown from './Markdown.svelte';
   import Icon from '../Icon.svelte';
   import { agentState, describePanelAction } from './agent-state.svelte';
 
@@ -25,7 +26,7 @@
 {#if plan}
   <div class="agent-card">
     <div class="agent-card-kicker">Proposed change</div>
-    <h3>{title}</h3>
+    <h3><Markdown text={title} inline links={false} /></h3>
     {#if plan.kind === 'panels'}
       {#each plan.panelEdit.actions as action}
         <div class="spatial-preview-control panel-action"><Icon {PM} name="panel" /><span>{describePanelAction(PM, action)}</span></div>

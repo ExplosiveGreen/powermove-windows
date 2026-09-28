@@ -2,7 +2,7 @@ import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { test, expect } from './helpers/app';
 
-test('agent results collapse work above the reply and omit file and external activity panels', async ({ session }, testInfo) => {
+test('agent results preserve work above the reply and omit file and external activity panels', async ({ session }, testInfo) => {
   await session.openEditor();
   await session.page.evaluate(() => (window as any).PM.SpatialAssistant.open());
   const { page } = session;
@@ -48,13 +48,9 @@ test('agent results collapse work above the reply and omit file and external act
     await panel.evaluate((el, width) => { (el.closest('.dock') as HTMLElement).style.flex = `0 0 ${width}px`; }, width);
     await page.locator('.agent-scroll').evaluate(el => { el.scrollTop = 0; });
     await panel.screenshot({ path: path.join(output, `result-layout-${width}.png`) });
-    const worked = page.locator('.agent-work-log > summary');
-    await expect(worked).toHaveText('Worked for 9m 3s');
-    await expect(page.locator('.agent-work-details')).not.toBeVisible();
-    await worked.click();
-    await expect(page.locator('.agent-work-details')).toBeVisible();
-    await expect(page.locator('.agent-work-details')).toContainText('Check the media before importing.');
-    await panel.screenshot({ path: path.join(output, `work-history-${width}.png`) });
+    await expect(page.locator('.agent-work-log')).toHaveCount(0);
+    await expect(page.locator('.agent-thought-prose')).toBeVisible();
+    await expect(page.locator('.agent-thought-prose')).toContainText('Check the media before importing.');
     // The header reads "18 tool calls · 1 failed · …" inline; the status must
     // stay one line tall and inside the header box at every width.
     const layout = await page.locator('.agent-tool-activity summary').evaluate(el => {
@@ -80,16 +76,51 @@ test('agent results collapse work above the reply and omit file and external act
         tag: el.tagName, class: el.getAttribute('class'), width: el.clientWidth, scroll: el.scrollWidth, text: el.textContent?.slice(0, 80)
       })));
     expect.soft(overflow).toEqual([]);
-    await worked.click();
   }
   await expect(page.locator('.agent-mod-result')).toContainText('Pexels Browser');
   await page.getByRole('button', { name: 'Open Pexels Browser', exact: true }).click();
   expect(await page.evaluate(() => (window as any).__openedResultPanel)).toBe('pexels-panel');
   await expect(page.locator('.agent-artifacts')).toHaveCount(0);
   await expect(page.locator('.agent-external-actions')).toHaveCount(0);
-  await page.locator('.agent-work-log > summary').click();
   await page.locator('.agent-tool-activity summary').click();
   await expect(page.locator('.agent-tool-details')).toBeVisible();
   await expect(page.locator('.agent-tool-details > div')).toHaveCount(18);
+  expect(session.diagnostics.pageErrors).toEqual([]);
+});
+
+test('a completed response stays visible when the user sends a follow-up', async ({ session }) => {
+  await session.openEditor();
+  const { page } = session;
+  await page.evaluate(() => {
+    const PM = (window as any).PM;
+    PM.SpatialAssistant.open();
+    PM.AgentUI.setAccess('project');
+    (window as any).__responseRuns = [];
+    PM.CodexBridge.request = (_prompt: unknown, _schema: unknown, _images: unknown, options: any) => new Promise(resolve => {
+      (window as any).__responseRuns.push({ options, resolve });
+    });
+  });
+  const composer = page.getByRole('textbox', { name: 'Message Powermove agent', exact: true });
+  await composer.fill('Inspect the composition');
+  await composer.press('Enter');
+  await expect.poll(() => page.evaluate(() => (window as any).__responseRuns.length)).toBe(1);
+  await page.evaluate(() => {
+    const run = (window as any).__responseRuns[0];
+    run.options.onTrace({ kind: 'answer', text: 'The clip is placed full-frame, 0–22 s, centered.' });
+    run.options.onTrace({ kind: 'thought', text: 'Checking the live composition.' });
+    run.options.onTrace({ kind: 'answer', text: 'The composition is ready for review.' });
+    run.resolve({ text: JSON.stringify({ summary: 'The composition is ready for review.', commands: [], artifacts: [], externalActions: [], notes: [] }), extensions: [] });
+  });
+  await expect.poll(() => page.evaluate(() => (window as any).PM.AgentUI.state.legacyPhase)).toBe('result');
+  const response = page.locator('.agent-trace.is-archived');
+  await expect(response.getByText('The clip is placed full-frame, 0–22 s, centered.', { exact: true })).toBeVisible();
+  await expect(response.getByText('The composition is ready for review.', { exact: true })).toBeVisible();
+  const before = await response.innerText();
+  await composer.fill('Make it as editable layers');
+  await composer.press('Enter');
+  await expect.poll(() => page.evaluate(() => (window as any).__responseRuns.length)).toBe(2);
+  await expect(response.getByText('The clip is placed full-frame, 0–22 s, centered.', { exact: true })).toBeVisible();
+  await expect(response.getByText('The composition is ready for review.', { exact: true })).toBeVisible();
+  expect(await response.innerText()).toBe(before);
   expect(session.diagnostics.pageErrors).toEqual([]);
 });

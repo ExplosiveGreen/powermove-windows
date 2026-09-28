@@ -5,7 +5,7 @@
   import { agentState } from './agent-state.svelte';
   import type { AgentMessage } from './agent-state.svelte';
   import AttachmentChips from './AttachmentChips.svelte';
-  import { activityRows, durationLabel } from './activity-rows';
+  import { activityRows } from './activity-rows';
   import Markdown from './Markdown.svelte';
   import { mountPromptGlow } from './prompt-glow';
   import { glowFade } from './motion';
@@ -45,24 +45,10 @@
      written before the distinction existed carry no kind and stay errors. */
   const notice = $derived(message.notice ?? 'error');
 
-  // Autonomous replies are stored as trace text. Keep the last reply outside
-  // the disclosure so collapsing the work never hides the agent's answer.
-  const steps = $derived(message.role === 'trace' ? message.steps ?? [] : []);
-  // Steering checkpoints remain inline, in stream order; they are not a
-  // completed reply whose earlier work belongs behind a disclosure.
-  const replyIndex = $derived(message.steering ? -1 : steps.reduce((last, step, index) => step.kind === 'text' && step.text.trim() ? index : last, -1));
-  const reply = $derived(replyIndex >= 0 ? steps[replyIndex] : undefined);
-  // A question must never hide behind the collapsed work log.
-  const questions = $derived(message.steering ? [] : steps.filter(step => step.kind === 'question'));
-  const traceRows = $derived(activityRows(steps.filter((step, index) =>
-    index !== replyIndex && (message.steering || step.kind !== 'question'))));
-  const workedFor = $derived.by(() => {
-    if (Number.isFinite(message.durationMs) && message.durationMs! >= 0) return durationLabel(message.durationMs!);
-    // Older saved conversations only have timestamps on their tool/thought steps.
-    const starts = steps.flatMap(step => (step.kind === 'tool' || step.kind === 'thought') && Number.isFinite(step.startedAt) ? [step.startedAt!] : []);
-    const ends = steps.flatMap(step => (step.kind === 'tool' || step.kind === 'thought') && Number.isFinite(step.endedAt) ? [step.endedAt!] : []);
-    return starts.length && ends.length ? durationLabel(Math.max(...ends) - Math.min(...starts)) : '';
-  });
+  // Archiving must preserve the same prose and ordering as the live timeline.
+  // Only individual tool groups disclose their details; a follow-up must not
+  // turn the preceding response into a last-paragraph summary.
+  const traceRows = $derived(activityRows(message.role === 'trace' ? message.steps ?? [] : []));
 </script>
 
 {#snippet workRows()}
@@ -81,18 +67,7 @@
 
 {#if message.role === 'trace'}
   <div class="agent-trace is-archived">
-    {#if message.steering}
-      {@render workRows()}
-    {:else if traceRows.length}
-      <details class="agent-work-log">
-        <summary><span>{workedFor ? `Worked for ${workedFor}` : 'Worked'}</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg></summary>
-        <div class="agent-work-details" aria-label="Thinking and activity">
-          {@render workRows()}
-        </div>
-      </details>
-    {/if}
-    {#each questions as step (step.id)}<QuestionCard {PM} {step} />{/each}
-    {#if reply?.kind === 'text'}<TextRow text={reply.text} />{/if}
+    {@render workRows()}
   </div>
 {:else if message.role === 'user'}
   <div class="agent-msg user" class:is-entering={message.entering} class:is-steering={message.steering}>
@@ -102,7 +77,7 @@
     {/if}
     <div class="agent-prompt" class:is-answering={answering}>
       {#if answering}<div class="agent-prompt-signal" data-prompt-halo aria-hidden="true" use:promptSignal out:glowFade={{duration: 220}}></div>{/if}
-      <div class="agent-bubble">{#if prompt.segments.some(segment => 'attachment' in segment)}{#each prompt.segments as segment, index (index)}{#if 'text' in segment}{segment.text}{:else}<button
+      <div class="agent-bubble">{#if prompt.segments.some(segment => 'attachment' in segment)}{#each prompt.segments as segment, index (index)}{#if 'text' in segment}<div class="agent-prompt-segment"><Markdown text={segment.text} /></div>{:else}<button
         type="button" class="agent-inline-attachment is-sent"
         aria-label={segment.attachment.dataUrl ? `View ${segment.attachment.name}` : `Reveal ${segment.attachment.name} in Finder`}
         title={segment.attachment.name}
@@ -143,15 +118,8 @@
 {/if}
 
 <style>
-  .agent-work-log { min-width: 0; color: var(--tx-3); font-size: var(--fs-sm); border-bottom: 1px solid var(--line); padding-bottom: 6px; }
-  .agent-work-log > summary { display: flex; align-items: center; gap: 6px; width: fit-content; max-width: 100%; padding: 3px 4px 3px 0; list-style: none; line-height: 1.5; border-radius: var(--r-sm); }
-  .agent-work-log > summary::-webkit-details-marker { display: none; }
-  .agent-work-log > summary:hover { color: var(--tx); }
-  .agent-work-log > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-  .agent-work-log svg { width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; transition: transform var(--dur-2); }
-  .agent-work-log[open] > summary svg { transform: rotate(90deg); }
-  .agent-work-details { display: flex; flex-direction: column; gap: 10px; padding: 10px 0 4px; min-width: 0; }
-  @media (prefers-reduced-motion: reduce) { .agent-work-log svg { transition: none; } }
+  .agent-prompt-segment { display: contents; }
+  .agent-prompt-segment :global(.agent-md-p:only-child) { display: inline; }
   .agent-prompt-signal{position:absolute;inset:-8px;overflow:hidden;border-radius:22px 22px 12px 22px;pointer-events:none;z-index:0}
   .agent-prompt-signal :global(canvas){opacity:.8}
   .agent-prompt-signal::before{content:"";position:absolute;inset:8px;border-radius:14px 14px 4px 14px;box-shadow:0 0 8px color-mix(in srgb,var(--accent) 20%,transparent)}

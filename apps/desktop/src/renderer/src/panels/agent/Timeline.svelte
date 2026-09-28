@@ -1,6 +1,7 @@
 <script lang="ts">
   import { agentState } from './agent-state.svelte';
   import { activityRows, type TraceStep } from './activity-rows';
+  import Markdown from './Markdown.svelte';
   import QuestionCard from './QuestionCard.svelte';
   import TextRow from './TextRow.svelte';
   import ThoughtRow from './ThoughtRow.svelte';
@@ -35,7 +36,7 @@
     {#each planSteps as step (step.id)}
       <div class="agent-step {step.status || 'pending'}">
         <i aria-hidden="true"></i>
-        <span>{step.title}</span>
+        <span><Markdown text={step.title} inline links={false} /></span>
         {#if step.status === 'error'}<em>Failed</em>{/if}
       </div>
     {/each}
@@ -46,7 +47,7 @@
   <div class="agent-trace">
     <p class="agent-trace-loading">
       <span class="agent-pixel-loader" aria-hidden="true">{#each Array(9) as _, cell (cell)}<i style="--cell-delay:{((cell % 3) + Math.abs(Math.floor(cell / 3) - 1)) * 90}ms"></i>{/each}</span>
-      <span class="agent-trace-thought shimmer-text">{fallback}</span>
+      <span class="agent-trace-thought shimmer-text"><Markdown text={fallback} inline links={false} /></span>
     </p>
   </div>
 {:else if rows.length}

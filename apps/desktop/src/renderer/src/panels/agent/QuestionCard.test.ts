@@ -73,7 +73,7 @@ describe('QuestionCard', () => {
     expect(target.querySelector('input')).toBeNull();
   });
 
-  it('keeps a question outside the collapsed work log of an archived run', () => {
+  it('keeps archived questions visible alongside the response', () => {
     instance = mount(Turn, { target, props: { PM: {}, message: { role: 'trace', steps: [
       { kind: 'tool', id: 't1', toolName: 'bash', label: 'Run', status: 'done' },
       { kind: 'thought', id: 'th', label: 'Checking the cut.', live: false },
@@ -81,9 +81,22 @@ describe('QuestionCard', () => {
       { kind: 'text', id: 'reply', text: 'Done.' }
     ] } } });
     flushSync();
-    const log = target.querySelector('details.agent-work-log')!;
-    expect(log.querySelector('.agent-question')).toBeNull();
-    expect(log.querySelector('.agent-thought-prose')?.textContent).toContain('Checking the cut.');
+    expect(target.querySelector('.agent-work-log')).toBeNull();
+    expect(target.querySelector('.agent-thought-prose')?.textContent).toContain('Checking the cut.');
     expect(target.querySelector('.agent-question .agent-question-answer')?.textContent).toBe('Not answered');
   });
+});
+
+
+it('formats question prose, options, and settled answers', () => {
+  const question = step({ questions: [{ id: 'style', header: '**Style**', question: 'Use **bold** or `code`?',
+    allowOther: true, secret: false, options: [{ label: '**Bold**', description: 'A *strong* choice' }] }] });
+  instance = mount(QuestionCard, { target, props: { PM: {}, step: question } });
+  flushSync();
+  expect(target.querySelector('.agent-question-text .is-bold')?.textContent).toBe('bold');
+  expect(target.querySelector('.agent-question-option .is-italic')?.textContent).toBe('strong');
+  unmount(instance);
+  instance = mount(QuestionCard, { target, props: { PM: {}, step: { ...question, status: 'answered', answers: { style: '**Bold**' } } } });
+  flushSync();
+  expect(target.querySelector('.agent-question-answer .is-bold')?.textContent).toBe('Bold');
 });

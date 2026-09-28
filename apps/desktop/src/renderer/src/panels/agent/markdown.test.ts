@@ -77,3 +77,15 @@ describe('wordsFromRuns', () => {
    expect(inlineRuns('``a `tick` here``')).toEqual([{text: 'a `tick` here', c: true}]);
    expect(inlineRuns(String.raw`\*literal\*`)).toEqual([{text: '*literal*'}]);
  });
+
+it('renders aligned tables with escaped pipes and ragged rows', () => {
+  const blocks = blocksFromMarkdown('| Name | Value |\n| :--- | ---: |\n| **Clip** | `ready` |\n| a\\|b |\n\nAfter');
+  expect(blocks[0]).toEqual({ kind: 'table', headers: [[{ text: 'Name' }], [{ text: 'Value' }]],
+    align: ['left', 'right'], rows: [[[{ text: 'Clip', b: true }], [{ text: 'ready', c: true }]], [[{ text: 'a|b' }], []]] });
+  expect(plainText(blocks)).toBe('Name | Value\nClip | ready\na|b | \nAfter');
+  expect(blocksFromMarkdown('a | b\nnot | a table').map(block => block.kind)).toEqual(['p']);
+});
+it('preserves dividers and formats strikethrough', () => {
+  expect(blocksFromMarkdown('Before\n\n---\n\nAfter').map(block => block.kind)).toEqual(['p', 'hr', 'p']);
+  expect(inlineRuns('~~old~~ and ~~**bold**~~')).toEqual([{ text: 'old', s: true }, { text: ' and ' }, { text: 'bold', b: true, s: true }]);
+});

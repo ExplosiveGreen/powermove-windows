@@ -12,6 +12,7 @@ export interface Run {
   b?: boolean;
   i?: boolean;
   c?: boolean;
+  s?: boolean;
   href?: string;
 }
 
@@ -20,9 +21,11 @@ export type Block =
   | { kind: 'h'; level: number; runs: Run[] }
   | { kind: 'li'; ordinal?: number; runs: Run[] }
   | { kind: 'quote'; runs: Run[] }
+  | { kind: 'hr' }
+  | { kind: 'table'; headers: Run[][]; rows: Run[][][]; align: Array<'left' | 'center' | 'right'> }
   | { kind: 'code'; text: string; lang?: string };
 
-type InlineFlags = { b?: boolean; i?: boolean };
+type InlineFlags = { b?: boolean; i?: boolean; s?: boolean };
 
 // Only what main's openExternal will actually open; anything else stays text.
 const SAFE_HREF = /^https?:\/\//i;
@@ -43,6 +46,9 @@ export function inlineRuns(text: string, flags: InlineFlags = {}): Run[] {
     }
     if ((m = /^(`+)([\s\S]*?[^`])\1(?!`)/.exec(rest))) {
       flush(); runs.push({ text: m[2]!.replace(/\n/g, ' '), c: true }); i += m[0].length; continue;
+    }
+    if (!flags.s && (m = /^~~(\S(?:.*?\S)?)~~/.exec(rest))) {
+      flush(); runs.push(...inlineRuns(m[1]!, { ...flags, s: true })); i += m[0].length; continue;
     }
     if (!flags.b && (m = /^\*\*([^\s*](?:.*?[^\s*])?)\*\*/.exec(rest))) {
       flush(); runs.push(...inlineRuns(m[1]!, { ...flags, b: true })); i += m[0].length; continue;
@@ -96,7 +102,9 @@ export function blocksFromMarkdown(text: string): Block[] {
   };
   const flushAll = (): void => { flushParagraph(); flushQuote(); };
 
-  for (const line of lines) {
+  const cells = (line: string): string[] => line.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(/(?<!\\)\|/).map(cell => cell.trim());
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]!;
     if (code !== null) {
       if (/^\s*(```|~~~)\s*$/.test(line)) {
         blocks.push({ kind: 'code', text: code.join('\n'), ...(lang ? { lang } : {}) });
@@ -110,11 +118,24 @@ export function blocksFromMarkdown(text: string): Block[] {
     if ((m = /^\s*(```|~~~)\s*([\w+-]*)\s*$/.exec(line))) {
       flushAll(); code = []; lang = m[2] ?? ''; continue;
     }
+    const separator = lines[index + 1];
+    if (line.includes('|') && separator && cells(separator).every(cell => /^:?-{3,}:?$/.test(cell)) && cells(line).length === cells(separator).length) {
+      flushAll();
+      const headers = cells(line).map(cell => inlineRuns(cell));
+      const align = cells(separator).map(cell => cell.startsWith(':') && cell.endsWith(':') ? 'center' as const : cell.endsWith(':') ? 'right' as const : 'left' as const);
+      const rows: Run[][][] = [];
+      index++;
+      while (lines[index + 1]?.trim() && lines[index + 1]!.includes('|')) {
+        const row = cells(lines[++index]!);
+        rows.push(headers.map((_, ci) => inlineRuns(row[ci] || '')));
+      }
+      blocks.push({ kind: 'table', headers, align, rows }); continue;
+    }
     if (!line.trim()) { flushAll(); continue; }
     if ((m = /^(#{1,6})\s+(.*)$/.exec(line))) {
       flushAll(); blocks.push({ kind: 'h', level: m[1]!.length, runs: inlineRuns(m[2]!) }); continue;
     }
-    if (/^\s*([-*_])\s*(?:\1\s*){2,}$/.test(line)) { flushAll(); continue; }
+    if (/^\s*([-*_])\s*(?:\1\s*){2,}$/.test(line)) { flushAll(); blocks.push({ kind: 'hr' }); continue; }
     if ((m = /^\s*[-*+]\s+(.*)$/.exec(line))) {
       flushAll(); blocks.push({ kind: 'li', runs: inlineRuns(m[1]!) }); continue;
     }
@@ -153,5 +174,5 @@ export function wordsFromRuns(runs: Run[]): Word[] {
 
 /** The plain text of a block, for tests and tooltips. */
 export function plainText(blocks: Block[]): string {
-  return blocks.map((block) => block.kind === 'code' ? block.text : block.runs.map((run) => run.text).join('')).join('\n');
+  return blocks.map((block) => block.kind === 'code' ? block.text : block.kind === 'hr' ? '' : block.kind === 'table' ? [block.headers, ...block.rows].map(row => row.map(cell => cell.map(run => run.text).join('')).join(' | ')).join('\n') : block.runs.map((run) => run.text).join('')).join('\n');
 }

@@ -307,3 +307,15 @@ describe('Timeline', () => {
     expect(target.querySelector('.agent-step')?.textContent).toContain('Inspect composition');
   });
 });
+
+
+it('formats progress text before the live trace arrives', () => {
+  render({ activity: 'Checking **timing** and `layers`' });
+  expect(target.querySelector('.agent-trace-thought .is-bold')?.textContent).toBe('timing');
+  expect(target.querySelector('.agent-trace-thought code')?.textContent).toBe('layers');
+});
+
+it('formats proposal steps', () => {
+  render({ legacyPhase: 'preview', steps: [{ id: 'step', title: 'Keep **timing**', status: 'pending' }] });
+  expect(target.querySelector('.agent-step .is-bold')?.textContent).toBe('timing');
+});

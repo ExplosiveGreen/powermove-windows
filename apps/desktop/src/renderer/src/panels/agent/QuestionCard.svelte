@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Markdown from './Markdown.svelte';
   import type { TraceStep } from './agent-state.svelte';
 
   /* A question from the agent, answered in place. `reply` questions hold the
@@ -40,16 +41,16 @@
 <section class="agent-question" class:is-settled={!open} aria-label="Question from the agent">
   {#each step.questions as item (item.id)}
     <div class="agent-question-item">
-      {#if item.header}<div class="agent-question-header">{item.header}</div>{/if}
-      <p class="agent-question-text">{item.question}</p>
+      {#if item.header}<div class="agent-question-header"><Markdown text={item.header} inline links={false} /></div>{/if}
+      <div class="agent-question-text"><Markdown text={item.question} /></div>
       {#if open}
         {#if item.options.length}
           <div class="agent-question-options" role="group" aria-label={item.question}>
             {#each item.options as option (option.label)}
               <button type="button" class="agent-question-option" class:is-chosen={chosen[item.id] === option.label}
                 aria-pressed={chosen[item.id] === option.label} onclick={() => choose(item.id, option.label)}>
-                <span>{option.label}</span>
-                {#if option.description}<small>{option.description}</small>{/if}
+                <span><Markdown text={option.label} inline links={false} /></span>
+                {#if option.description}<small><Markdown text={option.description} inline links={false} /></small>{/if}
               </button>
             {/each}
           </div>
@@ -60,7 +61,7 @@
             bind:value={typed[item.id]} onkeydown={keydown} />
         {/if}
       {:else if step.status === 'answered' && step.answers?.[item.id]}
-        <p class="agent-question-answer">{step.answers[item.id]}</p>
+        <div class="agent-question-answer"><Markdown text={step.answers[item.id] ?? ''} /></div>
       {:else}
         <p class="agent-question-answer is-missing">{step.status === 'answered' ? 'Skipped' : 'Not answered'}</p>
       {/if}
