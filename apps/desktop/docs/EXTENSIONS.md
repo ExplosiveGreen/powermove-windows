@@ -88,27 +88,80 @@ inside the extension folder. No npm packages, no `..` escapes.
 
 Store extensions from other publishers run sandboxed. Declare `apiVersion: 3` for
 new Store-bound extensions and list the access they need in `manifest.json`
-(`permissions` may be an empty array):
+(`permissions` may be an empty array). `permissions` requires `apiVersion: 3`,
+so code at `apiVersion` 1 or 2 can declare nothing: in the sandbox it cannot read
+the project or use any other permission, and publishing it with such a use is
+blocked until it sets `apiVersion: 3` and declares the permission.
 
 ```json
-"permissions": ["network", "assets", "project:write"]
+"permissions": ["network", "assets", "project:read"]
 ```
 
 - `network` allows HTTPS and WebSocket requests and remote images and media.
 - `clipboard` allows writing to the clipboard.
 - `assets` allows picking, importing, and reading asset files.
-- `project:write` allows project mutation through `apply`, `undo`, `redo`, `select`, time and transport controls. `commands.run` can call an extension's own commands and, with this permission, the named legacy editing commands. It cannot call another extension's commands or File, app, export, settings, or mods commands.
+- `project:read` allows reading the project: `project.get`, `project.selection`, `project.snapshot` (a rendered frame), and the `project:changed` and `selection` events. Reading needs `apiVersion: 3` plus `project:read` (or `project:write`). `project.time`, `project.playing`, `project.revision`, the transport reads and the `time` and `transport` events need no permission.
+- `project:write` allows project mutation through `apply`, `undo`, `redo`, `select`, time and transport controls, and includes `project:read`. `commands.run` can call an extension's own commands and, with this permission, the named legacy editing commands. It cannot call another extension's commands or File, app, export, settings, or mods commands.
 - `full-access` allows trusted-only APIs. Store installs that request it stay off
   until the person installing them accepts Powermove's full-access dialog. They
   can later revoke trust from the Library.
+
+The Store lists `project:read` as “Reads your project”. When `project:write` is
+also declared it shows only “Edits your project”.
 
 Store extensions supply simple event names; the kernel publishes them as `ext:<extension-id>:<name>`. They may subscribe to those events and the validated read-only host events `project:changed`, `selection`, `time`, `transport`, `theme`, and `extensions:changed`. Registration IDs must start with `<extension-id>.`, and keybindings may invoke only their own commands. Store code can list extensions and call `setUp` for itself; management of other extensions requires a trusted extension.
 
 The runtime sandbox is the security boundary. The **Sandbox compatibility check** is a compatibility lint: it runs a short, detectable sample of extension behavior to find problems before publishing. A pass is not a security review or trust signal.
 
-The project mirror is shared data visible to every sandboxed Store extension: it contains the full project except asset blob/source fields and keys matching `token`, `secret`, `password`, or ending in `key` within `library` and `notes`. Keep credentials in extension variables or storage. A mirror above 8 MiB makes `project.get()` throw until the project is smaller. Each extension is limited to 200 registrations, 2,000 live callback handles, 50 open panel views, 200 RPC messages/s, 1 MiB per RPC payload, 256 KiB of storage with keys at most 128 characters, and 50 logs/s.
+### Isolation and the watchdog
 
-`powermove serve` derives Store trust from the desktop provenance file and applies the same sandbox document and CSP. A Store install requesting `full-access` remains off as “needs trust”; trust it from the desktop app first, since serve has no trust dialog.
+Each sandboxed extension runs in its own process, separate from the editor and
+from other extensions. Its runtime and its panel views load from an origin of
+their own, which serves only the sandbox document and that extension's files. An
+infinite loop or out-of-memory crash stops only that extension.
+
+The kernel pings every sandboxed runtime every 2 s. A runtime that leaves a
+ping unanswered for 8 s is unresponsive: Powermove ends its process, turns the
+extension off with a runtime error, and shows a notice. A crashed process is
+handled the same way. The extension stays off until it is turned on again, so
+split long synchronous work into chunks that return to the event loop.
+
+`powermove serve` loads every sandbox document from a single origin, so process
+isolation there is whatever the browser provides, and there is no watchdog: one
+spinning extension would stall its siblings too, and none could be ended. It derives Store trust from the
+desktop provenance file and applies the same sandbox document and CSP. A Store
+install requesting `full-access` remains off as “needs trust”; trust it from the
+desktop app first, since serve has no trust dialog.
+
+### Project data in the sandbox
+
+The sandbox has no live project. Each sandboxed document keeps a small state
+(time, playing, revision and, with project read access, the selection) that the
+host updates when it changes, and reads the project on request:
+
+- `await api.project.get()` returns a snapshot (with `apiVersion: 3` and
+  `project:read` or `project:write`; otherwise it rejects and says what to add).
+  It is cached until the project changes: repeated calls resolve at once without
+  asking the host, and concurrent calls share one request. One snapshot build per change is shared by every
+  sandboxed extension in the window, so reading on each `project:changed` is cheap.
+- The snapshot is deep-frozen; assignments throw. Edit through `api.project.apply`.
+- The snapshot omits the edit log (`edits` is absent although the type declares
+  it), asset fields whose names contain `blob` or `source`, and keys matching
+  `token`, `secret`, `password`, or ending in `key` within `library` and `notes`,
+  with the same rules inside each composition. Every extension with project read
+  access sees the rest; keep credentials in extension variables or storage.
+- A snapshot above 8 Mi characters of JSON makes `project.get()` reject until the
+  project is smaller.
+
+Events reach listeners inside the extension's document. The host sends the
+occurrences of subscribed events together with the state change, at most once per
+flush. Within one flush, `time` and `selection` deliver only their latest value,
+repeated `project:changed` of the same `kind` arrive once, and other events keep
+their order. The synchronous reads return the state as of the latest delivery.
+
+Each extension is limited to 200 registrations, 2,000 live callback handles, 50 open panel views, 200 RPC messages/s, 1 MiB per RPC payload, 256 KiB of storage with keys at most 128 characters, and 50 logs/s. These limits apply to messages from the extension; data the host sends, such as project snapshots, is not limited by them.
+
+### Trusted-only APIs and publishing
 
 The trusted-only namespaces are `api.render`, `api.host`, `api.services`,
 `api.inspector`, `api.anim`, `api.model`, `api.history`, `api.edit`,
@@ -116,10 +169,13 @@ The trusted-only namespaces are `api.render`, `api.host`, `api.services`,
 `api.ui.controls`, `api.ui.modal`, `api.ui.menu`, `api.ui.drag`,
 `api.ui.gesture`, `api.ui.mount`, `api.media.importFiles`,
 `api.media.assets`, `api.media.audio`, and `api.media.fonts`.
-Publishing scans direct uses of these names and network or clipboard APIs and
-blocks undeclared permissions. This text scan does not detect destructured
-aliases or dynamic property access. Local extensions made or forked on this Mac
-are trusted and keep working without permission declarations.
+Publishing scans direct uses of these names, network and clipboard APIs, and
+project reads (`api.project.get`, `api.project.selection`, `api.project.snapshot`, and `on('project:changed')`
+or `on('selection')`), and blocks undeclared permissions. Below `apiVersion: 3`
+every such use is undeclared, and the repair says to set `apiVersion: 3` as well
+as declare the permission. This text scan does not
+detect destructured aliases or dynamic property access. Local extensions made or
+forked on this Mac are trusted and keep working without permission declarations.
 
 Extensions you make here run with full access. Anything you publish runs
 sandboxed for other people unless it declares `full-access`. Run **Test in
@@ -134,13 +190,23 @@ Full types: `api.ts` (next to this file in the agent API pack). Summary:
 
 In a Store sandbox, these methods return Promises. Await them even when the
 in-realm type in `api.ts` shows a synchronous result: `api.commands.run`,
-`api.project.apply/select/setTime/play/pause/undo/redo/snapshot`,
+`api.project.get/apply/select/setTime/play/pause/undo/redo/snapshot`,
 `api.transport.setTime/play/pause/toggle/step`, `api.assets.get`,
 `api.storage.get/set/delete`, `api.media.getImportDefaults`, `api.ui.icon`,
-and `api.extensions.list`. Methods already typed as asynchronous, such as
-`api.assets.pick/import/readText` and `api.ui.confirm`, remain asynchronous.
-Reads from the project mirror (`api.project.get/revision/selection/time/playing`
-and `api.transport.time/playing`) stay synchronous.
+and `api.extensions.list`. `apiVersion` 1 and 2 code gets the same Promises;
+the Sandbox check reports code that uses one of their results without awaiting
+it. `api.project.get` needs `apiVersion: 3` and `project:read`, so older code
+cannot read the project in the sandbox at all. Methods already typed as
+asynchronous, such as `api.assets.pick/import/readText` and `api.ui.confirm`, remain asynchronous.
+`api.project.revision/selection/time/playing` and `api.transport.time/playing`
+stay synchronous.
+
+```ts
+api.events.on('project:changed', async () => {
+  const project = await api.project.get();
+  render(project.layers);
+});
+```
 
 | Sandbox-safe | Trusted-only (`permissions: ["full-access"]`) |
 | --- | --- |
@@ -151,9 +217,9 @@ and `api.transport.time/playing`) stay synchronous.
 Sandboxed panels render their `component` or `build` content in a separate
 view iframe. `panels.header`, `panels.moveSlot`, and `panels.library.render`
 are unavailable there; the host owns the panel chrome. Declare `network`,
-`clipboard`, `assets`, or `project:write` when using their corresponding
-capabilities. `full-access` installs run with the in-realm API after the
-person installing the extension accepts the trust dialog.
+`clipboard`, `assets`, `project:read`, or `project:write` (with `apiVersion: 3`)
+when using their corresponding capabilities. `full-access` installs run with the
+in-realm API after the person installing the extension accepts the trust dialog.
 
 - **panels** — `register({ id, title, component?, build?, size, min, flush, noscroll, headless })`, `open(id, dock?)` or `open(id, { dock, index })`, `close`, `isOpen`, `refresh`, `list`.
   `component` is a Svelte 5 component receiving `{ panelId, spec }`. `build(body)` is the imperative alternative.
@@ -407,15 +473,18 @@ reads it at runtime. It never carries the value in its source.
   (mode 600, secrets sealed with the macOS keychain through `safeStorage`). The user
   enters them in Settings › Extensions (Set up, or Variables… on the extension's
   page). Removing the extension asks whether to delete them too.
-- **Shared realm.** Extensions run in one renderer, so a value delivered to one
-  extension is readable by any running extension. Treat values as belonging to the
-  Powermove profile.
+- **Shared realm.** Local and full-access extensions run in the editor's renderer,
+  which holds every extension's values, so any of them can read a value delivered to
+  another. A sandboxed Store extension receives only its own. Treat values as
+  belonging to the Powermove profile.
 - `powermove serve` hosts do not support variables yet.
 
 ## Rules the kernel enforces
 
 - Errors in `activate` → extension is disabled with the message shown in Mods; the app keeps running.
 - Two runtime errors within 10 s → auto-disabled.
+- A sandboxed extension that stops answering for 8 s, or whose process crashes → its process is ended and it is turned off.
+- A sandboxed extension that has not activated within 10 s → not loaded; if it also stopped answering (it is spinning), its process is ended and it is turned off instead, with one notice.
 - `apiVersion` newer than the app → not loaded (“needs update”).
 - Edits go through the typed boundary: locked layers and hand-edited channels are respected.
 

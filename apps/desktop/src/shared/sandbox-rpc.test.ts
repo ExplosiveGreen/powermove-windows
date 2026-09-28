@@ -61,17 +61,17 @@ it('rejects an oversized reply from a sandbox callback', async () => {
   const { left } = pair({}, { huge: () => 'x'.repeat(2 * 1024 * 1024) }, 500);
   await expect(left.call('huge')).rejects.toMatchObject({ code: 'resource_limit' });
 });
-it('accepts the documented larger project mirror only on a trusted receiver', async () => {
+it('does not meter what the kernel sends on a trusted port', async () => {
   const channel = new MessageChannel();
-  const mirror = vi.fn(), other = vi.fn();
-  const host = createRpc(channel.port1 as unknown as MessagePort, {});
-  const view = createRpc(channel.port2 as unknown as MessagePort, { mirror, other }, 100, { maxMirrorBytes: 16 * 1024 * 1024 + 8192 });
-  close.push(() => { host.close(); view.close(); });
-  host.notify('mirror', { project: 'x'.repeat(2 * 1024 * 1024) });
-  host.notify('other', 'x'.repeat(2 * 1024 * 1024));
-  await new Promise(resolve => setTimeout(resolve, 10));
-  expect(mirror).toHaveBeenCalledTimes(1);
-  expect(other).not.toHaveBeenCalled();
+  const tick = vi.fn();
+  const host = createRpc(channel.port1 as unknown as MessagePort, { big: () => 'x'.repeat(4 * 1024 * 1024) });
+  const doc = createRpc(channel.port2 as unknown as MessagePort, { tick }, 1000, { trusted: true });
+  close.push(() => { host.close(); doc.close(); });
+  host.notify('tick', { time: 1 }, [['note', 'x'.repeat(2 * 1024 * 1024)]]);
+  for (let index = 0; index < 300; index++) host.notify('tick', { time: index }, []);
+  expect(await doc.call('big')).toHaveLength(4 * 1024 * 1024); // replies from the host side are not metered either
+  await new Promise(resolve => setTimeout(resolve, 20));
+  expect(tick).toHaveBeenCalledTimes(301);
 });
 it('shares the message rate budget across an extension runtime and view', async () => {
   const budget = createRpcBudget();
@@ -85,51 +85,42 @@ it('shares the message rate budget across an extension runtime and view', async 
   expect(results.filter(item => item.status === 'fulfilled')).toHaveLength(200);
   expect(results.filter(item => item.status === 'rejected')).toHaveLength(100);
 });
-it('delivers 120 Hz host mirrors and callbacks without spending the callback budget on mirrors', async () => {
+it('delivers 120 Hz host ticks and callbacks to a trusted kernel port without metering them', async () => {
   let now = 1000;
   const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
   const channel = new MessageChannel();
   const limited = vi.fn();
-  let mirroredTime = 0;
+  let tickedTime = 0;
   const host = createRpc(channel.port1 as unknown as MessagePort, {}, 1000);
-  const child = createRpc(channel.port2 as unknown as MessagePort, { mirror: (time: number) => { mirroredTime = time; } }, 1000, {
-    trustedHostMirrors: true, onSustainedLimit: limited,
-  } as Parameters<typeof createRpc>[3]);
+  const child = createRpc(channel.port2 as unknown as MessagePort, { tick: (time: number) => { tickedTime = time; } }, 1000, { trusted: true, onSustainedLimit: limited });
   close.push(() => { host.close(); child.close(); clock.mockRestore(); });
-  const callback = child.handle((time: number) => ({ time, mirroredTime }));
+  const callback = child.handle((time: number) => ({ time, tickedTime }));
   for (let second = 0; second < 4; second++) {
     const results: Promise<unknown>[] = [];
     for (let tick = 1; tick <= 120; tick++) {
       const time = second + tick / 120;
-      host.notify('mirror', time);
+      host.notify('tick', time);
       results.push(host.invokeHandle(callback, time));
     }
     const settled = await Promise.allSettled(results);
     expect(settled.filter(result => result.status === 'fulfilled')).toHaveLength(120);
     for (const result of settled) if (result.status === 'fulfilled') {
-      expect((result.value as any).mirroredTime).toBe((result.value as any).time);
+      expect((result.value as any).tickedTime).toBe((result.value as any).time);
     }
     now += 1000;
   }
   expect(limited).not.toHaveBeenCalled();
 });
 
-it('keeps mirror size/depth checks and the host inbound rate limit with trusted child mirrors', async () => {
+it('still meters what a trusted-port sandbox sends to the kernel', async () => {
   const channel = new MessageChannel();
-  const hostMirror = vi.fn(), childMirror = vi.fn();
-  const host = createRpc(channel.port1 as unknown as MessagePort, { mirror: hostMirror }, 1000);
-  const child = createRpc(channel.port2 as unknown as MessagePort, { mirror: childMirror }, 1000, {
-    trustedHostMirrors: true, maxMirrorBytes: 1024,
-  } as Parameters<typeof createRpc>[3]);
+  const hostTick = vi.fn();
+  const host = createRpc(channel.port1 as unknown as MessagePort, { tick: hostTick }, 1000);
+  const child = createRpc(channel.port2 as unknown as MessagePort, {}, 1000, { trusted: true });
   close.push(() => { host.close(); child.close(); });
-  host.notify('mirror', 'x'.repeat(1024));
-  let nested: unknown = 'leaf';
-  for (let depth = 0; depth < 70; depth++) nested = { next: nested };
-  host.notify('mirror', nested);
-  for (let tick = 0; tick < 201; tick++) child.notify('mirror', tick);
+  for (let tick = 0; tick < 201; tick++) child.notify('tick', tick);
   await new Promise(resolve => setTimeout(resolve, 20));
-  expect(childMirror).not.toHaveBeenCalled();
-  expect(hostMirror).toHaveBeenCalledTimes(200);
+  expect(hostTick).toHaveBeenCalledTimes(200);
 });
 it('reports a sustained over-rate sender after three seconds', async () => {
   let now = 1_000;

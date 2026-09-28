@@ -1,6 +1,6 @@
-import type { PowermoveAPI } from '../src/kernel/api';
+import type { PowermoveAPI, Selection } from '../src/kernel/api';
 import type { PMRegistry } from '../src/legacy/registry';
-import { createRpc, type Rpc, type HandleId } from '../../shared/sandbox-rpc';
+import { createRpc, serializeRpcError, type Rpc, type HandleId } from '../../shared/sandbox-rpc';
 import { install as installEase } from '../src/legacy/core/easing';
 import { CHANNELS_3D, projectPoint, inversePlane } from '../src/legacy/core/space-3d';
 
@@ -11,6 +11,22 @@ export class PermissionError extends Error {
     this.name = 'PermissionError';
   }
 }
+/** How to get read access. Manifest permissions exist from apiVersion 3, so older code has to move up first. */
+export const projectReadHint = (apiVersion: number): string => apiVersion < 3
+  ? 'Set "apiVersion": 3 and declare "project:read" in the manifest\'s permissions.'
+  : 'Declare "project:read" in the manifest\'s permissions.';
+export class ProjectReadPermissionError extends Error {
+  readonly code = 'project:read';
+  constructor(member: string, apiVersion: number) {
+    super(`${member} requires project:read permission. ${projectReadHint(apiVersion)}`);
+    this.name = 'PermissionError';
+  }
+}
+/** Members that read the project: gated on `project:read` (or `project:write`), reported under these names. */
+export const PROJECT_READ_MEMBERS: ReadonlySet<string> = new Set(['project.get', 'project.selection', 'project.snapshot', "events.on('project:changed')", "events.on('selection')"]);
+/** Events that describe the project, so they need read access too. */
+export const PROJECT_READ_EVENTS: ReadonlySet<string> = new Set(['project:changed', 'selection']);
+export const canReadProject = (permissions: readonly string[] | undefined): boolean => !!permissions?.some(permission => permission === 'project:read' || permission === 'project:write');
 export class ProjectWritePermissionError extends Error {
   readonly code = 'project:write';
   constructor(member: string) {
@@ -19,7 +35,8 @@ export class ProjectWritePermissionError extends Error {
   }
 }
 export interface SandboxControl {
-  update(next: SandboxMirrorUpdate): void;
+  /** The kernel's one notification per flush: apply `delta`, then dispatch `events` to local listeners in order. */
+  tick(delta: Partial<SandboxState>, events: SandboxEvent[]): void;
   ready(): Promise<unknown>;
   dispose(): void;
   setQuiet(on: boolean): void;
@@ -28,12 +45,18 @@ export interface SandboxControl {
   unmountPanel(token: string): void;
 }
 export const sandboxControl = (api: PowermoveAPI): SandboxControl => (api as unknown as { __sandbox: SandboxControl }).__sandbox;
-export interface SandboxMirror { project: unknown; revision: number; selection: unknown; time: number; playing: boolean }
-/** A clock/selection update retains the last sanitized document snapshot. */
-export type SandboxMirrorUpdate = Pick<SandboxMirror, 'revision' | 'time' | 'playing'> & Partial<Pick<SandboxMirror, 'project' | 'selection'>>;
+/**
+ * What every sandbox document holds without asking: small, pushed as deltas
+ * in `tick`. `generation` names the project snapshot `project.get()` would
+ * return; `selection` is null without project read access.
+ */
+export interface SandboxState { time: number; playing: boolean; revision: number; generation: number; selection: Selection | null }
+export type SandboxEvent = [name: string, payload: unknown];
+/** Reply to `project-snapshot`. `unchanged`: this document was already sent that generation, so its copy stands. */
+export type SandboxSnapshot = { generation: number; json: string } | { generation: number; tooLarge: true } | { generation: number; unchanged: true };
 export interface SandboxInit {
   id: string; apiVersion: number; manifest: PowermoveAPI['manifest']; vars: Record<string, string>;
-  theme: { scheme: string; tokens: Record<string, string> }; project: SandboxMirror; bundleUrl: string;
+  theme: { scheme: string; tokens: Record<string, string> }; state: SandboxState; bundleUrl: string;
   catalog?: Record<string, Array<Record<string, any>>>;
   activeTheme?: string;
 }
@@ -129,18 +152,43 @@ export function panelInfo(def: Record<string, any>): SandboxPanelInfo {
  * through `api.storage` and `api.events`. In view mode:
  *   - registries (commands, effects, panels, status, keybindings, ...) are
  *     recorded locally and never forwarded: the runtime already owns them;
- *   - `events.on` subscriptions are forwarded, so panel UI stays live;
- *   - reads (project mirror, vars, storage.get, extensions.list, ...) work;
+ *   - event interest is forwarded, so panel UI stays live;
+ *   - reads (project state and snapshots, vars, storage.get,
+ *     extensions.list, ...) work;
  *   - while the view's `activate` runs, side-effecting calls (panels.open,
  *     toasts, storage.set, project edits, events.emit, ...) are dropped,
  *     because the runtime's own `activate` already performed them once.
+ *
+ * Data plane, the same in both modes (design: docs/sandbox-data-plane.md §3).
+ * The document holds a small SandboxState (time, playing, revision,
+ * generation, selection) that the kernel keeps current with at most one
+ * `tick(delta, events)` per flush, so `time()`, `playing()`, `revision()` and
+ * `selection()` are synchronous. The project itself is never pushed:
+ * `project.get()` is async and pulls `project-snapshot` only when the cached
+ * copy's generation is behind the state's, with one call in flight shared by
+ * every caller; the copy is parsed and deep-frozen. `events.on` listeners stay
+ * in this document: the first listener for a name registers interest with
+ * the kernel and the last one withdraws it, so no callback handle crosses and
+ * an occurrence costs no round trip. Reading the project (`get`,
+ * `selection`, the `project:changed` and `selection` events) needs
+ * apiVersion 3 and `project:read` or `project:write`; the kernel enforces
+ * the permission again on its side.
  */
 export type SandboxMode = 'runtime' | 'view';
 const VIEW_READS = new Set(['storage.get', 'assets.get', 'assets.readText', 'media.getImportDefaults', 'ui.icon']);
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const item of Object.values(value)) deepFreeze(item);
+  }
+  return value;
+}
 
 /** A per-iframe API. Only serializable values and callback ids cross the port. */
 export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode = 'runtime'): PowermoveAPI {
-  let mirror = init.project;
+  /* Project reads need apiVersion 3 and project:read (or project:write); the manifest parser keeps permissions off older manifests. */
+  const readable = init.apiVersion >= 3 && canReadProject(init.manifest.permissions);
+  const state: SandboxState = { ...init.state, selection: readable ? deepFreeze(init.state.selection ?? null) : null };
   /** True while a view's `activate` replays; see the mode comment above. */
   let quiet = false;
   const panelPorts = new Map<string, Rpc>();
@@ -183,6 +231,11 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
   const restricted = (name: string) => (..._args: unknown[]) => { report('permission', name); throw new PermissionError(name, 'project.apply or the pure matrix helpers'); };
   const send = (method: string, ...args: unknown[]): Promise<any> => {
     if (quiet && method === 'invoke' && !VIEW_READS.has(`${args[0]}.${args[1]}`)) return Promise.resolve(undefined);
+    // A rendered frame shows the project as much as its data does.
+    if (method === 'invoke' && args[0] === 'project' && args[1] === 'snapshot' && !readable) {
+      report('permission', 'project.snapshot');
+      return Promise.reject(new ProjectReadPermissionError('project.snapshot', init.apiVersion));
+    }
     if (method === 'invoke' && !init.manifest.permissions?.includes('project:write')) {
       const [namespace, member, params] = args;
       const command = Array.isArray(params) ? params[0] : undefined;
@@ -232,6 +285,48 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     return { dispose };
   };
   const handle = (fn: (...args: any[]) => unknown): HandleId => rpc.handle(fn);
+  /* The parsed snapshot of the newest generation fetched; see the data plane comment above. */
+  let snapshot: { generation: number; value?: unknown; tooLarge?: true } | null = null;
+  let inflight: Promise<void> | null = null;
+  const fetchSnapshot = (): Promise<void> => inflight ??= (rpc.call('project-snapshot') as Promise<SandboxSnapshot>).then(reply => {
+    // `unchanged` names the generation already held here: the copy stands.
+    if ('unchanged' in reply || snapshot && reply.generation < snapshot.generation) return;
+    snapshot = 'json' in reply ? { generation: reply.generation, value: deepFreeze(JSON.parse(reply.json)) } : { generation: reply.generation, tooLarge: true };
+  }).finally(() => { inflight = null; });
+  const readProject = async (): Promise<unknown> => {
+    const wanted = state.generation;
+    /* A reply the kernel built before the change this document already heard
+       about is one generation behind; the next call is not. */
+    for (let attempt = 0; attempt < 3 && !(snapshot && snapshot.generation >= wanted); attempt++) await fetchSnapshot();
+    if (!snapshot) throw new Error('project.get() could not read the project');
+    if (snapshot.tooLarge) throw new Error('The project is larger than the 8 Mi character sandbox snapshot limit, so project.get() is unavailable until it shrinks');
+    return snapshot.value;
+  };
+  const raise = (error: unknown): void => { try { rpc.notify('runtime-error', serializeRpcError(error)); } catch { /* port closed */ } };
+  /* Listeners live here; the kernel only learns which names have one. */
+  const listeners = new Map<string, { fns: Set<{ fn: (payload: unknown) => unknown }>; interest: { dispose(): void } }>();
+  const listen = (event: string, fn: (payload: any) => unknown): { dispose(): void } => {
+    const name = String(event);
+    if (typeof fn !== 'function') throw new TypeError('events.on needs a listener function');
+    if (PROJECT_READ_EVENTS.has(name) && !readable) {
+      report('permission', `events.on('${name}')`);
+      throw new ProjectReadPermissionError(`events.on('${name}')`, init.apiVersion);
+    }
+    let entry = listeners.get(name);
+    if (!entry) { entry = { fns: new Set(), interest: registration('events', { event: name }) }; listeners.set(name, entry); }
+    const listener = { fn };
+    entry.fns.add(listener);
+    const owner = entry;
+    let disposed = false;
+    const dispose = (): void => {
+      if (disposed) return; disposed = true;
+      owner.fns.delete(listener);
+      if (owner.fns.size || listeners.get(name) !== owner) return;
+      listeners.delete(name); owner.interest.dispose();
+    };
+    disposers.push(dispose);
+    return { dispose };
+  };
   const simpleRegister = (namespace: string) => (definition: unknown) => registration(namespace, definition);
   const api: Record<string, any> = {
     id: init.id, apiVersion: init.apiVersion, manifest: init.manifest,
@@ -296,15 +391,21 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
          the icon on the extension's art. */
       return registration('panels', panelInfo(def), [], def);
     }, list: () => list('panels').map(item => item.id), open: (id: string, options?: unknown) => fire('invoke', 'panels', 'open', options === undefined ? [id] : [id, options]), close: (id: string) => fire('invoke', 'panels', 'close', [id]), refresh: (id: string) => fire('invoke', 'panels', 'refresh', [id]), isOpen: () => false },
-    project: { get: () => { if (mirror.project && typeof mirror.project === 'object' && 'tooLarge' in mirror.project) throw new Error('Project mirror exceeds 8 MiB; project.get() is unavailable at this revision'); return mirror.project; }, revision: () => mirror.revision, selection: () => mirror.selection,
-      time: () => mirror.time, playing: () => mirror.playing,
+    project: { get: () => {
+      if (!readable) { report('permission', 'project.get'); return Promise.reject(new ProjectReadPermissionError('project.get', init.apiVersion)); }
+      return readProject();
+    }, revision: () => state.revision, selection: () => {
+      if (!readable) { report('permission', 'project.selection'); throw new ProjectReadPermissionError('project.selection', init.apiVersion); }
+      return state.selection;
+    },
+      time: () => state.time, playing: () => state.playing,
       apply: (...args: unknown[]) => later('project.apply', 'invoke', 'project', 'apply', args), select: (...args: unknown[]) => later('project.select', 'invoke', 'project', 'select', args),
       setTime: (time: number) => later('project.setTime', 'invoke', 'project', 'setTime', [time]), play: () => later('project.play', 'invoke', 'project', 'play', []), pause: () => later('project.pause', 'invoke', 'project', 'pause', []), undo: () => later('project.undo', 'invoke', 'project', 'undo', []), redo: () => later('project.redo', 'invoke', 'project', 'redo', []), snapshot: (...args: unknown[]) => send('invoke', 'project', 'snapshot', args) },
-    transport: { time: () => mirror.time, playing: () => mirror.playing, setTime: (time: number) => later('transport.setTime', 'invoke', 'project', 'setTime', [time]), play: () => later('transport.play', 'invoke', 'project', 'play', []), pause: () => later('transport.pause', 'invoke', 'project', 'pause', []), toggle: () => later('transport.toggle', 'invoke', 'project', mirror.playing ? 'pause' : 'play', []), step: (frames: number) => later('transport.step', 'invoke', 'transport', 'step', [frames]) },
+    transport: { time: () => state.time, playing: () => state.playing, setTime: (time: number) => later('transport.setTime', 'invoke', 'project', 'setTime', [time]), play: () => later('transport.play', 'invoke', 'project', 'play', []), pause: () => later('transport.pause', 'invoke', 'project', 'pause', []), toggle: () => later('transport.toggle', 'invoke', 'project', state.playing ? 'pause' : 'play', []), step: (frames: number) => later('transport.step', 'invoke', 'transport', 'step', [frames]) },
     assets: { pick: (...args: unknown[]) => send('invoke', 'assets', 'pick', args), import: (...args: unknown[]) => send('invoke', 'assets', 'import', args), get: (id: string) => later('assets.get', 'invoke', 'assets', 'get', [id]), readText: (id: string) => send('invoke', 'assets', 'readText', [id]) },
     storage: { get: (key: string) => later('storage.get', 'invoke', 'storage', 'get', [key]), set: (key: string, value: unknown) => later('storage.set', 'invoke', 'storage', 'set', [key, value]), delete: (key: string) => later('storage.delete', 'invoke', 'storage', 'delete', [key]) },
     media: partlyTrusted('media', { registerImportDefaults: simpleRegister('media-defaults'), getImportDefaults: () => later('media.getImportDefaults', 'invoke', 'media', 'getImportDefaults', []) }, report),
-    events: { on(event: string, fn: (...args: any[]) => unknown) { const id = handle(fn); return registration('events', { event, fn: id }, [id]); }, emit: (event: string, payload: unknown) => fire('invoke', 'events', 'emit', [event, payload]) },
+    events: { on: listen, emit: (event: string, payload: unknown) => fire('invoke', 'events', 'emit', [event, payload]) },
     ui: partlyTrusted('ui', { toast: (message: string, options?: unknown) => fire('invoke', 'ui', 'toast', options === undefined ? [message] : [message, options]), confirm: (...args: unknown[]) => send('invoke', 'ui', 'confirm', args), icon: (...args: unknown[]) => later('ui.icon', 'invoke', 'ui', 'icon', args), controls: trustedOnly('ui.controls', report), modal: trustedOnly('ui.modal', report), menu: trustedOnly('ui.menu', report), drag: trustedOnly('ui.drag', report), gesture: trustedOnly('ui.gesture', report), mount: trustedOnly('ui.mount', report) }, report),
     vars: { get: (key: string) => vars[key], has: (key: string) => Object.hasOwn(vars, key), keys: () => Object.keys(vars) },
     extensions: { list: () => later('extensions.list', 'extensions-list'), setUp: (id: string) => send('invoke', 'extensions', 'setUp', [id]),
@@ -322,7 +423,16 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     planeContains: restricted('space3d.planeContains') };
   api.on = api.events.on;
   const control: SandboxControl = {
-    update(next: SandboxMirrorUpdate) { mirror = { ...mirror, ...next }; },
+    tick(delta: Partial<SandboxState>, events: SandboxEvent[]) {
+      if (delta) {
+        Object.assign(state, delta);
+        if ('selection' in delta) state.selection = readable ? deepFreeze(delta.selection ?? null) : null;
+      }
+      for (const [name, payload] of events ?? []) {
+        const entry = listeners.get(name);
+        if (entry) for (const { fn } of [...entry.fns]) { try { void fn(payload); } catch (error) { raise(error); } }
+      }
+    },
     ready: async () => { await Promise.all([...registrations]); if (registrationFailure) throw registrationFailure; },
     dispose() {
       for (const port of panelPorts.values()) port.close();

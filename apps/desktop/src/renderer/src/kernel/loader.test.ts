@@ -6,6 +6,12 @@ import { resetExtensionsStore } from './extensions.svelte';
 import type { HostDeps } from './host';
 import { createLoader, planLoad, type BuiltinFactory } from './loader';
 import { createKernel, type Kernel } from './registries';
+import { createSandboxRuntime } from './sandbox-host';
+
+vi.mock('./sandbox-host', async (original) => {
+  const actual = await original<typeof import('./sandbox-host')>();
+  return { ...actual, createSandboxRuntime: vi.fn(actual.createSandboxRuntime) };
+});
 
 /* ── fixtures ────────────────────────────────────────────── */
 
@@ -709,6 +715,48 @@ it('publishes record changes after the async bridge read and runtime state befor
   loader.reportRuntimeError('flaky', new Error('boom'));
   await loader.whenIdle();
   expect(unloaded).toMatchObject([{ enabled: false, health: { state: 'runtime-error' } }]);
+  await loader.dispose();
+});
+
+it('turns an extension off at the first sandbox_fatal error', async () => {
+  const bridge = fakeBridge([rec('spinner')]);
+  const { deps, toasts } = fakeDeps();
+  const loader = createLoader({ kernel, bridge: bridge.bridge, deps, builtins: { spinner: async () => ({ default: () => undefined }) } });
+  await loader.boot();
+  await loader.whenIdle();
+  expect(loader.activeIds()).toEqual(['spinner']);
+  loader.reportRuntimeError('spinner', Object.assign(new Error('stopped responding'), { code: 'sandbox_fatal' }));
+  await loader.whenIdle();
+  expect(loader.activeIds()).toEqual([]);
+  expect(loader.records()[0]).toMatchObject({ enabled: false, health: { state: 'runtime-error', error: expect.stringContaining('stopped responding') } });
+  expect(toasts).toHaveLength(1);
+  await loader.dispose();
+});
+
+it('turns off a sandbox that spun while activating, with one report and one toast', async () => {
+  const store = rec('spinner', { trust: 'store', bundleUrl: 'app://x/bundle.js', manifest: { id: 'spinner', name: 'Spinner', version: '1.0.0', apiVersion: 3 } });
+  const bridge = fakeBridge([store]);
+  const { deps, toasts } = fakeDeps();
+  vi.mocked(createSandboxRuntime).mockRejectedValueOnce(Object.assign(new Error('stopped responding while activating'), { code: 'sandbox_fatal' }));
+  const loader = createLoader({ kernel, bridge: bridge.bridge, deps, builtins: {} });
+  await loader.boot();
+  await loader.whenIdle();
+  expect(loader.activeIds()).toEqual([]);
+  expect(loader.records()[0]).toMatchObject({ enabled: false, health: { state: 'runtime-error', error: 'stopped responding while activating' } });
+  expect(bridge.health).toEqual([{ id: 'spinner', health: { state: 'runtime-error', error: 'stopped responding while activating' } }]);
+  expect(toasts).toEqual(['Spinner stopped working — check Mods']);
+  await loader.dispose();
+});
+
+it('leaves a sandbox its own activation deadline instead of racing it', async () => {
+  const store = rec('slow', { trust: 'store', bundleUrl: 'app://x/bundle.js', manifest: { id: 'slow', name: 'Slow', version: '1.0.0', apiVersion: 3 } });
+  const { deps, toasts } = fakeDeps();
+  const handle = { disposeAll: vi.fn() } as unknown as Awaited<ReturnType<typeof createSandboxRuntime>>['handle'];
+  vi.mocked(createSandboxRuntime).mockImplementationOnce(() => new Promise(resolve => setTimeout(resolve, 60, { handle, dispose: vi.fn() })));
+  const loader = createLoader({ kernel, bridge: null, deps, builtins: {}, activateTimeoutMs: 20 });
+  expect(await loader.activate(store)).toBe(true);
+  expect(vi.mocked(createSandboxRuntime).mock.lastCall?.[4]).toEqual({ timeoutMs: 20 });
+  expect(toasts).toEqual([]);
   await loader.dispose();
 });
 

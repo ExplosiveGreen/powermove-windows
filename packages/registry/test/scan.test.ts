@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { scanCapabilities, scanFiles, scanText } from '../src/scan';
+import { declarePermissionsHint, scanCapabilities, scanFiles, scanText, undeclaredCapabilities, undeclaredCapabilitiesText } from '../src/scan';
 /* Fixtures are assembled at runtime so no provider-shaped literal exists in
    the source: GitHub push protection and our own publish scanner would
    otherwise flag this test file. */
@@ -34,6 +34,19 @@ test('inline CSS declaration lists are not credentials', () => {
   const css = "el.style.cssText='position:absolute;right:124px;top:7px;z-index:6;display:flex;align-items:center';";
   expect(scanText('viewer.ts', css)).toEqual([]);
 });
+test('capability scanner finds direct project reads in source files only', () => {
+  expect(scanCapabilities([
+    { path: 'index.ts', text: 'api.project.get()\napi.project . selection()\napi.events.on("project:changed", f)\napi.on(\'selection\', f)\napi.events.on(`time`, f)\napi.project.revision()\napi.project.getter\non("selectionchange", f)' },
+    { path: 'Panel.svelte', text: '<script>const p = await api.project.get();</script>' },
+    { path: 'README.md', text: 'Call api.project.get() and on("selection", fn).' }
+  ])).toEqual([
+    { path: 'index.ts', line: 1, capability: 'project:read' },
+    { path: 'index.ts', line: 2, capability: 'project:read' },
+    { path: 'index.ts', line: 3, capability: 'project:read' },
+    { path: 'index.ts', line: 4, capability: 'project:read' },
+    { path: 'Panel.svelte', line: 1, capability: 'project:read' }
+  ]);
+});
 test('capability scanner finds network and clipboard uses in text files', () => {
   expect(scanCapabilities([
     { path: 'index.ts', text: 'fetch("https://example.com")\nnew WebSocket("wss://example.com")\nXMLHttpRequest\nnew EventSource("/events")\nnavigator.sendBeacon("/ping")\nnavigator.clipboard.writeText("hi")' },
@@ -49,4 +62,23 @@ test('capability scanner finds network and clipboard uses in text files', () => 
     { path: 'index.ts', line: 6, capability: 'clipboard' },
     { path: 'panel.svelte', line: 1, capability: 'clipboard' }
   ]);
+});
+test('below apiVersion 3 nothing is declared, and the repair says to raise apiVersion', () => {
+  const files = [{ path: 'panel.ts', text: 'api.on("project:changed", draw)\nfetch("https://example.com")' }];
+  // A legacy manifest can't carry permissions; one that does anyway grants nothing.
+  expect(undeclaredCapabilities(files, { apiVersion: 2, permissions: ['project:read', 'network'] })).toEqual([
+    { path: 'panel.ts', line: 1, capability: 'project:read' },
+    { path: 'panel.ts', line: 2, capability: 'network' }
+  ]);
+  expect(undeclaredCapabilities(files, { apiVersion: 3, permissions: ['project:write', 'network'] })).toEqual([]);
+  expect(undeclaredCapabilities(files, { apiVersion: 3, permissions: ['network'] })).toEqual([{ path: 'panel.ts', line: 1, capability: 'project:read' }]);
+  expect(declarePermissionsHint(['project:read'], 1)).toBe('Set `apiVersion: 3` and add `permissions: ["project:read"]` to manifest.json.');
+  expect(declarePermissionsHint(['project:read'], 3)).toBe('Add `permissions: ["project:read"]` to manifest.json.');
+  expect(undeclaredCapabilitiesText(undeclaredCapabilities(files, { apiVersion: 2 }), 2)).toBe(
+    'panel.ts:1 and 1 more place need the project:read, network permissions, which manifest.json doesn\'t declare. Set `apiVersion: 3` and add `permissions: ["project:read", "network"]` to manifest.json.'
+  );
+  expect(undeclaredCapabilitiesText([{ path: 'panel.ts', line: 1, capability: 'project:read' }], 3)).toBe(
+    'panel.ts:1 needs the project:read permission, which manifest.json doesn\'t declare. Add `permissions: ["project:read"]` to manifest.json.'
+  );
+  expect(undeclaredCapabilitiesText([], 3)).toBe('');
 });

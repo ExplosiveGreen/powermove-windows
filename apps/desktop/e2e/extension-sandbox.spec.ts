@@ -13,7 +13,8 @@ test('store code runs in an opaque iframe and network permission controls fetch'
   await cp(fixture, denied, { recursive: true });
   const manifest = JSON.parse(await readFile(path.join(denied, 'manifest.json'), 'utf8'));
   manifest.id = 'sandbox-no-network';
-  manifest.permissions = [];
+  // No network and no project:write; the fixture's panel still reads the project.
+  manifest.permissions = ['project:read'];
   await writeFile(path.join(denied, 'manifest.json'), JSON.stringify(manifest));
   await writeFile(path.join(session.userData, 'extensions-provenance.json'), JSON.stringify({
     'sandboxed-ext': { localId: 'sandboxed-ext', envKey: 'external-repo', origin },

@@ -5,7 +5,7 @@ import { decodeLoose, hashObject, parseCommit, parseTree, sha256Hex } from '@pow
 import { snapshot, SnapshotError, type SnapshotInput } from '@powermove/registry/snapshot';
 import { REGISTRY_LIMITS } from '@powermove/registry/limits';
 import { EXTENSION_API_VERSION, parseForkedFrom, parseManifest } from '@powermove/registry/manifest';
-import { scanCapabilities, scanFiles } from '@powermove/registry/scan';
+import { scanFiles, undeclaredCapabilities, undeclaredCapabilitiesText } from '@powermove/registry/scan';
 import { writeTarGz } from '@powermove/registry/tar';
 import type { Env } from '../env';
 import { extensions, objects, publishers, refs, releaseObjects, releases, repos } from '../db/schema';
@@ -296,8 +296,11 @@ export function publishRoutes(deps: PublishDeps = {}) {
           return [];
         }
       });
-      const undeclared = scanCapabilities(textFiles).filter((finding) => !manifest.permissions?.includes(finding.capability));
-      if (undeclared.length) throw new ApiError({ error: 'permission_undeclared', findings: undeclared });
+      // Permissions need apiVersion 3, so older code that uses a capability can't publish.
+      const undeclared = undeclaredCapabilities(textFiles, manifest);
+      if (undeclared.length) {
+        throw new ApiError({ error: 'permission_undeclared', findings: undeclared, detail: undeclaredCapabilitiesText(undeclared, manifest.apiVersion) });
+      }
       const scan = scanFiles(textFiles);
       const findings = [...scan.blocked, ...scan.waived];
       for (const waiver of body.waivers) {

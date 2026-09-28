@@ -25,6 +25,8 @@ test('error codes and status are exhaustive', () => {
   expect(W.ApiErrorBody.safeParse({ error: 'bogus' }).success).toBe(false);
   expect(new W.ApiError({ error: 'not_found' }).status).toBe(404);
   expect(new W.ApiError({ error: 'permission_undeclared', findings: [] }).status).toBe(422);
+  expect(W.ApiErrorBody.safeParse({ error: 'permission_undeclared', findings: [{ path: 'index.ts', line: 1, capability: 'project:read' }] }).success).toBe(true);
+  expect(W.ApiErrorBody.safeParse({ error: 'permission_undeclared', findings: [{ path: 'index.ts', line: 1, capability: 'assets' }] }).success).toBe(false);
 });
 const e = { params: {}, query: {}, body: {} }, coordinate = { handle: 'my-handle', slug: 'my-extension' }, releaseCoordinate = { ...coordinate, version: '1.0.0' };
 const req: Record<string, unknown> = {

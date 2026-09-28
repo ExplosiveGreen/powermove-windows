@@ -14,6 +14,7 @@ import {
   screen,
   session,
   shell,
+  webContents as allWebContents,
   type WebContents
 } from 'electron';
 import { mkdir, readFile, readdir } from 'node:fs/promises';
@@ -60,7 +61,9 @@ import { installMenu, installRendererMenuShortcutRouting } from './menu';
 import { openProjectForWindow, registerSaveIpc } from './save';
 import { ProjectFiles } from './project-files';
 import { registerShellIpc } from './shell';
-import { CONTENT_SECURITY_POLICY, SANDBOX_CONTENT_SECURITY_POLICY, extensionSandboxCsp } from './security-policy';
+import { CONTENT_SECURITY_POLICY, SANDBOX_CONTENT_SECURITY_POLICY, extensionSandboxCsp, sandboxFrameNavigationAllowed, sandboxHostOwner, sandboxProcessesToKill, type ContentsFrames } from './security-policy';
+import { SANDBOX_DOCUMENT, isSandboxHost, sandboxDocumentId, sandboxHost } from '../shared/sandbox-origin';
+import { EXTENSION_ID } from '../shared/extensions';
 import { createStore, installQuitFlush, registerStoreIpc, type Store } from './storage';
 import { registerThemeIpc } from './theme';
 import { backgroundTesting, backgroundWindowOptions } from './background-testing';
@@ -197,12 +200,86 @@ function errorResponse(status: number, message: string): Response {
 const SANDBOX_PATH = 'host/sandbox.html';
 const SANDBOX_CSP = SANDBOX_CONTENT_SECURITY_POLICY;
 
+/* Static files the sandbox document itself loads: its entry and chunks, the
+   stylesheets and fonts they reference. Nothing else of the app is served on
+   a sandbox host. */
+const SANDBOX_STATIC = /^(?:host\/[^/]+\.js|assets\/[^/]+\.css|assets\/fonts\/[^/]+\.(?:woff2?|ttf|otf))$/i;
+
+function rendererFile(rendererRoot: string, requestedPath: string): string | null {
+  const filePath = path.resolve(rendererRoot, requestedPath);
+  const relativePath = path.relative(rendererRoot, filePath);
+  return relativePath === '..' || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath) ? null : filePath;
+}
+
+/* Every installed extension id, once the registry exists: a sandbox host is
+   served and terminated only for the one id on it (sandboxHostOwner). */
+let installedExtensionIds: () => string[] = () => [];
+
+/**
+ * One Store extension's host, `app://<sandboxHost(id)>` (docs/sandbox-data-plane.md
+ * §1): its sandbox document, the static files that document loads, and its
+ * own bundle. A host no installed extension owns (or, fail closed, several
+ * would) serves nothing. Node's URL.origin is "null" for custom schemes, so
+ * the origin is spelled out.
+ */
+async function serveSandboxHost(requestUrl: URL, rendererRoot: string): Promise<Response> {
+  const host = requestUrl.host;
+  const owner = sandboxHostOwner(host, installedExtensionIds());
+  if (owner === null) return errorResponse(404, 'Not found');
+  const origin = `app://${host}`;
+  const requestedPath = decodeURIComponent(requestUrl.pathname).replace(/^\/+/, '');
+  if (requestedPath === SANDBOX_DOCUMENT) {
+    const id = sandboxDocumentId(requestUrl.href);
+    const manifest = id === owner ? sandboxManifestFor(id) : null;
+    if (!id || !manifest || requestUrl.searchParams.get('perms') !== (manifest.permissions ?? []).join(',')) return errorResponse(404, 'Not found');
+    const headers = responseHeaders('text/html; charset=utf-8');
+    headers['Cross-Origin-Resource-Policy'] = 'same-origin';
+    /* Development: the renderer runs from Vite, which has no built
+       out/renderer/host. Serve the document from Vite's own entry through
+       app:// so the frame keeps the same origin rules and CSP as a packaged
+       build (Vite answers /host/ext-sandbox.html with the app shell, which is
+       why the frame must not load it directly). */
+    if (devRendererUrl) {
+      const vite = new URL(devRendererUrl).origin;
+      const upstream = await fetch(`${vite}/sandbox/ext-sandbox.html`);
+      if (!upstream.ok) return errorResponse(502, 'Sandbox document unavailable from the dev server');
+      const html = (await upstream.text())
+        .replace('src="./ext-sandbox.ts"', `src="${vite}/sandbox/ext-sandbox.ts"`)
+        .replace('src="/@vite/client"', `src="${vite}/@vite/client"`);
+      headers['Content-Security-Policy'] = extensionSandboxCsp(id, manifest.permissions ?? [], origin, vite);
+      headers['Cache-Control'] = 'no-store';
+      return new Response(html, { headers });
+    }
+    headers['Content-Security-Policy'] = extensionSandboxCsp(id, manifest.permissions ?? [], origin);
+    return new Response(await readFile(path.join(rendererRoot, SANDBOX_DOCUMENT)), { headers });
+  }
+  const ext = /^ext\/([^/]+)\//.exec(requestedPath);
+  if (ext) {
+    // Another extension's bundle never loads from this host.
+    if (ext[1] !== owner) return errorResponse(404, 'Not found');
+    const asset = await serveExtensionAsset(requestedPath);
+    if (asset === null) return errorResponse(404, 'Not found');
+    const headers = responseHeaders('text/javascript; charset=utf-8');
+    headers['Cache-Control'] = 'no-store';
+    // The sandbox document is an opaque origin, so its module fetches carry `Origin: null`.
+    headers['Access-Control-Allow-Origin'] = '*';
+    return new Response(asset.body, { status: asset.status, headers });
+  }
+  const filePath = SANDBOX_STATIC.test(requestedPath) ? rendererFile(rendererRoot, requestedPath) : null;
+  if (!filePath) return errorResponse(404, 'Not found');
+  const headers = responseHeaders(MIME_TYPES[path.extname(filePath).toLowerCase()] ?? 'application/octet-stream');
+  // Vite marks the document's scripts and stylesheets crossorigin.
+  headers['Access-Control-Allow-Origin'] = '*';
+  return new Response(await readFile(filePath), { headers });
+}
+
 function registerAppProtocol(): void {
   const rendererRoot = path.resolve(__dirname, '../renderer');
 
   protocol.handle('app', async (request) => {
     try {
       const requestUrl = new URL(request.url);
+      if (isSandboxHost(requestUrl.host)) return await serveSandboxHost(requestUrl, rendererRoot);
       if (requestUrl.host !== 'powermove') {
         return errorResponse(404, 'Not found');
       }
@@ -218,51 +295,16 @@ function registerAppProtocol(): void {
         headers['Access-Control-Allow-Origin'] = '*';
         return new Response(asset.body, { status: asset.status, headers });
       }
-      /* Development: the renderer runs from Vite, which has no built
-         out/renderer/host. Serve the sandbox document from Vite's own entry
-         through app:// so the frame keeps the same origin rules and CSP as a
-         packaged build (Vite answers /host/ext-sandbox.html with the app
-         shell, which is why the frame must not load it directly). */
-      if (devRendererUrl && requestedPath === 'host/ext-sandbox.html') {
-        const id = requestUrl.searchParams.get('id') ?? '';
-        const manifest = sandboxManifestFor(id);
-        if (!manifest || requestUrl.searchParams.get('perms') !== (manifest.permissions ?? []).join(',')) return errorResponse(404, 'Not found');
-        const vite = new URL(devRendererUrl).origin;
-        const upstream = await fetch(`${vite}/sandbox/ext-sandbox.html`);
-        if (!upstream.ok) return errorResponse(502, 'Sandbox document unavailable from the dev server');
-        const html = (await upstream.text())
-          .replace('src="./ext-sandbox.ts"', `src="${vite}/sandbox/ext-sandbox.ts"`)
-          .replace('src="/@vite/client"', `src="${vite}/@vite/client"`);
-        const headers = responseHeaders('text/html; charset=utf-8');
-        headers['Content-Security-Policy'] = extensionSandboxCsp(id, manifest.permissions ?? [], 'app://powermove', vite);
-        headers['Cross-Origin-Resource-Policy'] = 'same-origin';
-        headers['Cache-Control'] = 'no-store';
-        delete headers['X-Frame-Options'];
-        return new Response(html, { headers });
-      }
-      const filePath = path.resolve(rendererRoot, requestedPath);
+      // Store extension documents load only from their own host (above).
+      if (requestedPath === SANDBOX_DOCUMENT) return errorResponse(404, 'Not found');
+      const filePath = rendererFile(rendererRoot, requestedPath);
+      if (!filePath) return errorResponse(403, 'Forbidden');
       const relativePath = path.relative(rendererRoot, filePath);
-
-      if (
-        relativePath === '..' ||
-        relativePath.startsWith(`..${path.sep}`) ||
-        path.isAbsolute(relativePath)
-      ) {
-        return errorResponse(403, 'Forbidden');
-      }
 
       const contents = await readFile(filePath);
       const contentType = MIME_TYPES[path.extname(filePath).toLowerCase()] ?? 'application/octet-stream';
       const headers = responseHeaders(contentType);
       if (relativePath === SANDBOX_PATH) headers['Content-Security-Policy'] = SANDBOX_CSP;
-      if (relativePath === 'host/ext-sandbox.html') {
-        const id = requestUrl.searchParams.get('id') ?? '';
-        const manifest = sandboxManifestFor(id);
-        if (!manifest || requestUrl.searchParams.get('perms') !== (manifest.permissions ?? []).join(',')) return errorResponse(404, 'Not found');
-        headers['Content-Security-Policy'] = extensionSandboxCsp(id, manifest.permissions ?? []);
-        headers['Cross-Origin-Resource-Policy'] = 'same-origin';
-        delete headers['X-Frame-Options'];
-      }
       if (relativePath.startsWith('host/') && relativePath.endsWith('.js')) headers['Access-Control-Allow-Origin'] = '*';
       if (/\.(?:woff2?|ttf|otf)$/i.test(relativePath)) headers['Access-Control-Allow-Origin'] = '*';
       return new Response(contents, { headers });
@@ -293,8 +335,12 @@ function secureWebContents(webContents: WebContents, devRendererUrl: string | un
   };
   webContents.on('will-navigate', guard);
   // Subframe navigations (frame-src allows about:/blob:) never fire
-  // will-navigate on the host, so they need their own hook.
-  webContents.on('will-frame-navigate', (event) => guard(event, event.url));
+  // will-navigate on the host, so they need their own hook. A Store
+  // extension's frame may load its sandbox document on its own host only.
+  webContents.on('will-frame-navigate', (event) => {
+    if (!event.isMainFrame && sandboxFrameNavigationAllowed(event.url, [frameUrl(event.frame), frameUrl(event.initiator)])) return;
+    guard(event, event.url);
+  });
   webContents.on('will-redirect', guard);
 
   webContents.setWindowOpenHandler(({ url, frameName }) => {
@@ -328,6 +374,11 @@ function secureWebContents(webContents: WebContents, devRendererUrl: string | un
 
     return { action: 'deny' };
   });
+}
+
+/** A frame's URL, or '' once it is gone (WebFrameMain throws after disposal). */
+function frameUrl(frame: Electron.WebFrameMain | null | undefined): string {
+  try { return frame && !frame.isDestroyed() ? frame.url : ''; } catch { return ''; }
 }
 
 function isAppMainFrame(webContents: WebContents | null, requestingUrl: string | undefined): boolean {
@@ -749,6 +800,38 @@ if (!hasSingleInstanceLock) {
     secureWebContents(contents, devRendererUrl);
   });
 
+  /* The kernel's watchdog found a Store extension unresponsive (spinning or
+     crashed). Removing its iframe would not stop a spinning process, so kill
+     the processes that run nothing but that extension's host. */
+  ipcMain.handle(IPC.sandboxTerminate, (event, extensionId: unknown): number => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!isTrustedSender(event) || !window || !editors.has(window)) throw new Error('Unauthorized IPC sender');
+    if (typeof extensionId !== 'string' || !EXTENSION_ID.test(extensionId)) throw new Error(`${IPC.sandboxTerminate}: invalid extension id`);
+    const contents: ContentsFrames[] = [];
+    for (const wc of allWebContents.getAllWebContents()) {
+      if (wc.isDestroyed()) continue;
+      try {
+        const main = wc.mainFrame;
+        contents.push({ mainFramePid: main.osProcessId, frames: main.framesInSubtree.map(frame => ({ url: frame.url, pid: frame.osProcessId })) });
+      } catch (error) {
+        // A process we cannot see into might be shared: kill nothing.
+        console.error('[sandbox] could not inspect frames; not terminating', error);
+        return 0;
+      }
+    }
+    // Another installed id on the same host would die with it: kill nothing.
+    const host = sandboxHost(extensionId);
+    if (sandboxHostOwner(host, [extensionId, ...installedExtensionIds()]) !== extensionId) {
+      console.error('[sandbox] extension host is not its own; not terminating', extensionId);
+      return 0;
+    }
+    let killed = 0;
+    for (const pid of sandboxProcessesToKill(host, contents)) {
+      try { process.kill(pid, 'SIGKILL'); killed++; } catch { /* already gone */ }
+    }
+    return killed;
+  });
+
   ipcMain.handle(IPC.ping, (event) => {
     if (!isTrustedSender(event)) {
       throw new Error('Unauthorized IPC sender');
@@ -867,6 +950,7 @@ if (!hasSingleInstanceLock) {
         isTrusted: isTrustedSender,
         beforeRemove
       });
+      installedExtensionIds = () => extensionRegistry.list().map((record) => record.id);
       storeDeps = { registry: extensionRegistry, builtinIds, beforeRemove, hasValues: (id) => vars.hasValues(id) };
       registerVarsIpc(ipcMain, { registry: extensionRegistry, vars, isTrusted: isTrustedSender });
       refreshRestoredExtensions = async (ids) => {

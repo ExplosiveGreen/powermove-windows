@@ -198,6 +198,14 @@ describe('publish: prepare', () => {
     await expect(publisher.publish('glass-blur', firstForm)).rejects.toThrow(/network permission/);
   });
 
+  it('blocks an apiVersion 2 project read, and says to set apiVersion 3 and declare project:read', async () => {
+    const { publisher } = await setup({ folder: files('api.on("selection", draw);\n') });
+    const plan = await publisher.prepare('glass-blur');
+    const text = 'Uses the \'selection\' event at index.ts:1 but doesn\'t declare the project:read permission. Set `apiVersion: 3` and add `permissions: ["project:read"]` to manifest.json.';
+    expect(plan.permissionFindings).toEqual([{ path: 'index.ts', line: 1, needs: 'project:read', text }]);
+    await expect(publisher.publish('glass-blur', firstForm)).rejects.toMatchObject({ code: 'folder_invalid', detail: text });
+  });
+
   it('refuses a fork identical to what was installed, before any network call', async () => {
     const { publisher, api } = await setup({ origin: {} });
     await expect(publisher.prepare('glass-blur')).rejects.toMatchObject({ body: { error: 'same_as_origin' } });

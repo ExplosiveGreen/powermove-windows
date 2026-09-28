@@ -7,9 +7,9 @@ import type { SandboxViewInit } from './shim-api';
 afterEach(() => { document.body.replaceChildren(); });
 
 const init = (panelId: string): SandboxViewInit => ({
-  id: 'fake-ext', apiVersion: 3, manifest: { id: 'fake-ext', name: 'Fake', version: '1.0.0', apiVersion: 3 }, vars: {},
+  id: 'fake-ext', apiVersion: 3, manifest: { id: 'fake-ext', name: 'Fake', version: '1.0.0', apiVersion: 3, permissions: ['project:read' as never] }, vars: {},
   theme: { scheme: 'dark', tokens: { '--accent': 'rgb(1 2 3)' } }, bundleUrl: 'fake://bundle',
-  project: { project: { id: 'p' }, revision: 3, selection: null, time: 0, playing: false },
+  state: { time: 0, playing: false, revision: 3, generation: 1, selection: null },
   mode: 'view', panelId, spec: { from: 'workspace' }, keys: [], size: { width: 320, height: 200 }
 });
 
@@ -51,6 +51,27 @@ it('replays activate quietly, keeps registrations local, and mounts the recorded
   expect(document.documentElement.dataset.theme).toBe('dark');
   expect(document.documentElement.style.getPropertyValue('--accent')).toBe('rgb(1 2 3)');
   expect(document.documentElement.style.width).toBe('320px');
+  view.dispose();
+  kernel.close(); runtime.close();
+});
+
+it('keeps ticks that arrive before the view has its API', async () => {
+  installSandboxRuntime();
+  const kernelChannel = new MessageChannel();
+  const runtimeChannel = new MessageChannel();
+  let answer!: (value: unknown) => void;
+  const kernel = createRpc(kernelChannel.port1, { mounted: () => {} });
+  const runtime = createRpc(runtimeChannel.port1, { definition: (id: string) => new Promise(resolve => { answer = resolve; }).then(() => ({ id, title: 'Fake', kind: 'build' })) });
+  const seen: number[] = [];
+  const module = { default(api: any) { api.panels.register({ id: 'fake-panel', title: 'Fake', build() { seen.push(api.project.revision(), api.project.time()); } }); } };
+  const target = document.createElement('div');
+  const pending = bootView(init('fake-panel'), kernelChannel.port2, runtimeChannel.port2, { load: async () => module, target });
+  kernel.notify('tick', { revision: 4 }, []);
+  kernel.notify('tick', { time: 2 }, []);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  answer(null);
+  const view = await pending;
+  expect(seen).toEqual([4, 2]);
   view.dispose();
   kernel.close(); runtime.close();
 });

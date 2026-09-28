@@ -17,7 +17,7 @@ import * as svelteInternalClient from 'svelte/internal/client';
 import * as svelteStore from 'svelte/store';
 import type { Component } from 'svelte';
 import { createRpc, serializeRpcError } from '../../shared/sandbox-rpc';
-import { createSandboxAPI, sandboxControl, sandboxReporter, type SandboxReporter, type SandboxInit, type SandboxKey, type SandboxKeyEvent, type SandboxMirrorUpdate, type SandboxViewInit } from './shim-api';
+import { createSandboxAPI, sandboxControl, sandboxReporter, type SandboxEvent, type SandboxReporter, type SandboxInit, type SandboxKey, type SandboxKeyEvent, type SandboxState, type SandboxViewInit } from './shim-api';
 import { isProperty, canAnimateContent, contentLabel } from '../src/legacy/core/content-properties';
 import { structuredProperties, pathTargets } from '../src/legacy/core/vector-paths';
 import { validMatteSource, MATTE_MODES } from '../src/legacy/core/matte';
@@ -80,19 +80,35 @@ function attachStyles(module: ExtensionModule, api: PowermoveAPI, doc: Document)
   else for (const css of module.__powermoveStyles ?? []) addStyle(css);
 }
 
+/* Ticks are deltas, so none may be dropped: until the document's API exists
+   they merge here and apply once it does. Events need a listener, and none
+   can exist before the API. */
+function tickQueue(): { tick(delta: Partial<SandboxState>, events: SandboxEvent[]): void; attach(control: ReturnType<typeof sandboxControl>): void } {
+  let control: ReturnType<typeof sandboxControl> | undefined;
+  let early: Partial<SandboxState> = {};
+  return {
+    tick(delta, events) { if (control) control.tick(delta, events); else Object.assign(early, delta); },
+    attach(next) { control = next; next.tick(early, []); early = {}; }
+  };
+}
+
 /** Runtime role: activate the extension and forward its registrations. */
 export async function bootRuntime(init: SandboxInit, port: MessagePort, load: BundleImporter = importBundle): Promise<void> {
   const apply = themeApplier();
   let control: ReturnType<typeof sandboxControl> | undefined;
+  const ticks = tickQueue();
+  // The kernel's port is trusted: what arrives on it is not size- or rate-limited.
   const live = createRpc(port, {
-    mirror: (snapshot: SandboxMirrorUpdate) => control?.update(snapshot),
+    tick: ticks.tick,
     theme: (theme: SandboxInit['theme']) => apply(theme),
     mountPanel: (panelId: string, token: string, viewPort: MessagePort) => control?.mountPanel(panelId, token, viewPort),
     unmountPanel: (token: string) => control?.unmountPanel(token),
-    dispose: () => control?.dispose()
-  }, 10_000, { maxMirrorBytes: 16 * 1024 * 1024 + 8192, maxHandles: 1000, trustedHostMirrors: true });
+    dispose: () => control?.dispose(),
+    ping: () => true
+  }, 10_000, { trusted: true, maxHandles: 1000 });
   const liveApi = createSandboxAPI(live, init);
   control = sandboxControl(liveApi);
+  ticks.attach(control);
   helperReport = sandboxReporter(live);
   apply(init.theme);
   const runtimeError = (error: unknown) => live.notify('runtime-error', serializeRpcError(error));
@@ -153,6 +169,7 @@ export async function bootView(init: SandboxViewInit, kernelPort: MessagePort, r
   const apply = themeApplier(doc);
   let keys = init.keys ?? [];
   let control: ReturnType<typeof sandboxControl> | undefined;
+  const ticks = tickQueue();
   let torn = false;
   const setSize = (size: { width: number; height: number } | undefined): void => {
     if (!size) return;
@@ -168,12 +185,12 @@ export async function bootView(init: SandboxViewInit, kernelPort: MessagePort, r
     runtime.close();
   };
   const kernel = createRpc(kernelPort, {
-    mirror: (snapshot: SandboxMirrorUpdate) => control?.update(snapshot),
+    tick: ticks.tick,
     theme: (theme: SandboxInit['theme']) => apply(theme),
     size: setSize,
     keys: (next: SandboxKey[]) => { keys = next; },
     dispose: teardown
-  }, 10_000, { maxMirrorBytes: 16 * 1024 * 1024 + 8192, maxHandles: 20, trustedHostMirrors: true });
+  }, 10_000, { trusted: true, maxHandles: 20 });
   const runtime = createRpc(runtimePort, {});
   helperReport = sandboxReporter(kernel);
   const onKey = (event: KeyboardEvent): void => {
@@ -205,6 +222,7 @@ export async function bootView(init: SandboxViewInit, kernelPort: MessagePort, r
     if (!info) throw new Error(`Panel "${init.panelId}" is no longer registered.`);
     const api = createSandboxAPI(kernel, init, 'view');
     control = sandboxControl(api);
+    ticks.attach(control);
     const module = await load(init.bundleUrl);
     if (typeof module.default !== 'function') throw new Error('entry module must export default activate(api)');
     attachStyles(module, api, doc);
