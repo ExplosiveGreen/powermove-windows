@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, it, vi } from 'vitest';
 import { createRpc } from '../../../shared/sandbox-rpc';
-import { createSandboxAPI } from '../../sandbox/shim-api';
+import { createSandboxAPI, sandboxControl, type SandboxInit } from '../../sandbox/shim-api';
 import { createSandboxRuntime } from './sandbox-host';
 import { createKernel } from './registries';
 import type { HostDeps } from './host';
@@ -27,16 +27,17 @@ async function start(options: { maxHandles?: number; open?: string[] } = {}) {
   const record = { id: 'stub-ext', trust: 'store', scope: 'user', manifest: { id: 'stub-ext', name: 'Stubs', version: '1.0.0', apiVersion: 3, permissions: [] }, dir: '/tmp/stub', enabled: true, bundleUrl: '/ext/stub-ext/bundle.js', bundleHash: 'x', health: { state: 'ok' }, updatedAt: 0 } as ExtensionRecord;
   const frame = document.createElement('iframe');
   let api!: PowermoveAPI;
+  let pushes = 0;
   let child!: ReturnType<typeof createRpc>;
   const pending = createSandboxRuntime(kernel, record, deps, {}, { frame, onPostInit(port, init) {
-    child = createRpc(port, {}, 10_000, { trusted: true, maxHandles: options.maxHandles ?? 1000 });
+    child = createRpc(port, { catalog: (next: SandboxInit['catalog']) => { pushes += 1; sandboxControl(api).catalog(next); } }, 10_000, { trusted: true, maxHandles: options.maxHandles ?? 1000 });
     api = createSandboxAPI(child, init);
     child.notify('activated');
   } });
   frame.dispatchEvent(new Event('load'));
   const runtime = await pending;
   close.push(() => { runtime.dispose(); child.close(); });
-  return { kernel, api, toast, reportRuntimeError, open };
+  return { kernel, api, toast, reportRuntimeError, open, pushes: () => pushes };
 }
 
 type ToastCall = [string, { action?: { label: string; run: () => void }; onDismiss?: () => void; onClose?: () => void; sticky?: boolean; source?: unknown }];
@@ -102,4 +103,31 @@ it('answers panels.isOpen for the extension’s own panels only', async () => {
   await expect(h.api.panels.isOpen('layers') as unknown as Promise<boolean>).rejects.toMatchObject({ code: 'permission_denied' });
   h.open.delete('stub-ext.panel');
   await expect(h.api.panels.isOpen('stub-ext.panel')).resolves.toBe(false);
+});
+
+it('refreshes the catalog when other extensions load or unload, and only when it changed', async () => {
+  const h = await start();
+  const fx = { id: 'other-ext.glow', label: 'Glow', group: 'Other', params: [], frag: 'o = texture(u_tex, v_uv);' };
+  expect(h.api.effects.get('other-ext.glow')).toBeUndefined();
+  const effect = h.kernel.registerEffect('other-ext', fx);
+  h.kernel.commands.register('other-ext', { id: 'other-ext.go', label: 'Go', run: () => {} });
+  h.kernel.events.emit('extension:loaded', { id: 'other-ext' });
+  h.kernel.events.emit('extensions:changed', { ids: ['other-ext'], reason: 'enable' }); // same burst: one push
+  await settle();
+  expect(h.pushes()).toBe(1);
+  expect(h.api.effects.get('other-ext.glow')?.label).toBe('Glow');
+  expect(h.api.commands.has('other-ext.go')).toBe(true);
+  expect(h.api.commands.list().find(command => command.id === 'other-ext.go')).not.toHaveProperty('run');
+
+  h.kernel.events.emit('extensions:changed', { ids: [], reason: 'health' });
+  await settle();
+  expect(h.pushes()).toBe(1); // nothing changed, nothing sent
+
+  effect.dispose();
+  h.kernel.disposeOwner('other-ext');
+  h.kernel.events.emit('extension:unloaded', { id: 'other-ext' });
+  await settle();
+  expect(h.pushes()).toBe(2);
+  expect(h.api.effects.get('other-ext.glow')).toBeUndefined();
+  expect(h.api.commands.has('other-ext.go')).toBe(false);
 });

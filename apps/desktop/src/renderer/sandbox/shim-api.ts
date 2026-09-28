@@ -24,6 +24,8 @@ export interface SandboxControl {
   tick(delta: Partial<SandboxState>, events: SandboxEvent[]): void;
   /** The kernel's theme push, for `theme.active()` and `theme.scheme()`. */
   theme(theme: SandboxInit['theme']): void;
+  /** The kernel's catalog push, after other extensions loaded or unloaded. */
+  catalog(catalog: SandboxInit['catalog']): void;
   ready(): Promise<unknown>;
   dispose(): void;
   setQuiet(on: boolean): void;
@@ -197,8 +199,9 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
   let registrationFailure: unknown;
   const vars = Object.freeze({ ...init.vars });
   const local = new Map<string, Map<string, any>>();
+  let catalog = init.catalog;
   const list = (kind: string): any[] => {
-    const merged = new Map((init.catalog?.[kind] ?? []).map(item => [item.id, item]));
+    const merged = new Map((catalog?.[kind] ?? []).map(item => [item.id, item]));
     for (const [id, item] of local.get(kind) ?? []) merged.set(id, item);
     return [...merged.values()];
   };
@@ -460,6 +463,7 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
       theme.active = active; theme.scheme = next.scheme;
       reads.theme.bump();
     },
+    catalog(next) { if (next && typeof next === 'object') catalog = next; },
     ready: async () => { await Promise.all([...registrations]); if (registrationFailure) throw registrationFailure; },
     dispose() {
       for (const port of panelPorts.values()) port.close();

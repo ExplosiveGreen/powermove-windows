@@ -140,3 +140,27 @@ it('lets a submit reach the form’s own handler, then cancels its navigation', 
   document.body.lastElementChild!.dispatchEvent(after);
   expect(after.defaultPrevented).toBe(false);
 });
+
+it('keeps a catalog push that arrives before the view has its API, and follows later ones', async () => {
+  installSandboxRuntime();
+  const kernelChannel = new MessageChannel();
+  const runtimeChannel = new MessageChannel();
+  let answer!: (value: unknown) => void;
+  const kernel = createRpc(kernelChannel.port1, { mounted: () => {} });
+  const runtime = createRpc(runtimeChannel.port1, { definition: (id: string) => new Promise(resolve => { answer = resolve; }).then(() => ({ id, title: 'Fake', kind: 'build' })) });
+  const seen: unknown[] = [];
+  let viewApi: any;
+  const module = { default(api: any) { viewApi = api; api.panels.register({ id: 'fake-panel', title: 'Fake', build() { seen.push(api.effects.list().map((effect: { id: string }) => effect.id)); } }); } };
+  const target = document.createElement('div');
+  const pending = bootView(init('fake-panel'), kernelChannel.port2, runtimeChannel.port2, { load: async () => module, target });
+  kernel.notify('catalog', { effects: [{ id: 'other-ext.glow', label: 'Glow' }] });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  answer(null);
+  const view = await pending;
+  expect(seen).toEqual([['other-ext.glow']]);
+  kernel.notify('catalog', { effects: [] });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  expect(viewApi.effects.list()).toEqual([]);
+  view.dispose();
+  kernel.close(); runtime.close();
+});

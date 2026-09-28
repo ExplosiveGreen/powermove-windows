@@ -15,6 +15,8 @@ import { menuEntriesSchema, paletteEntriesSchema, parseHostEvent, parseInvoke, p
 
 /** Kernel events that can change a document's SandboxState. */
 const STATE_EVENTS = ['project:changed', 'selection', 'time', 'transport'] as const;
+/** Kernel events after which other extensions' contributions may differ. */
+const CATALOG_EVENTS = ['extensions:changed', 'extension:loaded', 'extension:unloaded'] as const;
 export interface SandboxRuntime { handle: ExtensionHandle; dispose(): void }
 const SAFE_INVOKE: Record<string, Set<string>> = {
   commands: new Set(['run']), project: new Set(['apply', 'select', 'setTime', 'play', 'pause', 'undo', 'redo', 'snapshot']),
@@ -410,11 +412,11 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
       doc.interest.delete(event); held.off.dispose();
     } };
   };
-  const initFor = (state: SandboxState): SandboxInit => ({
-    id: record.id, apiVersion: manifest.apiVersion ?? 1, manifest, vars,
-    theme: themeSnapshot(kernel), activeTheme: kernel.theme.activeId, state,
-    bundleUrl: sandboxBundleUrl(base, record.id, record.bundleUrl),
-    catalog: {
+  /* What `effects.list()`, `commands.has()` and the like read in the
+     sandbox. `sentCatalog` is the JSON of the newest copy any document got. */
+  let sentCatalog = '';
+  const catalogNow = (): NonNullable<SandboxInit['catalog']> => {
+    const catalog = {
       effects: plain(reg.effects.list()) as Array<Record<string, unknown>>,
       transitions: plain(reg.transitions.list()) as Array<Record<string, unknown>>,
       layers: plain(reg.layerTypes.list()) as Array<Record<string, unknown>>,
@@ -423,7 +425,15 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
       commands: reg.commands.list().map(({ run: _run, when: _when, ...entry }) => entry),
       panels: reg.panels.list().map(({ id, title, icon }) => ({ id, title, icon })),
       status: reg.status.list().map(({ id, title, side }) => ({ id, title, side }))
-    }
+    };
+    sentCatalog = JSON.stringify(catalog);
+    return catalog;
+  };
+  const initFor = (state: SandboxState): SandboxInit => ({
+    id: record.id, apiVersion: manifest.apiVersion ?? 1, manifest, vars,
+    theme: themeSnapshot(kernel), activeTheme: kernel.theme.activeId, state,
+    bundleUrl: sandboxBundleUrl(base, record.id, record.bundleUrl),
+    catalog: catalogNow()
   });
   const links = new Set<ViewLink>();
   const broadcast = (method: string, value: unknown): void => {
@@ -491,6 +501,24 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   stopForBudget = () => { deps.reportRuntimeError(record.id, new Error('exceeded the sandbox message budget')); dispose(); };
   for (const event of STATE_EVENTS) host.api.events.on(event, schedule);
   host.api.events.on('theme:changed', () => { try { rpc.notify('theme', themeSnapshot(kernel)); } catch { /* disposed */ } });
+  /* Other extensions come and go after this one's init: every document gets
+     the new catalog, once per burst and only when it changed. It goes out
+     before the flush that delivers the same kernel event, so a listener
+     reads lists at least as new as that event. */
+  let catalogQueued = false;
+  const refreshCatalog = (): void => {
+    if (catalogQueued || disposed) return; catalogQueued = true;
+    queueMicrotask(() => {
+      catalogQueued = false;
+      if (disposed) return;
+      const previous = sentCatalog;
+      const catalog = catalogNow();
+      if (sentCatalog === previous) return;
+      try { rpc.notify('catalog', catalog); } catch { /* disposed */ }
+      broadcast('catalog', catalog);
+    });
+  };
+  for (const event of CATALOG_EVENTS) host.api.events.on(event, refreshCatalog);
   /* The caller hears one outcome within the budget: the probe that tells a
      spinning runtime from a waiting one comes out of it too. */
   const budgetMs = test?.timeoutMs !== undefined && test.timeoutMs > 0 ? test.timeoutMs : 10_000;
