@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { cp, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { parseManifest, type ExtensionManifest } from '@powermove/registry/manifest';
+import { grantsPermission, parseManifest, type ExtensionManifest } from '@powermove/registry/manifest';
 import { walkDir } from '@powermove/registry/node';
 import { scanCapabilities } from '@powermove/registry/scan';
 import { createApp } from '../src/app';
@@ -32,7 +32,7 @@ test('all sample trees compile for the desktop sandbox and declare scanned capab
       expect(manifest.apiVersion).toBe(3);
       expect(manifest.author).toBe('user');
       const findings = scanCapabilities(files.map((file) => ({ path: file.path, text: decoder.decode(file.bytes) })));
-      expect(findings.filter((finding) => !manifest.permissions?.includes(finding.capability))).toEqual([]);
+      expect(findings.filter((finding) => !grantsPermission(manifest.permissions, finding.capability))).toEqual([]);
 
       // The desktop compiler uses the directory basename as the extension id.
       // Versioned sample sources therefore need a temporary slug-named copy.

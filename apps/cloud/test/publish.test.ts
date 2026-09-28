@@ -53,6 +53,21 @@ test('publish requires declared capabilities and exposes permissions', () =>
     expect((await data.db.select().from(releases))[0]?.permissions).toEqual(['network']);
     expect((await data.db.select().from(extensions))[0]?.permissions).toEqual(['network']);
   }));
+test('project reads need project:read, which project:write implies', () =>
+  withData(async (data) => {
+    const env = makeEnv(data), a = await publisher(data, env, 'alice');
+    const source = { path: 'panel.ts', bytes: txt('api.events.on("project:changed", async () => render(await api.project.get()));\n') };
+    const undeclared = await uploadTree(data, env, a, files('demo', '1.0.0', [source], ['network']));
+    const rejected = await publishRequest(data, env, a, 'demo', undeclared.commitSha);
+    expect(rejected.status).toBe(422);
+    expect(await rejected.json() as any).toEqual({ error: 'permission_undeclared', findings: [{ path: 'panel.ts', line: 1, capability: 'project:read' }] });
+    const written = await uploadTree(data, env, a, files('writer', '1.0.0', [source], ['project:write']));
+    expect((await publishRequest(data, env, a, 'writer', written.commitSha)).status).toBe(201);
+    const read = await uploadTree(data, env, a, files('reader', '1.0.0', [source], ['project:read']));
+    const accepted = await publishRequest(data, env, a, 'reader', read.commitSha);
+    expect(accepted.status).toBe(201);
+    expect((await accepted.json() as any).repo.permissions).toEqual(['project:read']);
+  }));
 test('parent, version, author, objects, manifest and scanner failures', () =>
   withData(async (data) => {
     const env = makeEnv(data), a = await publisher(data, env, 'alice');

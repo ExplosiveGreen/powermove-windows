@@ -4,7 +4,7 @@ import { ApiError, Publish } from '@powermove/registry/wire';
 import { decodeLoose, hashObject, parseCommit, parseTree, sha256Hex } from '@powermove/registry/git';
 import { snapshot, SnapshotError, type SnapshotInput } from '@powermove/registry/snapshot';
 import { REGISTRY_LIMITS } from '@powermove/registry/limits';
-import { EXTENSION_API_VERSION, parseForkedFrom, parseManifest } from '@powermove/registry/manifest';
+import { EXTENSION_API_VERSION, grantsPermission, parseForkedFrom, parseManifest } from '@powermove/registry/manifest';
 import { scanCapabilities, scanFiles } from '@powermove/registry/scan';
 import { writeTarGz } from '@powermove/registry/tar';
 import type { Env } from '../env';
@@ -296,7 +296,7 @@ export function publishRoutes(deps: PublishDeps = {}) {
           return [];
         }
       });
-      const undeclared = scanCapabilities(textFiles).filter((finding) => !manifest.permissions?.includes(finding.capability));
+      const undeclared = scanCapabilities(textFiles).filter((finding) => !grantsPermission(manifest.permissions, finding.capability));
       if (undeclared.length) throw new ApiError({ error: 'permission_undeclared', findings: undeclared });
       const scan = scanFiles(textFiles);
       const findings = [...scan.blocked, ...scan.waived];
