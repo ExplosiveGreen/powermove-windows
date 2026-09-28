@@ -167,3 +167,26 @@ it('asks panels.isOpen of the host even while a view replays activate', async ()
   await settle();
   expect(asked).toEqual([['panels', 'isOpen', ['shim-ext.panel']]]);
 });
+
+it('collects this extension’s own menu contributions for a location, in order', async () => {
+  const channel = new MessageChannel();
+  const errors: string[] = [];
+  const host = createRpc(channel.port2, { register: () => undefined, 'dispose-registration': () => undefined, 'runtime-error': (error: { message: string }) => { errors.push(error.message); } });
+  const rpc = createRpc(channel.port1, {}, 1000, { trusted: true });
+  close.push(() => { rpc.close(); host.close(); });
+  const init = { id: 'shim-ext', apiVersion: 3, manifest: { id: 'shim-ext', name: 'Shim', version: '1.0.0', apiVersion: 3, permissions: [] }, vars: {},
+    theme: { scheme: 'dark', tokens: {} }, bundleUrl: '', state: { time: 0, playing: false, revision: 1, generation: 1, selection: null } } as unknown as SandboxInit;
+  const api = createSandboxAPI(rpc, init) as any;
+  const first = api.menus.contribute('layer:context', (ctx: { layer?: string }) => [{ header: 'Stub' }, { label: `Rename ${ctx.layer}`, run: () => 1 }]);
+  api.menus.contribute('viewer:context', () => [{ label: 'Elsewhere' }]);
+  api.menus.contribute('layer:context', () => { throw new Error('contributor broke'); });
+  api.menus.contribute('layer:context', () => ['-']);
+  const items = api.menus.collect('layer:context', { layer: 'Title' });
+  expect(items.map((item: any) => typeof item === 'string' ? item : item.header ?? item.label)).toEqual(['Stub', 'Rename Title', '-']);
+  expect(typeof items[1].run).toBe('function'); // local callbacks, nothing crossed
+  expect(api.menus.collect('timeline:context')).toEqual([]);
+  first.dispose();
+  expect(api.menus.collect('layer:context')).toEqual(['-']);
+  await settle();
+  expect(errors).toEqual(['contributor broke', 'contributor broke']);
+});

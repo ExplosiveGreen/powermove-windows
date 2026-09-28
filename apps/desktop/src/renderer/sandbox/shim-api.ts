@@ -343,6 +343,7 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     return { dispose };
   };
   const simpleRegister = (namespace: string) => (definition: unknown) => registration(namespace, definition);
+  const menuContributors = new Set<{ location: string; fn: (...args: any[]) => unknown }>();
   const api: Record<string, any> = {
     id: init.id, apiVersion: init.apiVersion, manifest: init.manifest,
     effects: { register: simpleRegister('effects'), list: () => list('effects'), get: (id: string) => list('effects').find(item => item.id === id) },
@@ -382,7 +383,9 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
       return disposable;
     }, open: (query?: string) => fire('invoke', 'palette', 'open', query === undefined ? [] : [query]) },
     menus: { contribute(location: string, fn: (...args: any[]) => unknown) {
-      if (mode === 'view') return registration('menus', { location, items: 0 }, [], fn);
+      const own = { location, fn };
+      menuContributors.add(own);
+      if (mode === 'view') { const recorded = registration('menus', { location, items: 0 }, [], fn); return { dispose() { menuContributors.delete(own); recorded.dispose(); } }; }
       let current: HandleId[] = [], previous: HandleId[] = [];
       const id = handle((ctx: unknown) => {
         for (const item of previous) rpc.release(item);
@@ -393,10 +396,16 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
         });
       });
       const registrationHandle = registration('menus', { location, items: id }, [id]);
-      const disposable = { dispose() { registrationHandle.dispose(); for (const item of [...previous, ...current]) rpc.release(item); previous = []; current = []; } };
+      const disposable = { dispose() { menuContributors.delete(own); registrationHandle.dispose(); for (const item of [...previous, ...current]) rpc.release(item); previous = []; current = []; } };
       disposers.push(disposable.dispose);
       return disposable;
-    }, collect: () => [] },
+    /* Only this extension's own contributions: another's items carry
+       callbacks that belong to its document. A throwing contributor is
+       reported and skipped, as in-realm. */
+    }, collect: (location: string, ctx: Record<string, unknown> = {}) => [...menuContributors].flatMap(({ location: where, fn }) => {
+      if (where !== location) return [];
+      try { const items = fn(ctx); return Array.isArray(items) ? items : []; } catch (error) { raise(error); return []; }
+    }) },
     panels: { register(def: Record<string, any>) {
       if (!def || typeof def.id !== 'string' || !def.id) throw new Error('panels.register requires an id');
       if (!def.component && typeof def.build !== 'function') throw new Error(`panel "${def.id}" needs component or build`);
