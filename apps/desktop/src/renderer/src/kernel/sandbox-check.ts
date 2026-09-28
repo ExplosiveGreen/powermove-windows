@@ -76,7 +76,7 @@ const messageOf = (error: unknown): string => (error instanceof Error ? error.me
 export function quietDeps(deps: Omit<HostDeps, 'reportRuntimeError'>, onError: (error: unknown) => void): HostDeps {
   const real = deps.project;
   const project: ProjectAPI = {
-    get: () => real.get(), revision: () => real.revision(), selection: () => real.selection(),
+    get: () => real.get(), latest: () => real.latest(), revision: () => real.revision(), selection: () => real.selection(),
     time: () => real.time(), playing: () => real.playing(),
     apply: (): EditResult => ({ ok: true, message: 'Not applied during a sandbox check', data: {} }),
     select: noop, setTime: noop, play: noop, pause: noop, undo: noop, redo: noop,
