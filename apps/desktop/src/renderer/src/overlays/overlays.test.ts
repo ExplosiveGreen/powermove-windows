@@ -527,6 +527,44 @@ describe('installSvelteOverlays', () => {
     expect(document.querySelector('.toast[data-toast-error="true"]')).toBeTruthy();
   });
 
+  it('closes each toast exactly once, however it leaves', async () => {
+    vi.useFakeTimers();
+    const closed: string[] = [];
+    const onClose = (name: string) => () => closed.push(name);
+    const run = vi.fn();
+    const onDismiss = vi.fn();
+    PM.toast('Timed', 100, { onClose: onClose('timed') });
+    vi.advanceTimersByTime(100);
+    PM.toast('Keyed', 100, { key: 'k', sticky: true, onClose: onClose('keyed-1') });
+    PM.toast('Keyed again', 100, { key: 'k', sticky: true, onClose: onClose('keyed-2') });
+    PM.toast('Keyed again', 100, { key: 'k', sticky: true, onClose: onClose('keyed-3') });
+    PM.toast(null, 100, { onClose: onClose('never shown') });
+    flushSync();
+    expect(closed).toEqual(['timed', 'keyed-1', 'keyed-2', 'never shown']);
+    PM.dismissToast('k');
+    expect(closed.at(-1)).toBe('keyed-3');
+
+    PM.toast('With action', 100, { sticky: true, dismissible: true, action: { label: 'Open', run }, onDismiss, onClose: onClose('action') });
+    PM.toast('Duplicate', 100, { sticky: true, dismissible: true, onClose: onClose('dismissed') });
+    PM.toast('Duplicate', 100, { sticky: true, dismissible: true, onClose: onClose('duplicate') });
+    flushSync();
+    expect(closed.at(-1)).toBe('duplicate'); // an identical notice is not stacked, so it closes at once
+    document.querySelector<HTMLButtonElement>('.toast .toast-action')?.click();
+    flushSync();
+    expect(run).toHaveBeenCalledOnce();
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(closed.at(-1)).toBe('action');
+    document.querySelector<HTMLButtonElement>('.toast .toast-dismiss')?.click();
+    flushSync();
+    expect(closed.at(-1)).toBe('dismissed');
+
+    PM.toast('Left for teardown', 100, { sticky: true, onClose: onClose('cleared') });
+    flushSync();
+    await unmountSvelteOverlays();
+    expect(closed.at(-1)).toBe('cleared');
+    expect(closed).toHaveLength(9);
+  });
+
   it('tells an extension alert apart from an editor error', () => {
     vi.useFakeTimers();
     // The same wording from an extension is that extension's alert: the editor

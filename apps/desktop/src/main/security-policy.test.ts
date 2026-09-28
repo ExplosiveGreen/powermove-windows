@@ -32,9 +32,38 @@ describe('extension sandbox policy', () => {
   it('scopes scripts to the extension’s own origin', () => {
     const policy = extensionSandboxCsp('sandboxed-ext', ['network'], `app://${host}`);
     expect(directive(policy, 'script-src')).toEqual([`app://${host}/host/`, `app://${host}/ext/sandboxed-ext/`, "'wasm-unsafe-eval'"]);
-    expect(directive(policy, 'connect-src')).toEqual(['https:', 'wss:']);
-    expect(directive(extensionSandboxCsp('sandboxed-ext', [], `app://${host}`), 'connect-src')).toEqual(["'none'"]);
     expect(directive(policy, 'frame-src')).toEqual(["'none'"]);
+  });
+
+  it('reads data: and blob: URLs with or without network, and reaches the network only with it', () => {
+    const origin = `app://${host}`;
+    const network = extensionSandboxCsp('sandboxed-ext', ['network'], origin);
+    const offline = extensionSandboxCsp('sandboxed-ext', [], origin);
+    expect(directive(network, 'connect-src')).toEqual(['data:', 'blob:', 'https:', 'wss:']);
+    expect(directive(offline, 'connect-src')).toEqual(['data:', 'blob:']);
+    expect(directive(offline, 'connect-src')).not.toContain("'none'");
+    expect(directive(network, 'media-src')).toEqual(['data:', 'blob:', 'https:']);
+    expect(directive(offline, 'media-src')).toEqual(['data:', 'blob:']);
+    // Never plain http or ws, even with network.
+    for (const policy of [network, offline]) expect(policy).not.toMatch(/(?:^|\s)(?:http|ws):/);
+  });
+
+  it('loads bundled fonts always, and remote fonts and stylesheets only with network', () => {
+    const origin = `app://${host}`;
+    const network = extensionSandboxCsp('sandboxed-ext', ['network'], origin);
+    const offline = extensionSandboxCsp('sandboxed-ext', [], origin);
+    expect(directive(network, 'font-src')).toEqual([`${origin}/`, 'data:', 'blob:', 'https:']);
+    expect(directive(offline, 'font-src')).toEqual([`${origin}/`, 'data:', 'blob:']);
+    expect(directive(network, 'style-src')).toEqual(["'unsafe-inline'", `${origin}/`, 'https:']);
+    expect(directive(offline, 'style-src')).toEqual(["'unsafe-inline'", `${origin}/`]);
+    // Scripts never widen with network.
+    expect(directive(network, 'script-src')).toEqual(directive(offline, 'script-src'));
+  });
+
+  it('adds the dev server to connect-src without dropping data: and blob:', () => {
+    const dev = 'http://localhost:5173';
+    expect(directive(extensionSandboxCsp('sandboxed-ext', [], `app://${host}`, dev), 'connect-src')).toEqual(['data:', 'blob:', dev, 'ws://localhost:5173']);
+    expect(directive(extensionSandboxCsp('sandboxed-ext', ['network'], `app://${host}`, dev), 'connect-src')).toEqual(['data:', 'blob:', 'https:', 'wss:', dev, 'ws://localhost:5173']);
   });
 });
 

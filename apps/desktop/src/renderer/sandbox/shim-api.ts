@@ -24,6 +24,8 @@ export interface SandboxControl {
   tick(delta: Partial<SandboxState>, events: SandboxEvent[]): void;
   /** The kernel's theme push, for `theme.active()` and `theme.scheme()`. */
   theme(theme: SandboxInit['theme']): void;
+  /** The kernel's catalog push, after other extensions loaded or unloaded. */
+  catalog(catalog: SandboxInit['catalog']): void;
   ready(): Promise<unknown>;
   dispose(): void;
   setQuiet(on: boolean): void;
@@ -166,7 +168,7 @@ export function panelInfo(def: Record<string, any>): SandboxPanelInfo {
  * while it has a reader.
  */
 export type SandboxMode = 'runtime' | 'view';
-const VIEW_READS = new Set(['storage.get', 'assets.get', 'assets.readText', 'media.getImportDefaults', 'ui.icon']);
+const VIEW_READS = new Set(['storage.get', 'assets.get', 'assets.readText', 'media.getImportDefaults', 'ui.icon', 'panels.isOpen']);
 /*
  * A reactive read calls `read()`: inside a template, $derived or $effect that
  * subscribes the reader (the first one runs `start`), anywhere else it does
@@ -197,8 +199,9 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
   let registrationFailure: unknown;
   const vars = Object.freeze({ ...init.vars });
   const local = new Map<string, Map<string, any>>();
+  let catalog = init.catalog;
   const list = (kind: string): any[] => {
-    const merged = new Map((init.catalog?.[kind] ?? []).map(item => [item.id, item]));
+    const merged = new Map((catalog?.[kind] ?? []).map(item => [item.id, item]));
     for (const [id, item] of local.get(kind) ?? []) merged.set(id, item);
     return [...merged.values()];
   };
@@ -280,6 +283,23 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     return { dispose };
   };
   const handle = (fn: (...args: any[]) => unknown): HandleId => rpc.handle(fn);
+  /* Callbacks cannot cross the port, so a toast's `action.run` and
+     `onDismiss` go as handles. The host releases them when the toast closes,
+     however it closes; one the host refuses releases them here. */
+  const toast = (message: string, options?: unknown): void => {
+    if (!options || typeof options !== 'object') { fire('invoke', 'ui', 'toast', options === undefined ? [message] : [message, options]); return; }
+    if (quiet) return;
+    const input = options as Record<string, any>;
+    const value: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(input)) if (key !== 'action' && key !== 'onDismiss' && typeof item !== 'function') value[key] = item;
+    const ids: HandleId[] = [];
+    const release = (): void => { for (const id of ids) { try { rpc.release(id); } catch { /* port closed */ } } };
+    try {
+      if (input.action && typeof input.action.run === 'function') { const run = handle(input.action.run); ids.push(run); value.action = { label: input.action.label, run }; }
+      if (typeof input.onDismiss === 'function') { const dismiss = handle(input.onDismiss); ids.push(dismiss); value.onDismiss = dismiss; }
+    } catch (error) { release(); throw error; }
+    void send('invoke', 'ui', 'toast', [message, value]).catch(error => { release(); raise(error); });
+  };
   /* The parsed snapshot of the newest generation fetched; see the data plane comment above. */
   let snapshot: { generation: number; value?: unknown; tooLarge?: true } | null = null;
   let inflight: Promise<void> | null = null;
@@ -326,6 +346,7 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     return { dispose };
   };
   const simpleRegister = (namespace: string) => (definition: unknown) => registration(namespace, definition);
+  const menuContributors = new Set<{ location: string; fn: (...args: any[]) => unknown }>();
   const api: Record<string, any> = {
     id: init.id, apiVersion: init.apiVersion, manifest: init.manifest,
     effects: { register: simpleRegister('effects'), list: () => list('effects'), get: (id: string) => list('effects').find(item => item.id === id) },
@@ -365,7 +386,9 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
       return disposable;
     }, open: (query?: string) => fire('invoke', 'palette', 'open', query === undefined ? [] : [query]) },
     menus: { contribute(location: string, fn: (...args: any[]) => unknown) {
-      if (mode === 'view') return registration('menus', { location, items: 0 }, [], fn);
+      const own = { location, fn };
+      menuContributors.add(own);
+      if (mode === 'view') { const recorded = registration('menus', { location, items: 0 }, [], fn); return { dispose() { menuContributors.delete(own); recorded.dispose(); } }; }
       let current: HandleId[] = [], previous: HandleId[] = [];
       const id = handle((ctx: unknown) => {
         for (const item of previous) rpc.release(item);
@@ -376,10 +399,16 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
         });
       });
       const registrationHandle = registration('menus', { location, items: id }, [id]);
-      const disposable = { dispose() { registrationHandle.dispose(); for (const item of [...previous, ...current]) rpc.release(item); previous = []; current = []; } };
+      const disposable = { dispose() { menuContributors.delete(own); registrationHandle.dispose(); for (const item of [...previous, ...current]) rpc.release(item); previous = []; current = []; } };
       disposers.push(disposable.dispose);
       return disposable;
-    }, collect: () => [] },
+    /* Only this extension's own contributions: another's items carry
+       callbacks that belong to its document. A throwing contributor is
+       reported and skipped, as in-realm. */
+    }, collect: (location: string, ctx: Record<string, unknown> = {}) => [...menuContributors].flatMap(({ location: where, fn }) => {
+      if (where !== location) return [];
+      try { const items = fn(ctx); return Array.isArray(items) ? items : []; } catch (error) { raise(error); return []; }
+    }) },
     panels: { register(def: Record<string, any>) {
       if (!def || typeof def.id !== 'string' || !def.id) throw new Error('panels.register requires an id');
       if (!def.component && typeof def.build !== 'function') throw new Error(`panel "${def.id}" needs component or build`);
@@ -388,7 +417,7 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
          panels: the host draws the header from title, and the Library shows
          the icon on the extension's art. */
       return registration('panels', panelInfo(def), [], def);
-    }, list: () => list('panels').map(item => item.id), open: (id: string, options?: unknown) => fire('invoke', 'panels', 'open', options === undefined ? [id] : [id, options]), close: (id: string) => fire('invoke', 'panels', 'close', [id]), refresh: (id: string) => fire('invoke', 'panels', 'refresh', [id]), isOpen: () => false },
+    }, list: () => list('panels').map(item => item.id), open: (id: string, options?: unknown) => fire('invoke', 'panels', 'open', options === undefined ? [id] : [id, options]), close: (id: string) => fire('invoke', 'panels', 'close', [id]), refresh: (id: string) => fire('invoke', 'panels', 'refresh', [id]), isOpen: (id: string) => later('panels.isOpen', 'invoke', 'panels', 'isOpen', [id]) },
     project: { get: () => legacy ? watchPromise(pullProject(), 'project.get', report) : pullProject(),
       latest: reactive(reads.project, () => snapshot?.value), revision: reactive(reads.revision, () => state.revision), selection: reactive(reads.selection, () => state.selection),
       time: reactive(reads.time, () => state.time), playing: reactive(reads.playing, () => state.playing),
@@ -399,7 +428,7 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     storage: { get: (key: string) => later('storage.get', 'invoke', 'storage', 'get', [key]), set: (key: string, value: unknown) => later('storage.set', 'invoke', 'storage', 'set', [key, value]), delete: (key: string) => later('storage.delete', 'invoke', 'storage', 'delete', [key]) },
     media: partlyTrusted('media', { registerImportDefaults: simpleRegister('media-defaults'), getImportDefaults: () => later('media.getImportDefaults', 'invoke', 'media', 'getImportDefaults', []) }, report),
     events: { on: listen, emit: (event: string, payload: unknown) => fire('invoke', 'events', 'emit', [event, payload]) },
-    ui: partlyTrusted('ui', { toast: (message: string, options?: unknown) => fire('invoke', 'ui', 'toast', options === undefined ? [message] : [message, options]), confirm: (...args: unknown[]) => send('invoke', 'ui', 'confirm', args), icon: (...args: unknown[]) => later('ui.icon', 'invoke', 'ui', 'icon', args), controls: trustedOnly('ui.controls', report), modal: trustedOnly('ui.modal', report), menu: trustedOnly('ui.menu', report), drag: trustedOnly('ui.drag', report), gesture: trustedOnly('ui.gesture', report), mount: trustedOnly('ui.mount', report) }, report),
+    ui: partlyTrusted('ui', { toast, confirm: (...args: unknown[]) => send('invoke', 'ui', 'confirm', args), icon: (...args: unknown[]) => later('ui.icon', 'invoke', 'ui', 'icon', args), controls: trustedOnly('ui.controls', report), modal: trustedOnly('ui.modal', report), menu: trustedOnly('ui.menu', report), drag: trustedOnly('ui.drag', report), gesture: trustedOnly('ui.gesture', report), mount: trustedOnly('ui.mount', report) }, report),
     vars: { get: (key: string) => vars[key], has: (key: string) => Object.hasOwn(vars, key), keys: () => Object.keys(vars) },
     extensions: { list: () => later('extensions.list', 'extensions-list'), setUp: (id: string) => send('invoke', 'extensions', 'setUp', [id]),
       fork: restricted('extensions.fork'), setEnabled: restricted('extensions.setEnabled'), remove: restricted('extensions.remove'), reload: restricted('extensions.reload'), reveal: restricted('extensions.reveal'), requestFix: restricted('extensions.requestFix'), rebase: restricted('extensions.rebase') },
@@ -434,6 +463,7 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
       theme.active = active; theme.scheme = next.scheme;
       reads.theme.bump();
     },
+    catalog(next) { if (next && typeof next === 'object') catalog = next; },
     ready: async () => { await Promise.all([...registrations]); if (registrationFailure) throw registrationFailure; },
     dispose() {
       for (const port of panelPorts.values()) port.close();

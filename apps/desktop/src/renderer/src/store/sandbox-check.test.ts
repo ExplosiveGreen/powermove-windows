@@ -49,3 +49,16 @@ it('renders the success line', async () => {
   await unmount(component);
   target.remove();
 });
+
+it('names the network permission for a remote stylesheet or font', () => {
+  const lines = sandboxCheckLines(report({
+    cspViolations: [
+      { directive: 'style-src-elem', blockedUri: 'https://fonts.googleapis.com/css2?family=Inter' },
+      { directive: 'font-src', blockedUri: 'https://fonts.gstatic.com/s/inter.woff2' }
+    ]
+  }));
+  expect(lines).toEqual([
+    'Reaches fonts.googleapis.com without the network permission. Declare `permissions: ["network"]`.',
+    'Reaches fonts.gstatic.com without the network permission. Declare `permissions: ["network"]`.'
+  ]);
+});

@@ -15,18 +15,22 @@ import { menuEntriesSchema, paletteEntriesSchema, parseHostEvent, parseInvoke, p
 
 /** Kernel events that can change a document's SandboxState. */
 const STATE_EVENTS = ['project:changed', 'selection', 'time', 'transport'] as const;
+/** Kernel events after which other extensions' contributions may differ. */
+const CATALOG_EVENTS = ['extensions:changed', 'extension:loaded', 'extension:unloaded'] as const;
 export interface SandboxRuntime { handle: ExtensionHandle; dispose(): void }
 const SAFE_INVOKE: Record<string, Set<string>> = {
   commands: new Set(['run']), project: new Set(['apply', 'select', 'setTime', 'play', 'pause', 'undo', 'redo', 'snapshot']),
   transport: new Set(['step']), assets: new Set(['pick', 'import', 'get', 'readText']),
   storage: new Set(['get', 'set', 'delete']), ui: new Set(['toast', 'confirm', 'icon']),
-  panels: new Set(['open', 'close', 'refresh']), keybindings: new Set(['unbind']),
+  panels: new Set(['open', 'close', 'refresh', 'isOpen']), keybindings: new Set(['unbind']),
   theme: new Set(['activate']), palette: new Set(['open']),
   media: new Set(['getImportDefaults']), events: new Set(['emit']),
   extensions: new Set(['setUp'])
 };
 const HOST_EVENTS = new Set(['project:changed', 'selection', 'time', 'transport', 'theme', 'extensions:changed']);
 const ownId = (extension: string, id: string): boolean => id.startsWith(`${extension}.`);
+/** Distinct CSP violations remembered (and logged) per extension session. */
+const MAX_VIOLATION_KEYS = 100;
 const LEGACY_EDIT_COMMANDS = new Set(['delete', 'duplicate', 'split', 'selectAll', 'deselect', 'groupLayers', 'ungroupLayers', 'nudgeSelection', 'nudgeKeyframes']);
 function denied(message: string, code = 'permission_denied'): never {
   const error = new Error(message) as Error & { code: string };
@@ -133,7 +137,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   const host = createExtensionAPI(reg, record, deps, vars);
   const frame = test?.frame ?? document.createElement('iframe');
   frame.hidden = true;
-  frame.setAttribute('sandbox', 'allow-scripts');
+  frame.setAttribute('sandbox', 'allow-scripts allow-forms'); // as a view's (sandbox-view.ts)
   frame.setAttribute('aria-hidden', 'true');
   // Inside Electron the document comes from the extension's own app:// host,
   // so it gets its own process (in development main proxies it from Vite);
@@ -199,6 +203,23 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     }
     const receiver = (host.api as unknown as Record<string, Record<string, (...a: unknown[]) => unknown>>)[namespace];
     return receiver?.[method]?.(...parsed);
+  };
+  /* A toast's `action.run` and `onDismiss` are handles of the document that
+     raised it. They are released when the toast closes, however it closes,
+     so they never pile up against the handle limits. */
+  const toast = (docRpc: Rpc, live: () => boolean, args: unknown): void => {
+    const [text, options] = parseInvoke('ui', 'toast', args) as [string, { action?: { label: string; run: number }; onDismiss?: number } | undefined];
+    const handles = [options?.action?.run, options?.onDismiss].filter((id): id is number => typeof id === 'number');
+    claimHandles(handles);
+    let closed = false;
+    const onClose = (): void => {
+      if (closed) return; closed = true;
+      for (const id of handles) { remoteHandles.delete(id); try { docRpc.release(id); } catch { /* document gone */ } }
+    };
+    const call = (id: number) => (): void => void docRpc.invokeHandle(id).catch(error => { if (live()) deps.reportRuntimeError(record.id, error); });
+    const { action, onDismiss, ...rest } = options ?? {};
+    host.api.ui.toast(text, { ...rest, ...(action ? { action: { label: action.label, run: call(action.run) } } : {}),
+      ...(onDismiss !== undefined ? { onDismiss: call(onDismiss) } : {}), onClose } as Parameters<typeof host.api.ui.toast>[1]);
   };
   /* Handlers every extension document gets: the runtime iframe and each
      panel view. Only the runtime may register contributions; a view may only
@@ -270,7 +291,8 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
       registrations.set(token, { dispose() { if (released) return; released = true; registrationCount -= 1; for (const handle of handles) remoteHandles.delete(handle); item.dispose(); } });
     },
     'dispose-registration'(token: string) { link.registrations.get(token)?.dispose(); link.registrations.delete(token); },
-    invoke,
+    invoke: (namespace: string, method: string, args: unknown) => namespace === 'ui' && method === 'toast'
+      ? toast(link.rpc, () => !disposed && (runtime || links.has(link as ViewLink)), args) : invoke(namespace, method, args),
     /* Enforced here whatever the shim does: at most one full copy per
        generation for each document. A document asking again for the
        generation it already holds gets `unchanged`, however often it asks. */
@@ -285,15 +307,21 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     'extensions-list'() { return host.api.extensions.list().map(({ dir: _dir, ...rest }) => rest); },
     log(level: unknown, message: unknown, data: unknown) { const now = Date.now(); if (now - logWindow >= 1000) { logWindow = now; logCount = 0; } if (++logCount > 50) return; if (level === 'info' || level === 'warn' || level === 'error') host.api.log(level, String(message).slice(0, 4096), ...(Array.isArray(data) ? data : [])); },
     'runtime-error': (error: { message: string }) => deps.reportRuntimeError(record.id, new Error(error?.message)),
-    /* Each open panel replays activate in its own document, so one blocked
-       request can surface once per document. Count it once per extension
-       session, or opening panels alone would trip the auto-disable rule. */
-    'csp-violation': (event: { directive: string; blockedURI: string }) => {
-      const key = `${event?.directive} ${event?.blockedURI}`;
+    /* A blocked load already did no harm, so live it is logged, never
+       counted toward the auto-disable rule. Each open panel replays activate
+       in its own document, so one request can surface once per document: each
+       distinct key is heard once per extension session, and at most
+       MAX_VIOLATION_KEYS are kept. The publish-time sandbox check (observer)
+       still fails on any. */
+    'csp-violation': (event: { directive?: unknown; blockedURI?: unknown }) => {
+      if (violations.size >= MAX_VIOLATION_KEYS) return;
+      const directive = String(event?.directive ?? '').slice(0, 64);
+      const blockedUri = String(event?.blockedURI ?? '').slice(0, 512);
+      const key = `${directive} ${blockedUri}`;
       if (violations.has(key)) return;
       violations.add(key);
-      if (observer?.csp) observer.csp(String(event?.directive ?? ''), String(event?.blockedURI ?? ''));
-      else deps.reportRuntimeError(record.id, new Error(`CSP blocked ${event?.blockedURI} (${event?.directive})`));
+      if (observer?.csp) { observer.csp(directive, blockedUri); return; }
+      host.api.log('warn', `The sandbox blocked ${blockedUri || 'a request'} (${directive})${violations.size === MAX_VIOLATION_KEYS ? '; further blocked requests are not logged' : ''}`);
     },
     /* Trusted-only reach and sync reads of async results (shim-api.ts). Live,
        they only warn once per member: the throw itself already surfaced. */
@@ -384,11 +412,11 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
       doc.interest.delete(event); held.off.dispose();
     } };
   };
-  const initFor = (state: SandboxState): SandboxInit => ({
-    id: record.id, apiVersion: manifest.apiVersion ?? 1, manifest, vars,
-    theme: themeSnapshot(kernel), activeTheme: kernel.theme.activeId, state,
-    bundleUrl: sandboxBundleUrl(base, record.id, record.bundleUrl),
-    catalog: {
+  /* What `effects.list()`, `commands.has()` and the like read in the
+     sandbox. `sentCatalog` is the JSON of the newest copy any document got. */
+  let sentCatalog = '';
+  const catalogNow = (): NonNullable<SandboxInit['catalog']> => {
+    const catalog = {
       effects: plain(reg.effects.list()) as Array<Record<string, unknown>>,
       transitions: plain(reg.transitions.list()) as Array<Record<string, unknown>>,
       layers: plain(reg.layerTypes.list()) as Array<Record<string, unknown>>,
@@ -397,7 +425,15 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
       commands: reg.commands.list().map(({ run: _run, when: _when, ...entry }) => entry),
       panels: reg.panels.list().map(({ id, title, icon }) => ({ id, title, icon })),
       status: reg.status.list().map(({ id, title, side }) => ({ id, title, side }))
-    }
+    };
+    sentCatalog = JSON.stringify(catalog);
+    return catalog;
+  };
+  const initFor = (state: SandboxState): SandboxInit => ({
+    id: record.id, apiVersion: manifest.apiVersion ?? 1, manifest, vars,
+    theme: themeSnapshot(kernel), activeTheme: kernel.theme.activeId, state,
+    bundleUrl: sandboxBundleUrl(base, record.id, record.bundleUrl),
+    catalog: catalogNow()
   });
   const links = new Set<ViewLink>();
   const broadcast = (method: string, value: unknown): void => {
@@ -465,6 +501,24 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   stopForBudget = () => { deps.reportRuntimeError(record.id, new Error('exceeded the sandbox message budget')); dispose(); };
   for (const event of STATE_EVENTS) host.api.events.on(event, schedule);
   host.api.events.on('theme:changed', () => { try { rpc.notify('theme', themeSnapshot(kernel)); } catch { /* disposed */ } });
+  /* Other extensions come and go after this one's init: every document gets
+     the new catalog, once per burst and only when it changed. It goes out
+     before the flush that delivers the same kernel event, so a listener
+     reads lists at least as new as that event. */
+  let catalogQueued = false;
+  const refreshCatalog = (): void => {
+    if (catalogQueued || disposed) return; catalogQueued = true;
+    queueMicrotask(() => {
+      catalogQueued = false;
+      if (disposed) return;
+      const previous = sentCatalog;
+      const catalog = catalogNow();
+      if (sentCatalog === previous) return;
+      try { rpc.notify('catalog', catalog); } catch { /* disposed */ }
+      broadcast('catalog', catalog);
+    });
+  };
+  for (const event of CATALOG_EVENTS) host.api.events.on(event, refreshCatalog);
   /* The caller hears one outcome within the budget: the probe that tells a
      spinning runtime from a waiting one comes out of it too. */
   const budgetMs = test?.timeoutMs !== undefined && test.timeoutMs > 0 ? test.timeoutMs : 10_000;

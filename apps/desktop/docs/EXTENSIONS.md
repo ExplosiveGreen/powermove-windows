@@ -105,14 +105,20 @@ Reading the project needs no permission, at any `apiVersion`: `project.get`,
 every sandboxed extension. Without `network`, what it reads cannot leave the
 sandbox.
 
-- `network` allows HTTPS and WebSocket requests and remote images and media. It
-  is the capability that lets project data leave, so it is the one to scrutinize.
+- `network` allows HTTPS and WebSocket requests and remote images, media, fonts
+  and stylesheets. It is the capability that lets project data leave, so it is
+  the one to scrutinize. Without it, `fetch` still reads `data:` and `blob:`
+  URLs and bundled `data:` fonts load, since neither leaves the machine.
 - `clipboard` allows writing to the clipboard.
 - `assets` allows picking, importing, and reading asset files.
 - `project:write` allows project mutation through `apply`, `undo`, `redo`, `select`, time and transport controls. `commands.run` can call an extension's own commands and, with this permission, the named legacy editing commands. It cannot call another extension's commands or File, app, export, settings, or mods commands.
 - `full-access` allows trusted-only APIs. Store installs that request it stay off
   until the person installing them accepts Powermove's full-access dialog. They
   can later revoke trust from the Library.
+
+Forms submit to their own `submit` handlers, and the sandbox then cancels the
+navigation. A request the sandbox blocks is logged once and never turns the
+extension off; the Sandbox compatibility check still reports it.
 
 Store extensions supply simple event names; the kernel publishes them as `ext:<extension-id>:<name>`. They may subscribe to those events and the validated read-only host events `project:changed`, `selection`, `time`, `transport`, `theme`, and `extensions:changed`. Registration IDs must start with `<extension-id>.`, and keybindings may invoke only their own commands. Store code can list extensions and call `setUp` for itself; management of other extensions requires a trusted extension.
 
@@ -325,9 +331,9 @@ in-realm type in `api.ts` shows a synchronous result: `api.commands.run`,
 `api.project.get/apply/select/setTime/play/pause/undo/redo/snapshot`,
 `api.transport.setTime/play/pause/toggle/step`, `api.assets.get`,
 `api.storage.get/set/delete`, `api.media.getImportDefaults`, `api.ui.icon`,
-and `api.extensions.list`. `apiVersion` 1 and 2 code gets the same Promises;
-the Sandbox check reports code that uses one of their results without awaiting
-it. Methods already typed as asynchronous, such as `api.assets.pick/import/readText` and `api.ui.confirm`, remain asynchronous.
+`api.panels.isOpen` (your own panel ids only) and `api.extensions.list`.
+`apiVersion` 1 and 2 code gets the same Promises; the Sandbox check reports
+code that uses one of their results without awaiting it. Methods already typed as asynchronous, such as `api.assets.pick/import/readText` and `api.ui.confirm`, remain asynchronous.
 `api.project.revision/selection/time/playing/latest`, `api.transport.time/playing`
 and `api.theme.active/scheme` stay synchronous, and are reactive in components.
 Outside a component, react to events:
@@ -366,7 +372,7 @@ in-realm API after the person installing the extension accepts the trust dialog.
 - **assets** — `pick({ accept, multiple? })`, `import(file, { layerDefinition? })`, `get(id)`, and `readText(id)`. Imported files live in Powermove's durable media store and are embedded when the `.pmv` is saved. Use an asset id in structured layer data instead of storing binary or large text in the project JSON.
 - **theme** — `register({ id, name, scheme, tokens, darkTokens?, css?, rootAttributes? })`, `activate(id)`, `active()`, `scheme()` (both reactive in components). Tokens are CSS custom properties (see "Theme tokens"). `css` may restyle anything.
 - **palette** — `registerProvider(query => entries[])`.
-- **menus** — `contribute(location, ctx => items[])`; locations: `panel:context`, `layer:context`, `timeline:context`, `viewer:context`. Titlebar extension shortcuts are retired; registered panels appear in the panel Library automatically.
+- **menus** — `contribute(location, ctx => items[])`, `collect(location, ctx?)` (in a Store sandbox, only your own contributions); locations: `panel:context`, `layer:context`, `timeline:context`, `viewer:context`. Titlebar extension shortcuts are retired; registered panels appear in the panel Library automatically.
 - **status** — `register({ id, text: () => string|null, side?, onClick? })` for the status bar.
 - **project** — `get()`, `latest()`, `revision()`, `apply(commands, meta?)`, `selection()`, `select()`, `time()`, `setTime()`, `play/pause/playing`, `undo/redo`, `snapshot(t?, maxWidth?)`. `latest()`, `revision()`, `selection()`, `time()` and `playing()` are reactive in components.
   `apply` takes the typed edit commands (`set_property`, `replace_keyframes`, `set_easing`, `set_expression`, `set_content`, `set_layer`, `set_composition`, `add_layer`, `delete_layers`, `reorder_layer`, `add_effect`, `remove_effect`, `set_effect`, `set_scene_parameter`, `add_marker`, `create_section`, `update_section`, `transform_layers`). Every apply is one undo step, validated, lock-aware.

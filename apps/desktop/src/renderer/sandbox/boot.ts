@@ -75,6 +75,25 @@ function attachStyles(module: ExtensionModule, api: PowermoveAPI, doc: Document)
   else for (const css of module.__powermoveStyles ?? []) addStyle(css);
 }
 
+/**
+ * The frames' `allow-forms` only lets Enter, a submit button and
+ * `requestSubmit()` reach the document's own `submit` handlers (Svelte's
+ * `onsubmit` included). This window listener runs after them, in the bubble
+ * phase, and cancels the navigation that `form-action 'none'` would refuse
+ * anyway. A `method="dialog"` form only closes its dialog, so it keeps its
+ * default.
+ */
+export function holdFormSubmissions(win: Window): () => void {
+  const onSubmit = (event: Event): void => {
+    const form = event.target as HTMLFormElement | null;
+    const submitter = (event as SubmitEvent).submitter as HTMLButtonElement | HTMLInputElement | null;
+    const method = submitter?.hasAttribute?.('formmethod') ? submitter.formMethod : form?.method;
+    if (method !== 'dialog') event.preventDefault();
+  };
+  win.addEventListener('submit', onSubmit);
+  return () => win.removeEventListener('submit', onSubmit);
+}
+
 /* Ticks are deltas, so none may be dropped: until the document's API exists
    they merge here and apply once it does. Events need a listener, and none
    can exist before the API. */
@@ -96,6 +115,7 @@ export async function bootRuntime(init: SandboxInit, port: MessagePort, load: Bu
   const live = createRpc(port, {
     tick: ticks.tick,
     theme: (theme: SandboxInit['theme']) => { apply(theme); control?.theme(theme); },
+    catalog: (next: SandboxInit['catalog']) => control?.catalog(next),
     mountPanel: (panelId: string, token: string, viewPort: MessagePort) => control?.mountPanel(panelId, token, viewPort),
     unmountPanel: (token: string) => control?.unmountPanel(token),
     dispose: () => control?.dispose(),
@@ -110,6 +130,7 @@ export async function bootRuntime(init: SandboxInit, port: MessagePort, load: Bu
   window.addEventListener('error', event => runtimeError(event.error ?? event.message));
   window.addEventListener('unhandledrejection', event => runtimeError(event.reason));
   window.addEventListener('securitypolicyviolation', event => live.notify('csp-violation', { directive: event.violatedDirective, blockedURI: event.blockedURI }));
+  holdFormSubmissions(window);
   try {
     const module = await load(init.bundleUrl);
     if (typeof module.default !== 'function') throw new Error('entry module must export default activate(api)');
@@ -164,6 +185,7 @@ export async function bootView(init: SandboxViewInit, kernelPort: MessagePort, r
   const apply = themeApplier(doc);
   let keys = init.keys ?? [];
   let theme = init.theme;
+  let catalog = init.catalog;
   let control: ReturnType<typeof sandboxControl> | undefined;
   const ticks = tickQueue();
   let torn = false;
@@ -177,6 +199,7 @@ export async function bootView(init: SandboxViewInit, kernelPort: MessagePort, r
     win.removeEventListener('keydown', onKey);
     doc.removeEventListener('focusin', onFocus, true);
     doc.removeEventListener('pointerdown', onPointer, true);
+    releaseForms();
     control?.dispose();
     runtime.close();
   };
@@ -184,6 +207,7 @@ export async function bootView(init: SandboxViewInit, kernelPort: MessagePort, r
     tick: ticks.tick,
     // The API may not exist yet; it starts from the latest push.
     theme: (next: SandboxInit['theme']) => { theme = next; apply(next); control?.theme(next); },
+    catalog: (next: SandboxInit['catalog']) => { catalog = next; control?.catalog(next); },
     size: setSize,
     keys: (next: SandboxKey[]) => { keys = next; },
     dispose: teardown
@@ -203,6 +227,7 @@ export async function bootView(init: SandboxViewInit, kernelPort: MessagePort, r
   win.addEventListener('keydown', onKey);
   doc.addEventListener('focusin', onFocus, true);
   doc.addEventListener('pointerdown', onPointer, true);
+  const releaseForms = holdFormSubmissions(win);
   win.addEventListener('error', event => kernel.notify('runtime-error', serializeRpcError(event.error ?? event.message)));
   win.addEventListener('unhandledrejection', event => kernel.notify('runtime-error', serializeRpcError(event.reason)));
   win.addEventListener('securitypolicyviolation', event => kernel.notify('csp-violation', { directive: event.violatedDirective, blockedURI: event.blockedURI }));
@@ -217,7 +242,7 @@ export async function bootView(init: SandboxViewInit, kernelPort: MessagePort, r
   try {
     const info = await runtime.call('definition', init.panelId);
     if (!info) throw new Error(`Panel "${init.panelId}" is no longer registered.`);
-    const api = createSandboxAPI(kernel, { ...init, theme }, 'view');
+    const api = createSandboxAPI(kernel, { ...init, theme, catalog }, 'view');
     control = sandboxControl(api);
     ticks.attach(control);
     const module = await load(init.bundleUrl);
