@@ -10,16 +10,18 @@
  */
 import type { Kernel } from './registries';
 
-export interface ProjectSource { get(): unknown; revision(): number }
+export interface ProjectSource { get(): unknown; revision(): number; selection?(): unknown }
 export type ProjectSnapshot = { generation: number; json: string } | { generation: number; tooLarge: true };
+/** The selection as documents hold it (a plain copy) and its JSON, to compare by. */
+export interface SharedSelection { value: unknown; json: string }
 /** In JSON characters. */
 export const SNAPSHOT_LIMIT = 8 * 1024 * 1024;
 
-export interface SandboxStats { snapshotBuilds: number; snapshotMs: number; ticks: number }
+export interface SandboxStats { snapshotBuilds: number; snapshotMs: number; ticks: number; selectionBuilds: number }
 /** Host-side counters for tests and profiling (`globalThis.__powermoveSandboxStats`). */
 export function sandboxStats(): SandboxStats {
   const scope = globalThis as { __powermoveSandboxStats?: SandboxStats };
-  return scope.__powermoveSandboxStats ??= { snapshotBuilds: 0, snapshotMs: 0, ticks: 0 };
+  return scope.__powermoveSandboxStats ??= { snapshotBuilds: 0, snapshotMs: 0, ticks: 0, selectionBuilds: 0 };
 }
 
 const ASSET_KEYS = /blob|source/i;
@@ -81,6 +83,7 @@ export class ProjectSnapshots {
   private counter = 0;
   private seen: { project: unknown; revision: number } | null = null;
   private built: ProjectSnapshot | null = null;
+  private selected: { project: unknown; revision: number; selection: SharedSelection } | null = null;
   constructor(private readonly source: ProjectSource, private readonly limit = SNAPSHOT_LIMIT) {}
   /** Advances on every kernel `project:changed`, and when the project object or its revision is not the one last seen. */
   get generation(): number {
@@ -89,7 +92,24 @@ export class ProjectSnapshots {
     return this.counter;
   }
   /** A kernel `project:changed`, of any kind. */
-  changed(): void { this.counter += 1; }
+  changed(): void { this.counter += 1; this.selected = null; }
+  /** A kernel `selection`. */
+  selectionChanged(): void { this.selected = null; }
+  /**
+   * The selection every document in the window is told, copied and
+   * stringified once after each kernel `selection` or `project:changed`, or
+   * when the project object or its revision moved; between those (playback
+   * frames) it costs two source reads, whatever its size.
+   */
+  selection(): SharedSelection {
+    const project = this.source.get(), revision = this.source.revision();
+    const held = this.selected;
+    if (held && held.project === project && held.revision === revision) return held.selection;
+    const value = plain(this.source.selection?.() ?? null);
+    sandboxStats().selectionBuilds += 1;
+    this.selected = { project, revision, selection: { value, json: JSON.stringify(value) ?? 'null' } };
+    return this.selected.selection;
+  }
   read(): ProjectSnapshot {
     const generation = this.generation;
     if (this.built?.generation === generation) return this.built;
@@ -109,6 +129,7 @@ export function projectSnapshots(kernel: Kernel, source: ProjectSource): Project
   if (!snapshots) {
     const created = snapshots = new ProjectSnapshots(source);
     kernel.events.on('project:changed', () => created.changed());
+    kernel.events.on('selection', () => created.selectionChanged());
     perKernel.set(kernel, snapshots);
   }
   return snapshots;

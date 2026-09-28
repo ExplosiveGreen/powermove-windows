@@ -45,6 +45,25 @@ it('builds once per generation and advances on changes, revisions and a replaced
   expect(sandboxStats().snapshotBuilds - before).toBe(4);
 });
 
+it('copies the selection once until a selection or project change, a new revision, or a replaced project', () => {
+  let project: Record<string, unknown> = { revision: 1 };
+  let reads = 0;
+  const snapshots = new ProjectSnapshots({ get: () => project, revision: () => Number(project.revision), selection: () => ({ layers: [`l${++reads}`], fn: () => 1 }) });
+  const first = snapshots.selection();
+  expect(first).toEqual({ value: { layers: ['l1'] }, json: '{"layers":["l1"]}' });
+  expect(snapshots.selection()).toBe(first);
+  snapshots.selectionChanged();
+  expect(snapshots.selection().json).toBe('{"layers":["l2"]}');
+  snapshots.changed();
+  expect(snapshots.selection().json).toBe('{"layers":["l3"]}');
+  project.revision = 2;
+  expect(snapshots.selection().json).toBe('{"layers":["l4"]}');
+  project = { revision: 2 };
+  expect(snapshots.selection().json).toBe('{"layers":["l5"]}');
+  expect(snapshots.selection().json).toBe('{"layers":["l5"]}');
+  expect(new ProjectSnapshots({ get: () => project, revision: () => 1 }).selection()).toEqual({ value: null, json: 'null' });
+});
+
 it('refuses a snapshot over the character limit', () => {
   const snapshots = new ProjectSnapshots({ get: () => ({ notes: 'x'.repeat(9 * 1024 * 1024) }), revision: () => 8 });
   expect(snapshots.read()).toEqual({ generation: 1, tooLarge: true });

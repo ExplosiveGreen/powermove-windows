@@ -105,8 +105,12 @@ sandboxed extension and view in the window:
   keys matching `/blob|source/i` at any depth, `library` and `notes` drop keys
   matching `/token|secret|password|key$/i` at any depth, each comp gets the same
   project rules, functions drop out. The limit is 8 Mi characters of JSON.
+- The pushed `selection` is copied and stringified once per kernel
+  `selection` or `project:changed` (or project object / revision change), and
+  that copy is shared by every document; a `time`-only flush does no work
+  proportional to it.
 - Counters for tests: `globalThis.__powermoveSandboxStats = { snapshotBuilds,
-  snapshotMs, ticks }`.
+  snapshotMs, ticks, selectionBuilds }`.
 
 Cost model: an extension that never calls `project.get()` costs one tiny
 `tick` per frame it is subscribed to or whose `time` changed (microseconds). N

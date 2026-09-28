@@ -235,8 +235,9 @@ it('coalesces one flush: last time and selection, one project:changed per kind, 
 });
 
 /* Data plane (docs/sandbox-data-plane.md §3): real shim documents on real ports. */
-function planeDeps(live: { proj: Record<string, any>; time: number; playing: boolean }) {
-  const project = { get: () => live.proj, revision: () => Number(live.proj.revision), selection: () => ({ layers: ['l1'], keys: [], chan: null }),
+function planeDeps(live: { proj: Record<string, any>; time: number; playing: boolean; selection?: { layers: string[]; keys: string[]; chan: string | null } }) {
+  const project = { get: () => live.proj, revision: () => Number(live.proj.revision),
+    selection: vi.fn(() => live.selection ? { layers: [...live.selection.layers], keys: [...live.selection.keys], chan: live.selection.chan } : { layers: ['l1'], keys: [], chan: null }),
     time: () => live.time, playing: () => live.playing, apply: vi.fn(), select: vi.fn(), setTime: vi.fn(), play: vi.fn(), pause: vi.fn(), undo: vi.fn(), redo: vi.fn(), snapshot: async () => '' } as unknown as ProjectAPI;
   return { pm: {}, state: { doc: {}, sel: {}, transport: {}, perf: {} }, project,
     ui: { controls: {}, toast: vi.fn(), confirm: async () => true, menu: vi.fn(), modal: vi.fn(), icon: () => '' },
@@ -375,4 +376,46 @@ it('sends each document one full copy per generation, however often it asks', as
   expect(next).toEqual({ revision: 1, layers: [{ id: 'b' }] });
   expect(await reader.rpc.call('project-snapshot')).toEqual({ generation: generation + 1, unchanged: true });
   expect(await reader.api.project.get()).toBe(next);
+});
+
+it('copies and stringifies the selection once per change for every document, and not at all on a time-only frame', async () => {
+  const kernel = createKernel();
+  const selection = { layers: Array.from({ length: 540 }, (_, index) => `L${index}`), keys: Array.from({ length: 4000 }, (_, index) => `k${index}`), chan: null as string | null };
+  const live = { proj: { revision: 1, layers: [] } as Record<string, any>, time: 0, playing: true, selection };
+  const deps = planeDeps(live);
+  const read = deps.project.selection as unknown as ReturnType<typeof vi.fn>;
+  const heard: string[][] = [];
+  const docs = await Promise.all(['one-ext', 'two-ext'].map(id => planeRuntime(kernel, deps, id, ['project:read'], api => {
+    api.events.on('selection', () => heard.push(api.project.selection().layers));
+  })));
+  await flushed();
+  const stats = sandboxStats();
+  read.mockClear();
+  const builds = stats.selectionBuilds;
+  let hostMs = 0;
+  for (let frame = 1; frame <= 120; frame++) {
+    const start = performance.now();
+    live.time = frame / 60; kernel.events.emit('time', live.time);
+    await Promise.resolve();
+    hostMs += performance.now() - start;
+  }
+  await flushed();
+  expect(read).not.toHaveBeenCalled();
+  expect(stats.selectionBuilds - builds).toBe(0);
+  // One change, one copy, shared by both documents.
+  live.selection = { layers: ['L7'], keys: [], chan: 'opacity' };
+  kernel.events.emit('selection', deps.project.selection());
+  read.mockClear();
+  await flushed();
+  expect(read).toHaveBeenCalledTimes(1);
+  expect(stats.selectionBuilds - builds).toBe(1);
+  expect(docs.map(doc => doc.api.project.selection())).toEqual([live.selection, live.selection]);
+  expect(heard).toEqual([['L7'], ['L7']]);
+  // A new revision or a replaced project is read again even without an event.
+  live.proj.revision = 2; kernel.events.emit('time', 3);
+  await flushed();
+  live.proj = { revision: 2, layers: [] }; kernel.events.emit('time', 4);
+  await flushed();
+  expect(stats.selectionBuilds - builds).toBe(3);
+  console.info(`[bench] playback, two readers, ${JSON.stringify(selection).length} character selection: ${(hostMs / 120 * 1000).toFixed(1)} µs host time per frame, 0 selection copies`);
 });

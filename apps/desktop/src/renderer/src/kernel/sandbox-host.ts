@@ -328,13 +328,16 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   const snapshots = projectSnapshots(kernel, deps.project);
   const docs = new Set<PlaneDoc>();
   const docOf = new WeakMap<object, PlaneDoc>();
-  const stateNow = (): SandboxState => ({
-    time: host.api.project.time(), playing: host.api.project.playing(), revision: host.api.project.revision(),
-    generation: snapshots.generation, selection: readable() ? plain(host.api.project.selection()) as Selection : null
-  });
+  /* The selection and its JSON are the kernel's shared copy (ProjectSnapshots.selection),
+     so a frame that only moved `time` costs nothing proportional to it. */
+  const stateNow = (): { state: SandboxState; selection: string } => {
+    const selection = readable() ? snapshots.selection() : null;
+    return { state: { time: host.api.project.time(), playing: host.api.project.playing(), revision: host.api.project.revision(),
+      generation: snapshots.generation, selection: (selection?.value ?? null) as Selection | null }, selection: selection?.json ?? 'null' };
+  };
   const openDoc = (link: object, docRpc: Rpc): SandboxState => {
-    const state = stateNow();
-    const doc: PlaneDoc = { rpc: docRpc, sent: state, selection: JSON.stringify(state.selection), interest: new Map(), pending: [], delivered: null };
+    const { state, selection } = stateNow();
+    const doc: PlaneDoc = { rpc: docRpc, sent: state, selection, interest: new Map(), pending: [], delivered: null };
     docs.add(doc); docOf.set(link, doc);
     return state;
   };
@@ -343,8 +346,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   function flush(): void {
     flushQueued = false;
     if (disposed || !docs.size) return;
-    const state = stateNow();
-    const selection = JSON.stringify(state.selection);
+    const { state, selection } = stateNow();
     for (const doc of docs) {
       const delta: Partial<Record<keyof SandboxState, unknown>> = {};
       for (const key of STATE_KEYS) if (doc.sent[key] !== state[key]) delta[key] = state[key];
