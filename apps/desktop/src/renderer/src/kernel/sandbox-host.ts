@@ -475,8 +475,9 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     } };
   };
   /* What `effects.list()`, `commands.has()` and the like read in the
-     sandbox. `sentCatalog` is the JSON of the newest copy any document got. */
-  let sentCatalog = '';
+     sandbox. `sentCatalogs` holds the JSON of the copy each document last got:
+     a view mounted since a change already has it, the runtime may not. */
+  const sentCatalogs = new WeakMap<object, string>();
   const catalogNow = (): NonNullable<SandboxInit['catalog']> => {
     const catalog = {
       effects: plain(reg.effects.list()) as Array<Record<string, unknown>>,
@@ -488,22 +489,22 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
       panels: reg.panels.list().map(({ id, title, icon }) => ({ id, title, icon })),
       status: reg.status.list().map(({ id, title, side }) => ({ id, title, side }))
     };
-    sentCatalog = JSON.stringify(catalog);
     return catalog;
   };
-  const initFor = (state: SandboxState): SandboxInit => ({
-    id: record.id, apiVersion: manifest.apiVersion ?? 1, manifest, vars,
-    theme: themeSnapshot(kernel), activeTheme: kernel.theme.activeId, state,
-    bundleUrl: sandboxBundleUrl(base, record.id, record.bundleUrl),
-    catalog: catalogNow()
-  });
+  const initFor = (state: SandboxState, link: object): SandboxInit => {
+    const catalog = catalogNow();
+    sentCatalogs.set(link, JSON.stringify(catalog));
+    return { id: record.id, apiVersion: manifest.apiVersion ?? 1, manifest, vars,
+      theme: themeSnapshot(kernel), activeTheme: kernel.theme.activeId, state,
+      bundleUrl: sandboxBundleUrl(base, record.id, record.bundleUrl), catalog };
+  };
   const links = new Set<ViewLink>();
   const broadcast = (method: string, value: unknown): void => {
     for (const link of links) { try { link.rpc.notify(method, value); } catch { /* view closing */ } }
   };
   const views: ViewHost = {
     src: panelId => test?.onViewInit ? null : sandboxDocumentUrl(base, record.id, perms, panelId),
-    init: link => initFor(openDoc(link, link.rpc)),
+    init: link => initFor(openDoc(link, link.rpc), link),
     detach: link => { const doc = docOf.get(link); if (doc) docs.delete(doc); docOf.delete(link); },
     theme: () => viewTheme(kernel),
     keys: () => keyTable(reg, record.id),
@@ -573,11 +574,13 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     queueMicrotask(() => {
       catalogQueued = false;
       if (disposed) return;
-      const previous = sentCatalog;
       const catalog = catalogNow();
-      if (sentCatalog === previous) return;
-      try { rpc.notify('catalog', catalog); } catch { /* disposed */ }
-      broadcast('catalog', catalog);
+      const json = JSON.stringify(catalog);
+      for (const link of [runtimeLink, ...links]) {
+        if (sentCatalogs.get(link) === json) continue;
+        sentCatalogs.set(link, json);
+        try { link.rpc.notify('catalog', catalog); } catch { /* document closing */ }
+      }
     });
   };
   for (const event of CATALOG_EVENTS) host.api.events.on(event, refreshCatalog);
@@ -593,7 +596,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     document.body.append(frame);
     try {
       await loaded;
-      const init = initFor(openDoc(runtimeLink, rpc));
+      const init = initFor(openDoc(runtimeLink, rpc), runtimeLink);
       if (test?.onPostInit) test.onPostInit(channel.port2, init);
       else frame.contentWindow?.postMessage({ t: 'init', ...init }, '*', [channel.port2]);
       /* The shim answers pings before it imports the bundle, so an answer

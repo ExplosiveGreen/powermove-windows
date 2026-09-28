@@ -29,15 +29,32 @@ async function start(options: { maxHandles?: number; open?: string[] } = {}) {
   let api!: PowermoveAPI;
   let pushes = 0;
   let child!: ReturnType<typeof createRpc>;
+  const views: Array<{ init: SandboxInit; pushes: number }> = [];
   const pending = createSandboxRuntime(kernel, record, deps, {}, { frame, onPostInit(port, init) {
     child = createRpc(port, { catalog: (next: SandboxInit['catalog']) => { pushes += 1; sandboxControl(api).catalog(next); } }, 10_000, { trusted: true, maxHandles: options.maxHandles ?? 1000 });
     api = createSandboxAPI(child, init);
     child.notify('activated');
+  }, onViewInit(_frame, init, ports) {
+    const view = { init, pushes: 0 };
+    views.push(view);
+    const rpc = createRpc(ports[0]!, { catalog: () => { view.pushes += 1; } }, 10_000, { trusted: true });
+    close.push(() => rpc.close());
   } });
   frame.dispatchEvent(new Event('load'));
   const runtime = await pending;
   close.push(() => { runtime.dispose(); child.close(); });
-  return { kernel, api, toast, reportRuntimeError, open, pushes: () => pushes };
+  /* A panel view on its own port, the way a docked panel mounts one. */
+  const openView = async () => {
+    const id = `stub-ext.panel-${views.length}`;
+    await child.call('register', 'panels', crypto.randomUUID(), { id, title: 'Panel' });
+    const body = document.createElement('div');
+    document.body.append(body);
+    const before = views.length;
+    kernel.panels.get(id)!.build!(body, { spec: {} } as never);
+    for (let wait = 0; wait < 50 && views.length === before; wait++) await settle(5);
+    return views.at(-1)!;
+  };
+  return { kernel, api, toast, reportRuntimeError, open, pushes: () => pushes, openView };
 }
 
 type ToastCall = [string, { action?: { label: string; run: () => void }; onDismiss?: () => void; onClose?: () => void; sticky?: boolean; source?: unknown }];
@@ -130,4 +147,17 @@ it('refreshes the catalog when other extensions load or unload, and only when it
   expect(h.pushes()).toBe(2);
   expect(h.api.effects.get('other-ext.glow')).toBeUndefined();
   expect(h.api.commands.has('other-ext.go')).toBe(false);
+});
+
+it('sends each document the catalog it lacks, even after a view mounted with the newer one', async () => {
+  const h = await start();
+  // Another extension loads; before the refresh runs, a view mounts and gets the new catalog in its init.
+  h.kernel.commands.register('other-ext', { id: 'other-ext.go', label: 'Go', run: () => {} });
+  const view = await h.openView();
+  expect(view.init.catalog?.commands?.some(command => command.id === 'other-ext.go')).toBe(true);
+  h.kernel.events.emit('extension:loaded', { id: 'other-ext' });
+  await settle();
+  expect(h.pushes()).toBe(1);
+  expect(h.api.commands.has('other-ext.go')).toBe(true);
+  expect(view.pushes).toBe(0); // it already has this one
 });
