@@ -56,12 +56,21 @@ describe('Claude CLI adapter', () => {
     expect(argv).not.toContain('--safe-mode');
     expect(argv).not.toContain('--strict-mcp-config');
     expect(argv).not.toContain('--disable-slash-commands');
-    expect(argv).not.toContain('--setting-sources');
     expect(argv[argv.indexOf('--allowedTools') + 1]).toContain('Skill');
     expect(argv.at(-1)).toContain('/tmp/reference.png');
     expect(JSON.parse(CLAUDE_PROJECT_SANDBOX_SETTINGS)).toMatchObject({
       sandbox: { enabled: true, allowUnsandboxedCommands: false, failIfUnavailable: true }
     });
+  });
+
+  it.each(['editor', 'project', 'computer'] as const)('loads only user settings in %s mode, never the shared workspace', access => {
+    const argv = buildClaudeArgv({
+      schema, prompt: 'Build', imagePaths: [], model: null, reasoningEffort: null, sessionId: null, access, instructions: 'Build.'
+    });
+    // A workspace .claude/settings.json hook, .mcp.json server, agent or skill
+    // would otherwise run outside the sandbox on the next Claude run.
+    expect(argv[argv.indexOf('--setting-sources') + 1]).toBe('user');
+    expect(argv.indexOf('--setting-sources')).toBeLessThan(argv.indexOf('--system-prompt'));
   });
 
   it('lets project Bash reach only read-only media and package CDNs', () => {
