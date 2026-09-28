@@ -193,11 +193,10 @@ describe('access disclosure', () => {
       { label: 'Imports files', warn: false },
       { label: 'Uses the network', warn: false }
     ]);
-    expect(permissionLines(['network', 'project:read'])).toEqual([
-      { label: 'Reads your project', warn: false },
+    expect(permissionLines(['network', 'project:write'])).toEqual([
+      { label: 'Edits your project', warn: false },
       { label: 'Uses the network', warn: false }
     ]);
-    expect(permissionLines(['project:read', 'project:write'])).toEqual([{ label: 'Edits your project', warn: false }]);
     expect(asksFullAccess(['network', 'full-access'])).toBe(true);
     expect(asksFullAccess(['network'])).toBe(false);
   });

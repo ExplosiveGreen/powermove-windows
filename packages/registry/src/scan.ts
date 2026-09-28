@@ -1,4 +1,4 @@
-import { grantsPermission, type ExtensionPermission } from './manifest';
+import type { ExtensionPermission } from './manifest';
 
 export type ScanKind = 'openai_key' | 'anthropic_key' | 'aws_access_key' | 'github_token' | 'gitlab_token' | 'slack_token' | 'stripe_key' | 'google_api_key' | 'jwt' | 'pem_private_key' | 'high_entropy';
 export interface ScanFinding { path: string; line: number; kind: ScanKind; hard: boolean; waived?: string }
@@ -92,7 +92,7 @@ export function declarePermissionsHint(permissions: readonly ExtensionPermission
 /** Capabilities the code uses that the manifest doesn't grant. Below apiVersion 3 that is every one it uses. */
 export function undeclaredCapabilities(files: { path: string; text: string }[], manifest: { apiVersion: number; permissions?: readonly string[] }): CapabilityFinding[] {
   const declared = manifest.apiVersion < PERMISSIONS_API_VERSION ? undefined : manifest.permissions;
-  return scanCapabilities(files).filter((finding) => !grantsPermission(declared, finding.capability));
+  return scanCapabilities(files).filter((finding) => !declared?.includes(finding.capability));
 }
 
 /** Undeclared capabilities as one sentence, for a publish that the store refused. */
