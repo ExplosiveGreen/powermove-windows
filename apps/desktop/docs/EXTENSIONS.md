@@ -268,6 +268,11 @@ or `'svelte/action'` are erased and always fine. `svelte/server`, `svelte/compil
 the Svelte the app runs, in the editor and in the sandbox alike: bundles carry no
 copy of Svelte, and contexts, transitions and reactivity share one runtime.
 
+`Spring.set()` rejects its promise with `Aborted` when a newer target replaces
+it. Set `spring.target` instead, or give `.then()` a rejection handler: in a Store
+sandbox an unhandled rejection counts as a runtime error, and repeated runtime
+errors turn the extension off.
+
 ### Reactive API reads
 
 These reads are reactive: `api.project.time()`, `playing()`, `revision()`,
