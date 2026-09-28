@@ -47,7 +47,9 @@ it('authors and publishes a real effect through API tools, collects artifacts an
   expect(JSON.parse(result.text).artifacts).toEqual([]);
   expect(requests[0].messages[0].content).not.toContain('require Claude or ChatGPT');
   expect(requests[1].messages.at(-1).content).toContain('PowermoveAPI');
-  expect(requests[4].messages.at(-1).content).toContain('bundlePath');
+  // The compile check reports its result; its bundle stays out of the workspace.
+  expect(requests[4].messages.at(-1).content).toContain('\\"hash\\":');
+  expect(requests[4].messages.at(-1).content).not.toContain('bundlePath');
   await expect(access(stage)).rejects.toThrow();
   await restoreExtensionChangeSet({ liveDirectory: path.join(directory, 'extensions'), historyRoot: path.join(directory, 'Agent Change History/proof'), changeSetId: result.extensionChangeSetId! });
   await expect(access(path.join(directory, 'extensions/gradient-tint'))).rejects.toThrow();
