@@ -807,7 +807,7 @@ export interface ControlsAPI {
  * UI exposes kernel controls, overlays, menus and pointer helpers. Most members only mutate transient interface state; parent picking can apply an edit, shader opening mutates workspace state, and gesture coordinates the backing edit/history transaction.
  */
 export interface UIAPI {
-  /** Only toast, confirm and icon are sandbox-safe; other UI members require full access. */
+  /** Only toast, confirm, icon and copy are sandbox-safe; other UI members require full access. */
   /** Requires the full-access permission for Store extensions. */
   readonly controls: ControlsAPI;
   toast(
@@ -835,6 +835,8 @@ export interface UIAPI {
     }
   ): void;
   confirm(title: string, body?: string): Promise<boolean>;
+  /** Store extensions only: writes plain text to the clipboard from a panel that has focus. Needs the clipboard permission; at most once a second. */
+  copy?(text: string): Promise<void>;
   /** Requires the full-access permission for Store extensions. */
   menu(anchor: HTMLElement | { x: number; y: number }, items: MenuContribution[]): void;
   /** Requires the full-access permission for Store extensions. */

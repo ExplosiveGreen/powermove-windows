@@ -36,6 +36,7 @@ export const IPC = {
   projectReadClose: 'project:read-close',
   projectConfirmClose: 'project:confirm-close',
   dialogConfirm: 'dialog:confirm',
+  clipboardWriteText: 'clipboard:write-text',
 
   renderStart: 'render:start',
   renderWrite: 'render:write',
@@ -243,6 +244,8 @@ export type ProjectOpenResult = {
 } | { ok: true; path: string; projectId: string; data: Uint8Array }
   | { ok: false; cancelled: boolean; error?: string };
 export type CloseDecision = 'save' | 'discard' | 'cancel';
+/** The longest text `clipboard:write-text` takes: 1 MB of UTF-16. */
+export const CLIPBOARD_TEXT_MAX_CHARS = 500_000;
 export interface ConfirmRequest {
   message: string;
   detail?: string;
@@ -665,6 +668,8 @@ export interface PowermoveBridge {
   confirmProjectClose(name: string): Promise<CloseDecision>;
   /** Native NSAlert-style confirmation sheet. Resolves true when the primary button is chosen. */
   confirm(request: ConfirmRequest): Promise<boolean>;
+  /** Writes plain text to the system clipboard while the window has focus; nothing is ever read back. */
+  clipboardWriteText?(text: string): Promise<void>;
 
   render: {
     start(options:{width:number;height:number;fps:number;format:'prores'|'mp4';alpha:boolean;name:string;bitrateMbps?:number}):Promise<string | null>;

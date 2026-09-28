@@ -190,3 +190,11 @@ it('collects this extension’s own menu contributions for a location, in order'
   await settle();
   expect(errors).toEqual(['contributor broke', 'contributor broke']);
 });
+
+it('sends ui.copy to the kernel as plain invoke, which decides permission and focus', async () => {
+  const { api, calls } = harness(['clipboard'], 3, { invoke: () => undefined });
+  expect('copy' in api.ui).toBe(true);
+  await api.ui.copy('#ff6600');
+  expect(calls.filter(call => call[0] === 'invoke')).toEqual([['invoke', 'ui', 'copy', ['#ff6600']]]);
+  expect(() => api.ui.read).toThrow(); // there is no clipboard read
+});

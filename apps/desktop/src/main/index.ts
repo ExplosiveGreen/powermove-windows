@@ -55,6 +55,7 @@ import { registerHapticsIpc } from './haptics';
 import { registerContextMenuIpc } from './context-menu';
 import { registerCloudMediaIpc } from './cloud-media';
 import { registerConfirmIpc } from './native-confirm';
+import { registerClipboardIpc } from './clipboard';
 import { MediaProxyService, playbackConverter, previewConverter, imageSequenceConverter, stillImageConverter, registerMediaProxyIpc } from './media-proxy';
 import { registerNativeEditIpc } from './native-edit';
 import { installMenu, installRendererMenuShortcutRouting } from './menu';
@@ -979,6 +980,7 @@ if (!hasSingleInstanceLock) {
     registerFontsIpc(ipcMain, ctx);
     registerContextMenuIpc(ipcMain, ctx);
     registerConfirmIpc(ipcMain, ctx);
+    registerClipboardIpc(ipcMain, ctx);
     registerCloudMediaIpc(ipcMain, ctx);
     registerAgentNotifications(ipcMain, ctx);
     registerNativeEditIpc(ipcMain, ctx);

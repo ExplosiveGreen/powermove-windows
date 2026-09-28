@@ -56,6 +56,16 @@ describe('desktop permissions', () => {
     expect(check(contents, 'media', origin, details)).toBe(false);
   });
 
+  it('never grants clipboard reads, to the app or a sandbox frame', () => {
+    for (const isMainFrame of [true, false]) {
+      const { request, check } = handlers();
+      const callback = vi.fn();
+      request(contents, 'clipboard-read', callback, { ...details, isMainFrame });
+      expect(callback).toHaveBeenCalledWith(false);
+      expect(check(contents, 'clipboard-read', origin, { ...details, isMainFrame })).toBe(false);
+    }
+  });
+
   it('permits filesystem access only beneath a directory selected by the app document', () => {
     const { request, check } = handlers();
     const owner = appContents(details.requestingUrl);

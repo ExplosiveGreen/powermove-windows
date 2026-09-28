@@ -17,7 +17,8 @@ export class SandboxTimeoutError extends Error {
 export interface RpcBudget { windowStart: number; received: number; excessSince: number; reported: boolean; handles: Set<number> }
 export const createRpcBudget = (): RpcBudget => ({ windowStart: Date.now(), received: 0, excessSince: 0, reported: false, handles: new Set() });
 /** `trusted` is for a sandbox document's port to the kernel: what the kernel sends is not metered, only what the sandbox sends. */
-export interface RpcLimits { maxIncomingBytes?: number; maxIncomingPerSecond?: number; maxHandles?: number; trusted?: boolean; budget?: RpcBudget; onSustainedLimit?(): void; onRemoteHandleRelease?(id: number): void }
+/** `unmetered` names at most one Blob in a call's arguments that the byte limit skips; the handler for that call must cap it itself. */
+export interface RpcLimits { maxIncomingBytes?: number; maxIncomingPerSecond?: number; maxHandles?: number; trusted?: boolean; budget?: RpcBudget; unmetered?(method: unknown, args: unknown[]): Blob | undefined; onSustainedLimit?(): void; onRemoteHandleRelease?(id: number): void }
 function messageBytes(value: unknown, limit: number, depth = 0, seen = new WeakSet<object>()): number {
   if (depth > 64) return Infinity;
   if (typeof value === 'string') return value.length * 2;
@@ -80,7 +81,8 @@ export function createRpc(port: MessagePort, handlers: Record<string, (...args: 
     const now = Date.now();
     if (!limits.trusted && now - budget.windowStart >= 1000) { if (budget.received <= (limits.maxIncomingPerSecond ?? 200)) budget.excessSince = 0; budget.windowStart = now; budget.received = 0; }
     const byteLimit = limits.maxIncomingBytes ?? 1024 * 1024;
-    const tooLarge = !limits.trusted && messageBytes(message, byteLimit) > byteLimit;
+    const exempt = !limits.trusted && message.t === 'call' && Array.isArray(message.a) ? limits.unmetered?.(message.m, message.a) : undefined;
+    const tooLarge = !limits.trusted && messageBytes(message, byteLimit, 0, typeof Blob !== 'undefined' && exempt instanceof Blob ? new WeakSet<object>([exempt]) : undefined) > byteLimit;
     // Replies to our own requests are already bounded by `pending`; unknown
     // replies consume the same budget as calls and notifications.
     const unsolicited = message.t !== 'reply' || !pending.has(message.id);
