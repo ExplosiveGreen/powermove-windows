@@ -12,8 +12,8 @@ Nothing here has shipped to Store users yet, so the sandbox contract may change.
    `transport` event. Playback emits `time` every frame, so one extension cost
    ~46 ms of main thread per frame on a 1.4 MB project (walk 29 ms, size check
    7 ms, structured clone 10 ms, receiver walk 6 ms). Two extensions doubled it.
-2. **Reads were not a permission.** Every Store extension received the whole
-   project, including the edit log.
+2. **Everything was pushed.** Every Store extension received the whole
+   project, including the edit log, whether it read it or not.
 3. **One process for all extensions.** Chromium puts sandboxed iframes of one
    site in one process, so every Store extension shared a renderer. An
    infinite loop or OOM in one froze or crashed all of them. (The editor itself
@@ -83,9 +83,8 @@ Nothing here has shipped to Store users yet, so the sandbox contract may change.
 interface SandboxState { time: number; playing: boolean; revision: number; generation: number; selection: Selection | null }
 ```
 
-`selection` is `null` without project read access. `init` carries `state`
-(no project). Afterwards the host sends at most one `tick` notification per
-microtask flush: `tick(delta: Partial<SandboxState>, events: [name, payload][])`.
+`init` carries `state` (no project). Afterwards the host sends at most one
+`tick` notification per microtask flush: `tick(delta: Partial<SandboxState>, events: [name, payload][])`.
 The document applies the delta, then dispatches the events to local listeners
 in order. Nothing is sent to a document whose state did not change and which
 has no subscribed event pending.
@@ -97,13 +96,12 @@ callback handle crosses, and there is no per-event round trip. The host
 forwards occurrences of subscribed names in the next `tick`. Coalescing within
 one flush: `time` and `selection` keep the last value; duplicate
 `project:changed` with the same `kind` collapse; everything else is kept in
-order. `project:changed` and `selection` require project read access.
+order.
 
 **Project reads.** `api.project.get()` returns `Promise<Project>` in the
-sandbox. It requires apiVersion 3 and `project:read` (or `project:write`, which
-implies it); see §4. The
-document caches the parsed snapshot by `generation`: if `state.generation`
-equals the cached one, it resolves at once without a message. Otherwise it
+sandbox, for every extension at any apiVersion (§4). The document caches the
+parsed snapshot by `generation`: if `state.generation` equals the cached one,
+it resolves at once without a message. Otherwise it
 calls `project-snapshot` (one call in flight, shared by concurrent callers),
 `JSON.parse`s the string, deep-freezes it, and caches it. Too large → rejects
 with a clear error. The kernel sends each document (keyed per runtime or view
@@ -144,19 +142,18 @@ trusted: the document's RPC for the kernel port skips size and rate limits
 
 ### 4. Permissions
 
-`project:read`: "Reads your project". Needed for `project.get`,
-`project.selection`, and the `project:changed` and `selection` events.
-`project:write` implies it. `time`, `playing`, `revision`, `transport` and
-`time` events need no permission.
+Reading the project needs no permission. `project.get`, `project.selection`,
+`project.snapshot` and the `project:changed` and `selection` events are
+available to every sandboxed extension at any apiVersion, as in Figma plugins.
+Mutations still need `project:write`, and declaring any permission still needs
+apiVersion 3.
 
-Like every permission, it needs apiVersion 3: the manifest parser rejects
-`permissions` below it, and the shim grants apiVersion 1 and 2 documents no
-project reads either way. So apiVersion ≤ 2 code never reads the project in the
-sandbox. The
-runtime `PermissionError`, the publish-time scan (desktop plan and cloud, both
-from `packages/registry/src/scan.ts`) and the Sandbox check all say to set
-apiVersion 3 and declare `project:read` for such code, and just to declare it
-otherwise; publishing is blocked until it does.
+v2 first gated reads behind a read permission. It was removed: reads alone
+cannot leave the sandbox without `network`, so `network` is the capability that
+gates exfiltration and the one to scrutinize. Declaring reads added friction for
+every real extension, including Powermove's built-ins, and protected nothing
+`network` does not. The snapshot still omits the edit log, asset blob and source fields, and `library`/`notes`
+secrets (§3).
 
 ## Acceptance
 
@@ -165,6 +162,9 @@ otherwise; publishing is blocked until it does.
   within noise of no extension.
 - 1.4 MB project, an extension calling `get()` on each `project:changed`: one
   build per change, shared across extensions.
+- An extension with no permissions can `await project.get()`, read the
+  selection, subscribe to `project:changed` and `selection`, and call
+  `project.snapshot()`.
 - Two Store extensions run in two processes, neither the editor's. A spinning
   extension is killed within ~12 s, turned off, and the other keeps working;
   editor frames are unaffected throughout.
