@@ -38,7 +38,9 @@ Nothing here has shipped to Store users yet, so the sandbox contract may change.
   `app://<host>/ext/<id>/bundle.js`. A sandbox host serves exactly: its
   `host/ext-sandbox.html` (id must hash to the host; perms must match the
   manifest), the static chunks that document needs (`host/*.js`, `assets/*`,
-  fonts), and `ext/<its own id>/…`. Everything else is 404.
+  fonts), and `ext/<its own id>/…`. Everything else is 404. Main fails closed
+  on a collision: a host that no installed id, or more than one, hashes to
+  serves nothing, and `sandboxTerminate` kills nothing there.
 - CSP of the sandbox document is derived from the manifest as today, with the
   extension's own origin: `script-src app://<host>/host/ app://<host>/ext/<id>/`.
   The editor's own CSP allows `frame-src app:`; the navigation guard allows
