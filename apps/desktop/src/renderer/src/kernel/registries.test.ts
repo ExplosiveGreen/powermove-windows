@@ -76,7 +76,7 @@ describe('kernel palette, menus, events, theme', () => {
     const entry = (id: string): PaletteEntry => ({ id, label: id, category: 'Test', run: () => id });
     kernel.registerPaletteProvider('a', () => [entry('a1')]);
     const second = kernel.registerPaletteProvider('b', () => [entry('b1')]);
-    expect(kernel.paletteProviders().flatMap((p) => p.provider('').map((e) => e.id))).toEqual(['a1', 'b1']);
+    expect(kernel.paletteProviders().flatMap((p) => (p.provider('') as PaletteEntry[]).map((e) => e.id))).toEqual(['a1', 'b1']);
     second.dispose();
     expect(kernel.paletteProviders()).toHaveLength(1);
 
@@ -96,6 +96,47 @@ describe('kernel palette, menus, events, theme', () => {
     expect(kernel.collectMenu('panel:context')).toEqual([{ label: 'still here' }]);
     expect(error).toHaveBeenCalled();
     error.mockRestore();
+  });
+
+  it('gathers a menu synchronously when every contribution answers at once', () => {
+    const kernel = createKernel();
+    kernel.contributeMenu('a', 'layer:context', (ctx) => [{ label: `A ${String(ctx.layerId)}` }]);
+    expect(kernel.gatherMenu('layer:context', { layerId: 'L1' })).toEqual([{ label: 'A L1' }]);
+  });
+
+  it('waits for asynchronous contributions in registration order, and leaves them out of collect', async () => {
+    const kernel = createKernel();
+    kernel.contributeMenu('first', 'layer:context', async (ctx) => [{ label: `Async ${String(ctx.layerId)}` }]);
+    kernel.contributeMenu('second', 'layer:context', () => [{ label: 'Sync' }]);
+    const gathered = kernel.gatherMenu('layer:context', { layerId: 'L2' });
+    expect(gathered).toBeInstanceOf(Promise);
+    await expect(gathered).resolves.toEqual([{ label: 'Async L2' }, { label: 'Sync' }]);
+    expect(kernel.collectMenu('layer:context', { layerId: 'L2' })).toEqual([{ label: 'Sync' }]);
+  });
+
+  it('opens at the deadline without a late or failed contribution, and never adds it afterwards', async () => {
+    vi.useFakeTimers();
+    try {
+      const kernel = createKernel();
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      let late!: (items: MenuContribution[]) => void;
+      kernel.contributeMenu('slow', 'panel:context', () => new Promise<MenuContribution[]>(resolve => { late = resolve; }));
+      kernel.contributeMenu('broken', 'panel:context', () => Promise.reject(new Error('nope')));
+      kernel.contributeMenu('quick', 'panel:context', () => [{ label: 'Quick' }]);
+      let result: MenuContribution[] | null = null;
+      void Promise.resolve(kernel.gatherMenu('panel:context', {})).then(items => { result = items; });
+      await vi.advanceTimersByTimeAsync(99);
+      expect(result).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(result).toEqual([{ label: 'Quick' }]);
+      late([{ label: 'Too late' }]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(result).toEqual([{ label: 'Quick' }]);
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('broken'), expect.any(Error));
+      error.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('emits typed events, isolates handler errors, and scopes by owner', () => {

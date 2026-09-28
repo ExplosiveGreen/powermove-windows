@@ -373,10 +373,12 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     palette: { registerProvider(fn: (...args: any[]) => unknown) {
       if (mode === 'view') return registration('palette', { provider: 0 }, [], fn);
       let current: HandleId[] = [], previous: HandleId[] = [];
-      const id = handle((query: string) => {
+      /* The entries may be a Promise. Handles live for this query and the next. */
+      const id = handle(async (query: string) => {
+        const entries = await fn(query) as Record<string, any>[];
         for (const item of previous) rpc.release(item);
         previous = current; current = [];
-        return (fn(query) as Record<string, any>[]).map(entry => {
+        return entries.map(entry => {
           const run = handle(entry.run); current.push(run); return { ...entry, run };
         });
       });
@@ -390,10 +392,13 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
       menuContributors.add(own);
       if (mode === 'view') { const recorded = registration('menus', { location, items: 0 }, [], fn); return { dispose() { menuContributors.delete(own); recorded.dispose(); } }; }
       let current: HandleId[] = [], previous: HandleId[] = [];
-      const id = handle((ctx: unknown) => {
+      /* The items may be a Promise; the host waits for them within its menu
+         deadline. Handles live for this open and the next. */
+      const id = handle(async (ctx: unknown) => {
+        const items = await fn(ctx) as Array<string | Record<string, any>>;
         for (const item of previous) rpc.release(item);
         previous = current; current = [];
-        return (fn(ctx) as Array<string | Record<string, any>>).map(entry => {
+        return items.map(entry => {
           if (typeof entry === 'string' || !entry.run) return entry;
           const run = handle(entry.run); current.push(run); return { ...entry, run };
         });
@@ -408,7 +413,9 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     }, collect: (location: string, ctx: Record<string, unknown> = {}) => [...menuContributors].flatMap(({ location: where, fn }) => {
       if (where !== location) return [];
       try { const items = fn(ctx); return Array.isArray(items) ? items : []; } catch (error) { raise(error); return []; }
-    }) },
+    }), gather: async (location: string, ctx: Record<string, unknown> = {}) => (await Promise.all([...menuContributors].filter(({ location: where }) => where === location).map(async ({ fn }) => {
+      try { const items = await fn(ctx); return Array.isArray(items) ? items : []; } catch (error) { raise(error); return []; }
+    }))).flat() },
     panels: { register(def: Record<string, any>) {
       if (!def || typeof def.id !== 'string' || !def.id) throw new Error('panels.register requires an id');
       if (!def.component && typeof def.build !== 'function') throw new Error(`panel "${def.id}" needs component or build`);

@@ -191,6 +191,26 @@ it('collects this extension’s own menu contributions for a location, in order'
   expect(errors).toEqual(['contributor broke', 'contributor broke']);
 });
 
+it('gathers this extension’s own async menu contributions for one open', async () => {
+  const channel = new MessageChannel();
+  const errors: string[] = [];
+  const host = createRpc(channel.port2, { register: () => undefined, 'dispose-registration': () => undefined, 'runtime-error': (error: { message: string }) => { errors.push(error.message); } });
+  const rpc = createRpc(channel.port1, {}, 1000, { trusted: true });
+  close.push(() => { rpc.close(); host.close(); });
+  const init = { id: 'shim-ext', apiVersion: 3, manifest: { id: 'shim-ext', name: 'Shim', version: '1.0.0', apiVersion: 3, permissions: [] }, vars: {},
+    theme: { scheme: 'dark', tokens: {} }, bundleUrl: '', state: { time: 0, playing: false, revision: 1, generation: 1, selection: null } } as unknown as SandboxInit;
+  const api = createSandboxAPI(rpc, init) as any;
+  api.menus.contribute('layer:context', async (ctx: { layer?: string }) => [{ label: `Rename ${ctx.layer}`, run: () => 1 }]);
+  api.menus.contribute('viewer:context', () => [{ label: 'Elsewhere' }]);
+  api.menus.contribute('layer:context', async () => { throw new Error('contributor broke'); });
+  api.menus.contribute('layer:context', () => ['-']);
+  const items = await api.menus.gather('layer:context', { layer: 'B' });
+  expect(items.map((item: any) => typeof item === 'string' ? item : item.label)).toEqual(['Rename B', '-']);
+  expect(await api.menus.gather('timeline:context')).toEqual([]);
+  await settle();
+  expect(errors).toEqual(['contributor broke']);
+});
+
 it('sends ui.copy to the kernel as plain invoke, which decides permission and focus', async () => {
   const { api, calls } = harness(['clipboard'], 3, { invoke: () => undefined });
   expect('copy' in api.ui).toBe(true);

@@ -273,6 +273,42 @@ describe('installSvelteOverlays', () => {
     expect(document.querySelector('.drop')).not.toBeNull();
   });
 
+  it('opens a menu whose items arrive later, unless another menu or a close came first', async () => {
+    const trigger = document.querySelector<HTMLButtonElement>('#trigger')!;
+    const later = (label: string) => {
+      let answer!: (items: unknown[]) => void;
+      return { items: new Promise<unknown[]>(resolve => { answer = resolve; }), answer: () => answer([{ label }]) };
+    };
+    const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+
+    const first = later('First target');
+    PM.menu(trigger, first.items);
+    expect(document.querySelector('.drop')).toBeNull();
+    first.answer();
+    await settle();
+    expect(document.querySelector('.drop')?.textContent).toContain('First target');
+
+    // Asked for A, then B opened before A answered: A never shows.
+    const stale = later('Stale target');
+    PM.menu(trigger, stale.items);
+    PM.menu(trigger, [{ label: 'Current target' }]);
+    stale.answer();
+    await settle();
+    expect(document.querySelectorAll('.drop')).toHaveLength(1);
+    expect(document.querySelector('.drop')?.textContent).toContain('Current target');
+
+    const dismissed = later('Dismissed');
+    PM.menu(trigger, dismissed.items);
+    PM.closeMenus();
+    dismissed.answer();
+    await settle();
+    expect(document.querySelector('.drop')).toBeNull();
+
+    PM.menu(trigger, Promise.resolve([]));
+    await settle();
+    expect(document.querySelector('.drop')).toBeNull();
+  });
+
   it('closes a menu on an outside pointer and restores its trigger', () => {
     vi.useFakeTimers();
     const trigger = document.querySelector<HTMLButtonElement>('#trigger')!;
@@ -644,6 +680,35 @@ describe('installSvelteOverlays', () => {
     expect(document.querySelector('#palette')).toBeNull();
     expect(document.querySelector('#scrim')?.classList.contains('on')).toBe(false);
     expect(document.querySelector<HTMLElement>('#projects-screen')?.inert).toBe(false);
+  });
+});
+
+describe('palette with asynchronous providers', () => {
+  it('shows a late answer only while its query is still the one typed', async () => {
+    const kernel = { paletteProviders: () => [{ ownerId: 'sandboxed', provider }] };
+    const answers = new Map<string, (entries: unknown[]) => void>();
+    function provider(query: string) {
+      return new Promise(resolve => answers.set(query, resolve));
+    }
+    PM.Kernel = kernel;
+    PM.commands.palette.run();
+    flushSync();
+    const input = document.querySelector<HTMLInputElement>('#palette input[role="combobox"]')!;
+    const type = (value: string) => { input.value = value; input.dispatchEvent(new InputEvent('input', { bubbles: true })); flushSync(); };
+    const labels = () => [...document.querySelectorAll('#palette [role="option"]')].map(option => option.textContent?.trim());
+    const entry = (label: string) => [{ id: label, label, category: 'Ext', run: vi.fn() }];
+
+    type('stale');
+    type('fresh');
+    answers.get('fresh')!(entry('Fresh answer'));
+    await vi.waitFor(() => { flushSync(); expect(labels()).toContain('Fresh answer'); });
+    answers.get('stale')!(entry('Stale answer'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    flushSync();
+    expect(labels()).toEqual(['Fresh answer']);
+
+    type('fresher');
+    expect(labels()).not.toContain('Fresh answer');
   });
 });
 

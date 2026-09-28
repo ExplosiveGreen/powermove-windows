@@ -78,6 +78,44 @@ describe('palette entries with kernel contributions', () => {
     expect(entries.filter((entry) => entry.cat === 'Ext')).toHaveLength(1);
   });
 
+  it('lands an asynchronous provider in place, after the rows that answered at once', async () => {
+    const PM = model();
+    PM.Kernel.registerPaletteProvider('sandboxed', async (query: string) => [{ id: `s:${query}`, label: 'Sandboxed', category: 'Ext', run: () => {} }]);
+    PM.Kernel.registerPaletteProvider('trusted', () => [{ id: 't:1', label: 'Trusted', category: 'Ext', run: () => {} }]);
+    const late = vi.fn();
+
+    const now = paletteEntries(PM, '', late);
+
+    expect(now.map((entry) => entry.id)).toEqual(['command:undo', 't:1']);
+    await vi.waitFor(() => expect(late).toHaveBeenCalledOnce());
+    expect(late.mock.calls[0]![0].map((entry: { id: string }) => entry.id)).toEqual(['command:undo', 's:', 't:1']);
+  });
+
+  it('keeps a command whose when() answers later at its place, only if it answers true', async () => {
+    const PM = model();
+    PM.commands = {
+      first: { id: 'first', label: 'First', cat: 'A', run: () => {} },
+      shown: { id: 'shown', label: 'Shown later', cat: 'A', when: async () => true, run: () => {} },
+      hidden: { id: 'hidden', label: 'Hidden later', cat: 'A', when: async () => false, run: () => {} },
+      last: { id: 'last', label: 'Last', cat: 'A', run: () => {} }
+    };
+    const late = vi.fn();
+
+    expect(paletteEntries(PM, '', late).map((entry) => entry.id)).toEqual(['command:first', 'command:last']);
+    await vi.waitFor(() => expect(late).toHaveBeenCalledTimes(2));
+    expect(late.mock.calls[1]![0].map((entry: { id: string }) => entry.id)).toEqual(['command:first', 'command:shown', 'command:last']);
+  });
+
+  it('asks when() only of commands that match the query', () => {
+    const PM = model();
+    const when = vi.fn(() => true);
+    PM.commands = { other: { id: 'other', label: 'Other', cat: 'A', when, run: () => {} } };
+
+    paletteEntries(PM, 'undo');
+
+    expect(when).not.toHaveBeenCalled();
+  });
+
   it('drops provider entries with no run function', () => {
     const PM = model();
     PM.Kernel.registerPaletteProvider('sloppy', () => [{ id: 'x', label: 'X' }] as never);

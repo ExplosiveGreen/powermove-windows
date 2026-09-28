@@ -12,7 +12,17 @@
   let gliderOn = $state(false);
   let query = $state('');
   let selected = $state(0);
-  let items = $derived(paletteEntries(PM, query));
+  /* Asynchronous answers (sandboxed providers and `when`s) arrive after the
+     rows for a query; they count only while that query is the one asked. */
+  let latest: object | null = null;
+  let late = $state.raw<{ asked: object; items: PaletteEntry[] } | null>(null);
+  let asked = $derived.by(() => {
+    const request = { items: [] as PaletteEntry[] };
+    latest = request;
+    request.items = paletteEntries(PM, query, (items) => { if (latest === request) late = { asked: request, items }; });
+    return request;
+  });
+  let items = $derived(late?.asked === asked ? late.items : asked.items);
   // Group consecutive entries by category while keeping the flat index that
   // keyboard navigation and aria-activedescendant rely on.
   let groups = $derived.by(() => {

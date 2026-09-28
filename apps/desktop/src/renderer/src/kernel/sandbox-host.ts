@@ -1,7 +1,7 @@
 import type { ExtensionRecord } from '../../../shared/extensions';
 import { createRpc, createRpcBudget, rpcTransfers, type Rpc } from '../../../shared/sandbox-rpc';
 import { panelInfo, type SandboxEvent, type SandboxInit, type SandboxKey, type SandboxSnapshot, type SandboxState, type SandboxViewInit } from '../../sandbox/shim-api';
-import type { Disposable, Selection } from './api';
+import type { Disposable, MenuContribution, Selection } from './api';
 import { createExtensionAPI, type ExtensionHandle, type HostDeps } from './host';
 import type { Kernel } from './registries';
 import { themeScheme, themeTokens } from './theme-apply';
@@ -69,6 +69,26 @@ export function cached<T>(rpc: Rpc, id: number, fallback: T, map: (value: unknow
   let last = fallback;
   let pending = false;
   return (...args) => { if (!pending) { pending = true; void rpc.invokeHandle(id, ...args).then(value => { last = map(value); }).catch(() => {}).finally(() => { pending = false; }); } return last; };
+}
+/** How long a check waits for a sandboxed command's `when`. */
+export const WHEN_DEADLINE_MS = 100;
+/**
+ * A sandboxed `when`, asked afresh on every check. An answer within
+ * `deadlineMs` is the check's; past it the check takes the last answer
+ * (`true` before any), and the late one becomes the last when it lands.
+ */
+export function freshWhen(rpc: Rpc, id: number, deadlineMs = WHEN_DEADLINE_MS): () => Promise<boolean> {
+  let last = true, asked = 0, answered = 0;
+  return () => new Promise<boolean>((resolve, reject) => {
+    const check = ++asked;
+    let late = false;
+    const timer = setTimeout(() => { late = true; resolve(last); }, deadlineMs);
+    rpc.invokeHandle(id).then(value => {
+      // An older check answering after a newer one does not overwrite it.
+      if (check > answered) { answered = check; last = Boolean(value); }
+      clearTimeout(timer); resolve(Boolean(value));
+    }, error => { clearTimeout(timer); if (!late) reject(error); });
+  });
 }
 function themeSnapshot(kernel: Kernel): SandboxInit['theme'] {
   const definition = kernel.themes.get(kernel.theme.activeId);
@@ -287,19 +307,27 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
         case 'theme': item = host.api.theme.register(sandboxTheme(value) as unknown as Parameters<typeof host.api.theme.register>[0]); break;
         case 'keybindings': item = host.api.keybindings.bind({ ...value, priority: 1000 } as unknown as Parameters<typeof host.api.keybindings.bind>[0]); break;
         case 'media-defaults': item = host.api.media.registerImportDefaults(value as unknown as Parameters<typeof host.api.media.registerImportDefaults>[0]); break;
-        case 'commands': item = host.api.commands.register({ ...value, id: String(value.id), label: String(value.label), run: (...args: unknown[]) => rpc.invokeHandle(Number(value.run), ...args), ...(value.when ? { when: cached(rpc, Number(value.when), true) } : {}) }); break;
+        case 'commands': item = host.api.commands.register({ ...value, id: String(value.id), label: String(value.label), run: (...args: unknown[]) => rpc.invokeHandle(Number(value.run), ...args), ...(value.when ? { when: freshWhen(rpc, Number(value.when)) } : {}) }); break;
         case 'status': item = host.api.status.register({ ...value, id: String(value.id), text: cached(rpc, Number(value.text), null), ...(value.onClick ? { onClick: () => void rpc.invokeHandle(Number(value.onClick)) } : {}) }); break;
-        case 'palette': item = host.api.palette.registerProvider(cached(rpc, Number(value.provider), [], result => paletteEntriesSchema.parse(result).map(entry => {
-          claimHandles([entry.run]);
-          if (!ownId(record.id, entry.id) || reg.commands.topEntry(entry.id)?.ownerId && reg.commands.topEntry(entry.id)?.ownerId !== record.id) denied('Palette entry id collides with another owner', 'id_collision');
-          return { ...entry, run: () => rpc.invokeHandle(entry.run) };
-        }))); break;
-        case 'menus': item = host.api.menus.contribute(value.location as Parameters<typeof host.api.menus.contribute>[0], cached(rpc, Number(value.items), [], result => menuEntriesSchema.parse(result).map(entry => {
-          if (typeof entry === 'string' || !('run' in entry) || !entry.run) return entry;
-          const run = entry.run;
-          claimHandles([run]);
-          return { ...entry, run: () => rpc.invokeHandle(run) };
-        })) as Parameters<typeof host.api.menus.contribute>[1]); break;
+        /* Asked for every query; the palette keeps a reply only while it still
+           shows the query that reply answers. */
+        case 'palette': item = host.api.palette.registerProvider(query => rpc.invokeHandle(Number(value.provider), query)
+          .then(result => paletteEntriesSchema.parse(result).map(entry => {
+            claimHandles([entry.run]);
+            if (!ownId(record.id, entry.id) || reg.commands.topEntry(entry.id)?.ownerId && reg.commands.topEntry(entry.id)?.ownerId !== record.id) denied('Palette entry id collides with another owner', 'id_collision');
+            return { ...entry, run: () => rpc.invokeHandle(entry.run) };
+          }))); break;
+        /* Asked afresh on every open, with that open's ctx: the reply to this
+           call is the only one these items can come from, so a menu never
+           shows (or runs) items built for another target. The kernel bounds
+           the wait. */
+        case 'menus': item = host.api.menus.contribute(value.location as Parameters<typeof host.api.menus.contribute>[0], ctx => rpc.invokeHandle(Number(value.items), ctx)
+          .then(result => menuEntriesSchema.parse(result).map(entry => {
+            if (typeof entry === 'string' || !('run' in entry) || !entry.run) return entry;
+            const run = entry.run;
+            claimHandles([run]);
+            return { ...entry, run: () => rpc.invokeHandle(run) };
+          }) as MenuContribution[])); break;
         case 'events': {
           const doc = docOf.get(link);
           if (!doc) throw new Error('Sandbox document is not connected');

@@ -122,8 +122,9 @@ export interface CommandDefinition {
   /** Display hint only; bind keys with `keybindings.bind`. */
   kb?: string | null;
   run: (...args: unknown[]) => unknown;
-  /** Return false to hide from palette/menus (still runnable by id). */
-  when?: () => boolean;
+  /** Return false to hide from palette/menus (still runnable by id). Asked
+   *  on every check; a Promise (sandboxed extensions) lands when it settles. */
+  when?: () => boolean | Promise<boolean>;
 }
 
 export interface CommandsAPI {
@@ -336,7 +337,9 @@ export interface PaletteEntry {
   kb?: string | null;
   run(): unknown;
 }
-export type PaletteProvider = (query: string) => PaletteEntry[];
+/** Called for every query. A Promise lands in the palette when it settles,
+ *  if the palette still shows the query it was asked for. */
+export type PaletteProvider = (query: string) => PaletteEntry[] | Promise<PaletteEntry[]>;
 
 export type MenuLocation = 'titlebar:right' | 'panel:context' | 'layer:context' | 'timeline:context' | 'viewer:context';
 
@@ -346,9 +349,15 @@ export type MenuContribution =
   | { label: string; icon?: string; kb?: string | null; on?: boolean; disabled?: boolean; run?: () => unknown };
 
 export interface MenusAPI {
-  contribute(location: MenuLocation, items: (ctx: Record<string, unknown>) => MenuContribution[]): Disposable;
-  /** Everything contributed for a location, in registration order. */
+  /** Called on every open with that open's `ctx`. A Promise is waited for at
+   *  most 100 ms; items that arrive later are left out of that open. */
+  contribute(location: MenuLocation, items: (ctx: Record<string, unknown>) => MenuContribution[] | Promise<MenuContribution[]>): Disposable;
+  /** Everything contributed for a location, in registration order. Only
+   *  synchronous contributions: asynchronous ones answer the menus they open. */
   collect(location: MenuLocation, ctx?: Record<string, unknown>): MenuContribution[];
+  /** Everything contributed for one open, asynchronous contributions
+   *  included, once they answered or 100 ms passed. Hand it to `ui.menu`. */
+  gather(location: MenuLocation, ctx?: Record<string, unknown>): Promise<MenuContribution[]>;
 }
 
 export interface StatusItem {
@@ -837,8 +846,10 @@ export interface UIAPI {
   confirm(title: string, body?: string): Promise<boolean>;
   /** Store extensions only: writes plain text to the clipboard from a panel that has focus. Needs the clipboard permission; at most once a second. */
   copy?(text: string): Promise<void>;
-  /** Requires the full-access permission for Store extensions. */
-  menu(anchor: HTMLElement | { x: number; y: number }, items: MenuContribution[]): void;
+  /** Requires the full-access permission for Store extensions. A Promise of
+   *  items opens the menu when it settles with any, unless another menu
+   *  opened or menus closed first. */
+  menu(anchor: HTMLElement | { x: number; y: number }, items: MenuContribution[] | Promise<MenuContribution[]>): void;
   /** Requires the full-access permission for Store extensions. */
   modal(opts: { title?: string; body?: HTMLElement | string; width?: number; actions?: Array<{ label: string; pri?: boolean; run?: () => unknown }> }): { close(): void; body: HTMLElement };
   /** Icon SVG markup by name from the kernel set. Returns a Promise when sandboxed. */

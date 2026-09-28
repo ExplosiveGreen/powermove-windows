@@ -38,7 +38,7 @@ export function installLayerMenu(PM: PMRegistry): void {
     const editOrigin = origin === 'viewer' ? 'canvas' : origin;
     const apply = (commands: any, label: string) => PM.Edit.apply(commands, { label, origin: editOrigin });
     const patch = (value: any, label: string) => apply(selected.map((item: any) => ({ type: 'set_layer', target: item.id, patch: value })), label);
-    const open = (items: any[]) => PM.menu(document.body, items, { x: event.clientX, y: event.clientY });
+    const open = (items: any[] | Promise<any[]>) => PM.menu(document.body, items, { x: event.clientX, y: event.clientY });
     const more = (title: string, items: any[]) => open([{ label: '‹ Back', run: () => PM.showLayerMenu(layer, event, origin) }, { header: title }, ...items]);
     const items: any[] = [
       { header: selected.length > 1 ? `${selected.length} layers` : layer.name },
@@ -81,9 +81,14 @@ export function installLayerMenu(PM: PMRegistry): void {
       { label: layer.solo ? 'Unsolo' : 'Solo', icon: 'headphones', disabled: !editable, run: () => patch({ solo: !layer.solo }, 'Solo layers') },
       { label: lockedGroup ? 'Unlock group' : layer.lock ? 'Unlock' : 'Lock', icon: 'lock', run: () => lockedGroup ? apply({type:'set_layer',target:lockedGroup.id,patch:{locked:false}}, 'Unlock group') : patch({ locked: !layer.lock }, 'Lock layers') },
       '-', { label: 'Delete', icon: 'trash', kb: '⌫', disabled: !editable, run: () => PM.cmd('delete') });
-    const contributed = [...(PM.Kernel?.collectMenu?.('layer:context', { layerId: layer.id }) || []),
-      ...(PM.Kernel?.collectMenu?.(`${origin}:context`, { kind: 'layer', layerId: layer.id, time: PM.time }) || [])];
-    if (contributed.length) items.push('-', ...contributed);
-    open(items);
+    /* Each open asks its contributors afresh, with this layer. Sandboxed ones
+       answer over a port, within the kernel's deadline. */
+    const contributions = [PM.Kernel?.gatherMenu?.('layer:context', { layerId: layer.id }) || [],
+      PM.Kernel?.gatherMenu?.(`${origin}:context`, { kind: 'layer', layerId: layer.id, time: PM.time }) || []];
+    const withContributions = (lists: any[][]) => {
+      const contributed = lists.flat();
+      return contributed.length ? [...items, '-', ...contributed] : items;
+    };
+    open(contributions.every(Array.isArray) ? withContributions(contributions) : Promise.all(contributions).then(withContributions));
   };
 }

@@ -74,6 +74,18 @@ describe('panel context menu contributions', () => {
     expect(run).toHaveBeenCalledOnce();
   });
 
+  it('waits for an asynchronous contribution asked with this panel', async () => {
+    const { menu, kernel, PM, trigger } = harness();
+    const run = vi.fn();
+    kernel.contributeMenu('sandboxed', 'panel:context', async (ctx) => [{ label: `Tidy ${String(ctx.panelId)}`, run }]);
+
+    openPanelMenu(PM, PM.Layout.ws.layout.docks[0].panels[0], PM.Layout.ws.layout.docks[0], trigger, { x: 1, y: 2 });
+    const pending = menu.mock.calls.at(-1)?.[1] as Promise<MenuContribution[]>;
+
+    expect(pending).toBeInstanceOf(Promise);
+    expect((await pending).slice(-2)).toEqual(['-', { label: 'Tidy notes', run }]);
+  });
+
   it('passes the panel and dock ids as context', () => {
     const { open, kernel } = harness();
     const items = vi.fn(() => []);

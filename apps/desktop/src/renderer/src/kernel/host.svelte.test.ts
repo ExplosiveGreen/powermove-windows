@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { flushSync } from 'svelte';
 import { expect, it, vi } from 'vitest';
-import type { ExtensionRecord, Project, ProjectAPI, TransportAPI } from './api';
+import type { ExtensionRecord, PaletteEntry, Project, ProjectAPI, TransportAPI } from './api';
 import { createExtensionAPI, type HostDeps } from './host';
 import { createKernel } from './registries';
 
@@ -95,7 +95,7 @@ it('keeps reads plain in callbacks the host polls from its own reactive UI', () 
   api.palette.registerProvider(() => [{ id: 'live.entry', label: String(api.project.revision()), category: 'Live', run: () => {} }]);
   // The host's status bar, menus and palette evaluate these inside its own $derived.
   const host = watch(() => [kernel.status.get('live.clock')!.text(), kernel.commands.get('live.go')!.when!(),
-    kernel.collectMenu('layer:context'), kernel.paletteProviders().map(entry => entry.provider('')[0]?.label)]);
+    kernel.collectMenu('layer:context'), kernel.paletteProviders().map(entry => (entry.provider('') as PaletteEntry[])[0]?.label)]);
   expect(host.seen).toEqual([['t=0', true, [{ label: 'default' }], ['1']]]);
   expect(subscribed()).toEqual({});
   host.stop();
