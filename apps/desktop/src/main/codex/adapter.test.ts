@@ -3,11 +3,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { AGENT_TESTING_INSTRUCTIONS } from '../../shared/agent-testing';
+import { AGENT_SHELL_NETWORK_HOSTS } from '../agent-network';
 import {
   ADAPTER_VERSION,
   REQUIRED_CODEX_FLAGS,
   buildAutonomousArgv,
-  PROJECT_NETWORK_CONFIG,
+  PROJECT_PERMISSION_PROFILE,
   buildEditorArgv,
   capabilities
 } from './adapter';
@@ -66,51 +67,70 @@ describe('Codex CLI adapter', () => {
         reasoningEffort: null,
         access: 'project',
         shellNetwork: true,
+        deniedReads: ['/Users/me/.ssh', '/user-data/codex-runtime/auth.json'],
         extensionsDir: '/user-data/extensions',
         sessionId: null,
         instructions: 'AGENT INSTRUCTIONS',
       })
     ).toEqual([
       '--search',
-      '--approve-for-me',
-      '--config',
-      'sandbox_workspace_write.network_access=true',
       '--add-dir',
       '/user-data/extensions',
       'exec',
       '--skip-git-repo-check',
+      '--config', 'approvals_reviewer="auto_review"',
+      '--config', 'approval_policy="on-request"',
+      '--config', 'default_permissions="powermove"',
+      '--config', 'permissions.powermove.extends=":workspace"',
+      '--config', 'permissions.powermove.filesystem={"/Users/me/.ssh"="deny","/user-data/codex-runtime/auth.json"="deny"}',
+      '--config', 'features.network_proxy=true',
+      '--config', 'permissions.powermove.network.enabled=true',
+      '--config', `permissions.powermove.network.domains={${AGENT_SHELL_NETWORK_HOSTS.map(host => `"${host}"="allow"`).join(',')}}`,
       '--output-schema',
       '/workspace/.powermove/result-schema.json',
       '--output-last-message',
       '/workspace/.powermove/result-run-1.json',
       '--json',
-      'AGENT INSTRUCTIONS\n\nUSER REQUEST\nMake a launch trailer',
+      `AGENT INSTRUCTIONS\n\nSHELL NETWORK\nShell commands can download only over HTTPS from ${AGENT_SHELL_NETWORK_HOSTS.join(', ')}; other hosts are refused.\n\nUSER REQUEST\nMake a launch trailer`,
       '--image',
       '/workspace/inputs/references/reference-0.png'
     ]);
   });
 
-  it('gives shell commands outbound network only for the Project access choice', () => {
+  it('gives shell commands allowlisted network only for the Project access choice', () => {
     const common = {
       schemaPath: '/workspace/schema.json', outputPath: '/workspace/result.json', prompt: 'Find useful footage',
       imagePaths: [], model: null, reasoningEffort: null, extensionsDir: '/user-data/extensions',
-      instructions: 'AGENT INSTRUCTIONS'
+      instructions: 'AGENT INSTRUCTIONS', deniedReads: ['/Users/me/.ssh']
     };
+    const configs = (argv: string[]) => argv.flatMap((arg, index) => argv[index - 1] === '--config' ? [arg] : []);
     for (const sessionId of [null, 'thread-123']) {
       const argv = buildAutonomousArgv({ ...common, access: 'project', shellNetwork: true, sessionId });
-      // A root option, so it also applies to `exec resume`, and never a sandbox mode override.
-      expect(argv.indexOf(PROJECT_NETWORK_CONFIG)).toBeLessThan(argv.indexOf('exec'));
-      expect(argv[argv.indexOf(PROJECT_NETWORK_CONFIG) - 1]).toBe('--config');
+      // exec options, so they apply to `exec resume` too, and never a legacy sandbox mode.
+      const proxy = argv.indexOf('features.network_proxy=true');
+      expect(proxy).toBeGreaterThan(argv.indexOf(sessionId ? 'resume' : 'exec'));
+      expect(argv[proxy - 1]).toBe('--config');
+      expect(configs(argv)).toEqual(expect.arrayContaining([
+        `default_permissions="${PROJECT_PERMISSION_PROFILE}"`, 'permissions.powermove.network.enabled=true',
+        'permissions.powermove.filesystem={"/Users/me/.ssh"="deny"}'
+      ]));
+      const domains = configs(argv).find(value => value.startsWith('permissions.powermove.network.domains='))!;
+      expect(domains).toContain('"images.pexels.com"="allow"');
+      expect(domains).not.toMatch(/"\*"|"github\.com"|registry\.npmjs\.org/);
       expect(argv).toContain('--search');
       expect(argv).not.toContain('--sandbox');
+      expect(argv).not.toContain('--approve-for-me');
       expect(argv).not.toContain('--dangerously-bypass-approvals-and-sandbox');
-      expect(argv.join(' ')).not.toMatch(/writable_roots|danger-full-access|sandbox_mode/);
+      expect(argv.join(' ')).not.toMatch(/writable_roots|danger-full-access|sandbox_mode|network_access/);
     }
-    // Edit project collapses to project authority but keeps the shell offline.
-    expect(buildAutonomousArgv({ ...common, access: 'project', sessionId: null })).not.toContain(PROJECT_NETWORK_CONFIG);
-    expect(buildAutonomousArgv({ ...common, access: 'computer', shellNetwork: true, sessionId: null }))
-      .not.toContain(PROJECT_NETWORK_CONFIG);
-    expect(buildEditorArgv(common)).not.toContain(PROJECT_NETWORK_CONFIG);
+    // Edit project collapses to project authority but keeps the shell offline and credentials unreadable.
+    const offline = buildAutonomousArgv({ ...common, access: 'project', sessionId: null });
+    expect(configs(offline)).toEqual(expect.arrayContaining([`default_permissions="${PROJECT_PERMISSION_PROFILE}"`,
+      'permissions.powermove.filesystem={"/Users/me/.ssh"="deny"}']));
+    expect(offline.join(' ')).not.toMatch(/network_proxy|network\.enabled|SHELL NETWORK/);
+    const computer = buildAutonomousArgv({ ...common, access: 'computer', shellNetwork: true, sessionId: null });
+    expect(computer.join(' ')).not.toMatch(/network_proxy|default_permissions/);
+    expect(buildEditorArgv(common).join(' ')).not.toMatch(/network_proxy|default_permissions/);
     expect(buildEditorArgv(common)).toEqual(expect.arrayContaining(['--sandbox', 'read-only']));
   });
 

@@ -5,8 +5,9 @@ import { AGENT_TESTING_INSTRUCTIONS } from '../../shared/agent-testing';
 import type { NativeMcpServerConfig } from '../agent-tools/spec';
 
 import { userMcpArgv, type UserMcpServers } from '../agent-tools/user-mcp';
+import { AGENT_SHELL_NETWORK_HOSTS, AGENT_SHELL_NETWORK_INSTRUCTIONS } from '../agent-network';
 
-export const ADAPTER_VERSION = '5';
+export const ADAPTER_VERSION = '6';
 
 export const REQUIRED_CODEX_FLAGS = [
   '--ephemeral',
@@ -20,13 +21,39 @@ export const REQUIRED_CODEX_FLAGS = [
   '--image',
   '--search',
   '--add-dir',
-  '--approve-for-me',
   '--dangerously-bypass-approvals-and-sandbox'
 ] as const;
 
-/** Documented workspace-write switch. Codex 0.156 has no stable per-host
- * allowlist for it, so this is all outbound hosts. */
-export const PROJECT_NETWORK_CONFIG = 'sandbox_workspace_write.network_access=true';
+/** The permission profile sandboxed Project shells run under. */
+export const PROJECT_PERMISSION_PROFILE = 'powermove';
+
+/**
+ * `--approve-for-me` without its legacy `sandbox_mode="workspace-write"`,
+ * which would override a permission profile. The profile extends Codex's
+ * workspace sandbox, denies credential reads, and with shell network routes
+ * commands through Codex's network proxy, which admits only the shared
+ * allowlist; the sandbox blocks direct sockets and DNS. They follow `exec`
+ * because root-level approval and profile overrides do not reach it.
+ */
+export function projectSandboxArgv(options: { shellNetwork: boolean; deniedReads: readonly string[] }): string[] {
+  const profile = `permissions.${PROJECT_PERMISSION_PROFILE}`;
+  const table = (entries: [string, string][]) => `{${entries.map(([key, value]) => `${JSON.stringify(key)}=${JSON.stringify(value)}`).join(',')}}`;
+  const config = [
+    'approvals_reviewer="auto_review"',
+    'approval_policy="on-request"',
+    `default_permissions=${JSON.stringify(PROJECT_PERMISSION_PROFILE)}`,
+    `${profile}.extends=":workspace"`
+  ];
+  if (options.deniedReads.length) config.push(`${profile}.filesystem=${table(options.deniedReads.map(file => [file, 'deny']))}`);
+  if (options.shellNetwork) {
+    config.push(
+      'features.network_proxy=true',
+      `${profile}.network.enabled=true`,
+      `${profile}.network.domains=${table(AGENT_SHELL_NETWORK_HOSTS.map(host => [host, 'allow']))}`
+    );
+  }
+  return config.flatMap(value => ['--config', value]);
+}
 
 interface CommonArgvOptions {
   schemaPath: string;
@@ -46,9 +73,12 @@ export interface AutonomousArgvOptions extends CommonArgvOptions {
   sessionId: string | null;
   instructions: string;
   nativeTools?: NativeMcpServerConfig;
-  /** Outbound network for sandboxed shell commands. Only the Project access
-   * choice grants it; Edit project runs keep project authority without it. */
+  /** Outbound network for sandboxed shell commands, limited to the shared
+   * allowlist. Only the Project access choice grants it; Edit project runs
+   * keep project authority without it. */
   shellNetwork?: boolean;
+  /** Paths sandboxed shell commands may not read. */
+  deniedReads?: readonly string[];
 }
 
 function appendModelOptions(
@@ -103,23 +133,15 @@ export function buildEditorArgv(options: EditorArgvOptions): string[] {
 
 export function buildAutonomousArgv(options: AutonomousArgvOptions): string[] {
   const argv = ['--search'];
-  if (options.access === 'computer') {
-    argv.push('--dangerously-bypass-approvals-and-sandbox');
-  } else {
-    // codex ≥ 0.147 rejects an explicit --sandbox alongside --approve-for-me;
-    // --approve-for-me itself routes approvals through the workspace-write
-    // sandbox (the Swift shell's flag pair predates that change).
-    argv.push('--approve-for-me');
-    // Research-and-download tasks need shell network; writes stay confined to
-    // the workspace and --add-dir roots either way.
-    if (options.shellNetwork) argv.push('--config', PROJECT_NETWORK_CONFIG);
-  }
+  const sandboxed = options.access !== 'computer';
+  if (!sandboxed) argv.push('--dangerously-bypass-approvals-and-sandbox');
   argv.push('--add-dir', options.extensionsDir);
 
   argv.push('exec');
   if (options.sessionId !== null && options.sessionId.trim() !== '') argv.push('resume');
   argv.push(
     '--skip-git-repo-check',
+    ...sandboxed ? projectSandboxArgv({ shellNetwork: options.shellNetwork === true, deniedReads: options.deniedReads ?? [] }) : [],
     ...userMcpArgv(options.externalMcpServers),
     ...nativeMcpArgv(options.nativeTools),
     '--output-schema',
@@ -130,7 +152,8 @@ export function buildAutonomousArgv(options: AutonomousArgvOptions): string[] {
   );
   appendModelOptions(argv, options.model, options.reasoningEffort);
   if (options.sessionId !== null && options.sessionId.trim() !== '') argv.push(options.sessionId.trim());
-  const fullPrompt = `${options.instructions}\n\nUSER REQUEST\n${options.prompt}`;
+  const network = sandboxed && options.shellNetwork ? `\n\nSHELL NETWORK\n${AGENT_SHELL_NETWORK_INSTRUCTIONS}` : '';
+  const fullPrompt = `${options.instructions}${network}\n\nUSER REQUEST\n${options.prompt}`;
   appendPromptAndImages(argv, fullPrompt, options.imagePaths);
   return argv;
 }

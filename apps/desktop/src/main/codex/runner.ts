@@ -25,6 +25,7 @@ import { CodexEventParser } from './events';
 import { agentInstructions, agentResultSchema } from './instructions';
 import type { NativeMcpServerConfig } from '../agent-tools/spec';
 import { loadUserMcpServers, type UserMcpServers } from '../agent-tools/user-mcp';
+import { agentCredentialPaths } from '../agent-network';
 import {
   isolatedCodexEnvironment,
   prepareIsolatedCodexHome
@@ -426,6 +427,7 @@ export class CodexRunner {
         return cancelledResult(state);
       }
 
+      const deniedReads = authority === 'project' ? await agentCredentialPaths(options.userData, { codexHome: 'credentials' }) : [];
       let resumeId = await readSession(layout.sessionPath);
       let attempt: AttemptResult | null = null;
       const executeAutonomous = async (prompt: string, sessionId: string | null) => {
@@ -448,6 +450,7 @@ export class CodexRunner {
           reasoningEffort: req.reasoningEffort,
           access: authority,
           shellNetwork: req.access === 'project',
+          deniedReads,
           extensionsDir: layout.extensionsDir,
           sessionId,
           nativeTools: options.nativeTools,
