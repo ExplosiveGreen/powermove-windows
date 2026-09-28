@@ -134,19 +134,16 @@ const PERMISSION_LABEL: Record<ExtensionPermission, string> = {
   network: 'Uses the network',
   clipboard: 'Uses the clipboard',
   assets: 'Imports files',
-  'project:read': 'Reads your project',
   'project:write': 'Edits your project',
   'full-access': 'Needs full access to Powermove'
 };
-const PERMISSION_ORDER: ExtensionPermission[] = ['full-access', 'project:read', 'project:write', 'assets', 'network', 'clipboard'];
+const PERMISSION_ORDER: ExtensionPermission[] = ['full-access', 'project:write', 'assets', 'network', 'clipboard'];
 
 export type PermissionLine = { label: string; warn: boolean };
 
-/** One entry per declared permission, full access first (it's the one that matters).
- *  "Edits your project" already says it reads it, so project:read is not listed beside project:write. */
+/** One entry per declared permission, full access first (it's the one that matters). */
 export function permissionLines(permissions: readonly string[] | undefined): PermissionLine[] {
   const declared = new Set(permissions ?? []);
-  if (declared.has('project:write')) declared.delete('project:read');
   return PERMISSION_ORDER.filter((permission) => declared.has(permission))
     .map((permission) => ({ label: PERMISSION_LABEL[permission], warn: permission === 'full-access' }));
 }

@@ -134,10 +134,12 @@ it('refuses malicious port calls before they touch the host', async () => {
   await expect(client!.call('register', 'commands', 'malformed', { id: 'evil-ext.malformed', label: 'Malformed', run: 'callback' })).rejects.toMatchObject({ name: 'ZodError' });
   await errorCode(client!.call('invoke', 'events', 'emit', ['project:changed', {}]), 'permission_denied');
   await errorCode(client!.call('register', 'events', 'foreign-event', { event: 'other-ext:secret' }), 'permission_denied');
-  // No read permission: the kernel refuses project reads whatever the shim did.
-  await errorCode(client!.call('register', 'events', 'changes', { event: 'project:changed' }), 'project:read');
-  await errorCode(client!.call('register', 'events', 'selection', { event: 'selection' }), 'project:read');
-  await errorCode(client!.call('project-snapshot'), 'project:read');
+  // Reading needs no permission: an extension without any may follow and read the project, and render a frame of it.
+  await client!.call('register', 'events', 'changes', { event: 'project:changed' });
+  await client!.call('register', 'events', 'selection', { event: 'selection' });
+  await expect(client!.call('project-snapshot')).resolves.toMatchObject({ json: expect.any(String) });
+  await expect(client!.call('invoke', 'project', 'snapshot', [0, 64])).resolves.toBe('');
+  for (const token of ['changes', 'selection']) await client!.call('dispose-registration', token);
   await expect(client!.call('register', 'events', 'with-handle', { event: 'time', fn: 1 })).rejects.toMatchObject({ name: 'ZodError' });
   await errorCode(client!.call('register', 'keybindings', 'bad-key', { key: 'cmd+s', command: 'delete' }), 'permission_denied');
   const ownHandle = client!.handle(() => 'ok');
@@ -278,13 +280,13 @@ it('inits with state and no project, ticks small deltas, and forwards only subsc
   const live = { proj: { revision: 1, layers: [] } as Record<string, any>, time: 0, playing: false };
   const deps = planeDeps(live);
   const heard: unknown[] = [];
-  const reader = await planeRuntime(kernel, deps, 'reader-ext', ['project:read'], api => {
+  const reader = await planeRuntime(kernel, deps, 'reader-ext', [], api => {
     api.events.on('project:changed', (payload: unknown) => heard.push(['changed', payload, api.project.revision()]));
     api.events.on('time', (time: number) => heard.push(['time', time]));
   });
   const blind = await planeRuntime(kernel, deps, 'blind-ext', []);
   expect(reader.init().state).toEqual({ time: 0, playing: false, revision: 1, generation: expect.any(Number), selection: { layers: ['l1'], keys: [], chan: null } });
-  expect(blind.init().state.selection).toBeNull();
+  expect(blind.init().state.selection).toEqual({ layers: ['l1'], keys: [], chan: null });
   expect(reader.init()).not.toHaveProperty('project');
   await flushed();
   reader.ticks.length = 0; blind.ticks.length = 0;
@@ -298,7 +300,7 @@ it('inits with state and no project, ticks small deltas, and forwards only subsc
   expect(reader.ticks).toHaveLength(1);
   expect(JSON.parse(reader.ticks[0]!)).toEqual([{ time: 2, revision: 2, generation: expect.any(Number) }, [['time', 2], ['project:changed', { kind: 'values' }]]]);
   expect(heard).toEqual([['time', 2], ['changed', { kind: 'values' }, 2]]);
-  // Nothing subscribed: the state alone, and no selection without read access.
+  // Nothing subscribed: the state alone, and no selection while it hasn't changed.
   expect(blind.ticks.map(tick => JSON.parse(tick)[1])).toEqual([[]]);
   expect(JSON.parse(blind.ticks[0]!)[0]).not.toHaveProperty('selection');
   kernel.events.emit('time', 2); // state unchanged, no subscriber for the blind one
@@ -310,7 +312,7 @@ it('inits with state and no project, ticks small deltas, and forwards only subsc
 it('costs a playing project nothing but tiny ticks when an extension reads nothing', async () => {
   const kernel = createKernel();
   const live = { proj: syntheticProject(), time: 0, playing: true };
-  await planeRuntime(kernel, planeDeps(live), 'idle-ext', ['project:read']);
+  await planeRuntime(kernel, planeDeps(live), 'idle-ext', []);
   await flushed();
   const stats = sandboxStats();
   const builds = stats.snapshotBuilds, ticks = stats.ticks;
@@ -331,7 +333,7 @@ it('sends small ticks during playback and builds one snapshot for three extensio
   const kernel = createKernel();
   const live = { proj: syntheticProject(), time: 0, playing: true };
   const deps = planeDeps(live);
-  const docs = await Promise.all(['one-ext', 'two-ext', 'three-ext'].map(id => planeRuntime(kernel, deps, id, id === 'two-ext' ? ['project:write'] : ['project:read'])));
+  const docs = await Promise.all(['one-ext', 'two-ext', 'three-ext'].map(id => planeRuntime(kernel, deps, id, id === 'two-ext' ? ['project:write'] : [])));
   for (let frame = 1; frame <= 120; frame++) { live.time = frame / 60; kernel.events.emit('time', live.time); await Promise.resolve(); }
   for (let wait = 0; wait < 100 && docs.some(doc => doc.ticks.length < 120); wait++) await new Promise(resolve => setTimeout(resolve, 10));
   for (const doc of docs) {
@@ -360,8 +362,8 @@ it('sends each document one full copy per generation, however often it asks', as
   const kernel = createKernel();
   const live = { proj: { revision: 1, layers: [{ id: 'a' }] } as Record<string, any>, time: 0, playing: false };
   const deps = planeDeps(live);
-  const reader = await planeRuntime(kernel, deps, 'reader-ext', ['project:read']);
-  const other = await planeRuntime(kernel, deps, 'other-ext', ['project:read']);
+  const reader = await planeRuntime(kernel, deps, 'reader-ext', []);
+  const other = await planeRuntime(kernel, deps, 'other-ext', []);
   const project = await reader.api.project.get();
   const generation = reader.init().state.generation;
   // A patched shim asking straight on its port gets no second copy of the generation it holds.
@@ -388,7 +390,7 @@ it('copies and stringifies the selection once per change for every document, and
   const deps = planeDeps(live);
   const read = deps.project.selection as unknown as ReturnType<typeof vi.fn>;
   const heard: string[][] = [];
-  const docs = await Promise.all(['one-ext', 'two-ext'].map(id => planeRuntime(kernel, deps, id, ['project:read'], api => {
+  const docs = await Promise.all(['one-ext', 'two-ext'].map(id => planeRuntime(kernel, deps, id, [], api => {
     api.events.on('selection', () => heard.push(api.project.selection().layers));
   })));
   await flushed();

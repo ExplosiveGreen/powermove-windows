@@ -1,6 +1,6 @@
 import type { ExtensionRecord } from '../../../shared/extensions';
 import { createRpc, createRpcBudget, rpcTransfers, type Rpc } from '../../../shared/sandbox-rpc';
-import { canReadProject, panelInfo, PROJECT_READ_EVENTS, PROJECT_READ_MEMBERS, projectReadHint, type SandboxEvent, type SandboxInit, type SandboxKey, type SandboxSnapshot, type SandboxState, type SandboxViewInit } from '../../sandbox/shim-api';
+import { panelInfo, type SandboxEvent, type SandboxInit, type SandboxKey, type SandboxSnapshot, type SandboxState, type SandboxViewInit } from '../../sandbox/shim-api';
 import type { Disposable, Selection } from './api';
 import { createExtensionAPI, type ExtensionHandle, type HostDeps } from './host';
 import type { Kernel } from './registries';
@@ -104,7 +104,7 @@ function sandboxTheme(value: Record<string, unknown>): Record<string, unknown> {
  * to it instead of the loader's error policy.
  */
 export interface SandboxObserver {
-  /** A trusted-only member was reached (`render.gl`, `ui.menu`, `powermove.resolveContent`), or a project read without read access (PROJECT_READ_MEMBERS). */
+  /** A trusted-only member was reached (`render.gl`, `ui.menu`, `powermove.resolveContent`). */
   permission?(member: string): void;
   /** apiVersion ≤ 2 code read a property of a method's result that is a Promise here. */
   asyncMisuse?(member: string): void;
@@ -160,8 +160,6 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   const ready = new Promise<void>((resolve, reject) => { activated = resolve; rejected = reject; });
   void ready.catch(() => {}); // a load failure can settle before activation is awaited
   const permissions = manifest.permissions ?? [];
-  // The kernel applies the read rule itself (apiVersion 3 plus project:read or write), whatever the parser or shim allowed.
-  const readable = (): boolean => (manifest.apiVersion ?? 1) >= 3 && canReadProject(permissions as readonly string[]);
   const violations = new Set<string>();
   const persistedStorage = (deps.pm as { store?: { get?: (key: string, fallback: unknown) => unknown } }).store?.get?.(`ext.${record.id}`, {});
   const storageValues = new Map<string, unknown>(persistedStorage && typeof persistedStorage === 'object' && !Array.isArray(persistedStorage)
@@ -169,7 +167,6 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   const invoke = (namespace: string, method: string, args: unknown): unknown => {
     if (!SAFE_INVOKE[namespace]?.has(method)) throw new Error(`Sandbox method unavailable: ${namespace}.${method}`);
     const parsed = parseInvoke(namespace, method, args);
-    if (namespace === 'project' && method === 'snapshot' && !readable()) denied('project.snapshot requires project:read permission', 'project:read');
     if (!permissions.includes('project:write') && (namespace === 'project' && method !== 'snapshot' || namespace === 'transport'))
       denied(`${namespace}.${method} requires project:write permission`, 'project:write');
     if (namespace === 'commands') {
@@ -232,8 +229,6 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
         denied('Keybinding chord belongs to another owner', 'id_collision');
       if (kind === 'events' && !HOST_EVENTS.has(String(value.event)) && String(value.event).includes(':'))
         denied('Extension event names cannot contain a namespace separator');
-      if (kind === 'events' && PROJECT_READ_EVENTS.has(String(value.event)) && !readable())
-        denied(`events.on('${String(value.event)}') requires project:read permission`, 'project:read');
       const rpc = link.rpc;
       let item: Disposable;
       switch (kind) {
@@ -276,11 +271,10 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     },
     'dispose-registration'(token: string) { link.registrations.get(token)?.dispose(); link.registrations.delete(token); },
     invoke,
-    /* Enforced here whatever the shim does: read access, and at most one full
-       copy per generation for each document. A document asking again for the
+    /* Enforced here whatever the shim does: at most one full copy per
+       generation for each document. A document asking again for the
        generation it already holds gets `unchanged`, however often it asks. */
     'project-snapshot'(): SandboxSnapshot {
-      if (!readable()) denied('project.get requires project:read permission', 'project:read');
       const doc = docOf.get(link);
       if (!doc || !docs.has(doc)) throw new Error('Sandbox document is not connected');
       const snapshot = snapshots.read();
@@ -310,7 +304,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
         if (observer?.permission) observer.permission(member);
         else if (!warned.has(`p:${member}`)) {
           warned.add(`p:${member}`);
-          host.api.log('warn', PROJECT_READ_MEMBERS.has(member) ? `api.${member} needs the project:read permission. ${projectReadHint(manifest.apiVersion)}` : `api.${member} needs full access and is unavailable in the sandbox`);
+          host.api.log('warn', `api.${member} needs full access and is unavailable in the sandbox`);
         }
       } else if (event.kind === 'async') {
         if (observer?.asyncMisuse) observer.asyncMisuse(member);
@@ -338,9 +332,9 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   /* The selection and its JSON are the kernel's shared copy (ProjectSnapshots.selection),
      so a frame that only moved `time` costs nothing proportional to it. */
   const stateNow = (): { state: SandboxState; selection: string } => {
-    const selection = readable() ? snapshots.selection() : null;
+    const selection = snapshots.selection();
     return { state: { time: host.api.project.time(), playing: host.api.project.playing(), revision: host.api.project.revision(),
-      generation: snapshots.generation, selection: (selection?.value ?? null) as Selection | null }, selection: selection?.json ?? 'null' };
+      generation: snapshots.generation, selection: selection.value as Selection | null }, selection: selection.json };
   };
   const openDoc = (link: object, docRpc: Rpc): SandboxState => {
     const { state, selection } = stateNow();

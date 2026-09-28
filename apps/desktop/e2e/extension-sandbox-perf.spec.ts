@@ -120,7 +120,7 @@ test('store extensions that do not read the project cost playback nothing, and r
     expect(result.rate).toBeGreaterThanOrEqual(baseline.rate * 0.9);
   }
 
-  // (3) Several project:read extensions reading on every change, plus one following `time`.
+  // (3) Several extensions without permissions reading on every change, plus one following `time`.
   const readers = ['sandbox-reader', 'sandbox-reader-2', 'sandbox-reader-3'];
   await installStoreExtensions(session, [...readers.map(id => ({ fixture: 'sandbox-reader', id })), { fixture: 'sandbox-clock' }]);
   await session.relaunch();

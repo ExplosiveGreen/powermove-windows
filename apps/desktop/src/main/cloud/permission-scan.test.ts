@@ -16,20 +16,16 @@ describe('permission scan', () => {
     expect(permissionFindings(files, { apiVersion: 3, permissions: ['network', 'full-access'] })).toEqual([]);
   });
 
-  it('reports undeclared project reads once, and accepts project:read or project:write', () => {
-    const files = [{ path: 'index.ts', text: 'const p = await api.project.get();\napi.events.on("selection", draw);\napi.on(\'time\', draw);\napi.project.revision();' }];
-    expect(permissionFindings(files, { apiVersion: 3, permissions: ['network'] })).toEqual([
-      { path: 'index.ts', line: 1, needs: 'project:read', text: 'Uses api.project.get at index.ts:1 but doesn\'t declare the project:read permission. Add `permissions: ["project:read"]` to manifest.json.' },
-      { path: 'index.ts', line: 2, needs: 'project:read', text: 'Uses the \'selection\' event at index.ts:2 but doesn\'t declare the project:read permission. Add `permissions: ["project:read"]` to manifest.json.' }
-    ]);
-    expect(permissionFindings(files, { apiVersion: 3, permissions: ['project:read'] })).toEqual([]);
-    expect(permissionFindings(files, { apiVersion: 3, permissions: ['project:write'] })).toEqual([]);
+  it('does not ask for a permission to read the project', () => {
+    const files = [{ path: 'index.ts', text: 'const p = await api.project.get();\napi.project.selection();\napi.project.snapshot();\napi.events.on("project:changed", draw);\napi.on(\'selection\', draw);' }];
+    expect(permissionFindings(files, { apiVersion: 3 })).toEqual([]);
+    expect(permissionFindings(files, { apiVersion: 2 })).toEqual([]);
   });
 
   it('below apiVersion 3 grants nothing and tells the author to set apiVersion 3 as well', () => {
-    const files = [{ path: 'index.ts', text: 'const p = await api.project.get();\napi.render.draw();' }];
-    expect(permissionFindings(files, { apiVersion: 2, permissions: ['project:read', 'full-access'] })).toEqual([
-      { path: 'index.ts', line: 1, needs: 'project:read', text: 'Uses api.project.get at index.ts:1 but doesn\'t declare the project:read permission. Set `apiVersion: 3` and add `permissions: ["project:read"]` to manifest.json.' },
+    const files = [{ path: 'index.ts', text: 'navigator.clipboard.writeText(hex);\napi.render.draw();' }];
+    expect(permissionFindings(files, { apiVersion: 2, permissions: ['clipboard', 'full-access'] })).toEqual([
+      { path: 'index.ts', line: 1, needs: 'clipboard', text: 'Uses navigator.clipboard at index.ts:1 but doesn\'t declare the clipboard permission. Set `apiVersion: 3` and add `permissions: ["clipboard"]` to manifest.json.' },
       { path: 'index.ts', line: 2, needs: 'full-access', text: 'Uses api.render (full access) at index.ts:2 but doesn\'t declare the full-access permission. Set `apiVersion: 3` and add `permissions: ["full-access"]` to manifest.json.' }
     ]);
   });
