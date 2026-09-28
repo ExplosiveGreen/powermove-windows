@@ -166,8 +166,13 @@ if (( named || ! \${#templates} )); then resolved+=("$base/\${prefix:-tmp}.XXXXX
 exec /usr/bin/mktemp "\${flags[@]}" -- "\${resolved[@]}"
 `;
 
+// HOME stays unwritable in Project access so a run cannot poison packages
+// the user's other projects share; package tools cache in the workspace.
+const PROJECT_CACHES = [['BUN_INSTALL_CACHE_DIR', 'bun'], ['npm_config_cache', 'npm'], ['XDG_CACHE_HOME', 'xdg'],
+  ['PIP_CACHE_DIR', 'pip'], ['CLANG_MODULE_CACHE_PATH', 'clang']] as const;
+
 /** Scratch and tool locations inside the app-owned workspace. */
-async function commandEnvironment(root: string): Promise<NodeJS.ProcessEnv> {
+async function commandEnvironment(root: string, access: 'project' | 'computer'): Promise<NodeJS.ProcessEnv> {
   const scratch = path.join(root, '.powermove', 'tmp');
   const bin = path.join(root, '.powermove', 'bin');
   await mkdir(scratch, { recursive: true });
@@ -179,13 +184,15 @@ async function commandEnvironment(root: string): Promise<NodeJS.ProcessEnv> {
   }
   const PATH = await loginShellPath();
   // Keep account keys and provider configuration out of subprocess environments.
-  return { PATH: shims ? `${bin}:${PATH}` : PATH, HOME: process.env.HOME, LANG: 'en_US.UTF-8',
+  const env: NodeJS.ProcessEnv = { PATH: shims ? `${bin}:${PATH}` : PATH, HOME: process.env.HOME, LANG: 'en_US.UTF-8',
     TMPDIR: scratch, TMP: scratch, TEMP: scratch, TMPPREFIX: path.join(scratch, 'zsh') };
+  if (access === 'project') for (const [name, tool] of PROJECT_CACHES) env[name] = path.join(root, '.powermove', 'cache', tool);
+  return env;
 }
 
 export async function runWorkspaceCommand(root: string, access: 'project' | 'computer', command: string, timeoutMs: number, signal: AbortSignal): Promise<{ output: string; exitCode: number | null; truncated: boolean }> {
   signal.throwIfAborted();
-  const env = await commandEnvironment(await realpath(root));
+  const env = await commandEnvironment(await realpath(root), access);
   const profile = `(version 1)(allow default)(deny appleevent-send)(deny file-write*)(allow file-write* (subpath ${JSON.stringify(await realpath(root))}) (literal "/dev/null") (literal "/dev/tty")`
     // Inherited stdio only; a broad /dev subpath would expose devices.
     + ' (literal "/dev/stdout") (literal "/dev/stderr") (regex #"^/dev/fd/[0-9]+$"))';

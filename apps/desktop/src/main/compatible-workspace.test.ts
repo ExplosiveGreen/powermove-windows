@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import { mkdtemp, readFile, realpath, rm, symlink, access } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, realpath, rm, symlink, access, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { CompatibleWorkspace, runWorkspaceCommand } from './compatible-workspace';
@@ -97,6 +97,27 @@ it.runIf(process.platform === 'darwin')('gives commands the login PATH without t
     expect(PATH.every(entry => path.isAbsolute(entry))).toBe(true);
   } finally { delete process.env.PM_TEST_PROVIDER_TOKEN; }
 });
+
+it.runIf(process.platform === 'darwin')('caches bun and npm installs in the workspace while HOME stays unwritable', async ({ skip }) => {
+  const ws = await workspace();
+  const root = await realpath(ws.layout.root);
+  const probe = path.join(os.homedir(), `.powermove-sandbox-probe-${process.pid}`);
+  const home = await runWorkspaceCommand(ws.layout.root, 'project', `printf x > ${JSON.stringify(probe)}`, 5000, signal());
+  expect(home.exitCode).not.toBe(0);
+  await expect(access(probe)).rejects.toThrow();
+  const cache = (tool: string) => path.join(root, '.powermove', 'cache', tool);
+  const env = await runWorkspaceCommand(ws.layout.root, 'project', 'printf "%s|%s|%s|%s" "$BUN_INSTALL_CACHE_DIR" "$npm_config_cache" "$XDG_CACHE_HOME" "$PIP_CACHE_DIR"', 5000, signal());
+  expect(env.output).toBe([cache('bun'), cache('npm'), cache('xdg'), cache('pip')].join('|'));
+  const tools = await runWorkspaceCommand(ws.layout.root, 'project', 'command -v bun >/dev/null && command -v npm >/dev/null', 5000, signal());
+  if (tools.exitCode !== 0) skip('bun and npm are not installed');
+  await writeFile(path.join(root, 'package.json'), '{"name":"cache-proof","private":true}');
+  const bun = await runWorkspaceCommand(ws.layout.root, 'project', 'bun add is-number@7.0.0', 120_000, signal());
+  expect(bun.exitCode, bun.output).toBe(0);
+  expect((await readdir(cache('bun'))).some(name => name.startsWith('is-number'))).toBe(true);
+  const npm = await runWorkspaceCommand(ws.layout.root, 'project', 'npm install --no-audit --no-fund --no-save is-odd@3.0.1', 120_000, signal());
+  expect(npm.exitCode, npm.output).toBe(0);
+  expect(await readdir(cache('npm'))).toContain('_cacache');
+}, 300_000);
 
 it.runIf(process.platform === 'darwin')('lets Project commands write to their inherited stdio but not other devices', async () => {
   const ws = await workspace();
