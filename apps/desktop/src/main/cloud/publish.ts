@@ -501,7 +501,7 @@ export function createPublisher(options: PublisherOptions): Publisher {
       blockedFindings: frozen.findings.blocked,
       permissionFindings: permissionFindings(frozen.inputs.flatMap((input) => {
         try { return [{ path: input.path, text: utf8.decode(input.bytes) }]; } catch { return []; }
-      }), local.manifest.permissions),
+      }), local.manifest),
       waivableFindings: frozen.findings.waivable,
       manifest: { id: local.manifest.id, name: local.manifest.name, description: local.manifest.description ?? null },
       listing
@@ -616,7 +616,7 @@ export function createPublisher(options: PublisherOptions): Publisher {
     const frozen = await freeze(local, version, lineage);
     const missingPermissions = permissionFindings(frozen.inputs.flatMap((input) => {
       try { return [{ path: input.path, text: utf8.decode(input.bytes) }]; } catch { return []; }
-    }), local.manifest.permissions);
+    }), local.manifest);
     if (missingPermissions.length) throw new StoreLocalError('folder_invalid', missingPermissions[0]!.text);
     const blocked = frozen.findings.blocked;
     if (blocked.length) throw new ApiError({ error: 'scan_blocked', findings: blocked.map(({ path: file, line, kind }) => ({ path: file, line, kind })) });

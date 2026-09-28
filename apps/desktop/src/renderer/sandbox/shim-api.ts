@@ -11,10 +11,14 @@ export class PermissionError extends Error {
     this.name = 'PermissionError';
   }
 }
+/** How to get read access. Manifest permissions exist from apiVersion 3, so older code has to move up first. */
+export const projectReadHint = (apiVersion: number): string => apiVersion < 3
+  ? 'Set "apiVersion": 3 and declare "project:read" in the manifest\'s permissions.'
+  : 'Declare "project:read" in the manifest\'s permissions.';
 export class ProjectReadPermissionError extends Error {
   readonly code = 'project:read';
-  constructor(member: string) {
-    super(`${member} requires project:read permission. Declare "project:read" in the manifest's permissions.`);
+  constructor(member: string, apiVersion: number) {
+    super(`${member} requires project:read permission. ${projectReadHint(apiVersion)}`);
     this.name = 'PermissionError';
   }
 }
@@ -167,8 +171,8 @@ export function panelInfo(def: Record<string, any>): SandboxPanelInfo {
  * the kernel and the last one withdraws it, so no callback handle crosses and
  * an occurrence costs no round trip. Reading the project (`get`,
  * `selection`, the `project:changed` and `selection` events) needs
- * `project:read` or `project:write`; the kernel enforces that again on its
- * side.
+ * apiVersion 3 and `project:read` or `project:write`; the kernel enforces
+ * the permission again on its side.
  */
 export type SandboxMode = 'runtime' | 'view';
 const VIEW_READS = new Set(['storage.get', 'assets.get', 'assets.readText', 'media.getImportDefaults', 'ui.icon']);
@@ -182,7 +186,8 @@ function deepFreeze<T>(value: T): T {
 
 /** A per-iframe API. Only serializable values and callback ids cross the port. */
 export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode = 'runtime'): PowermoveAPI {
-  const readable = canReadProject(init.manifest.permissions);
+  /* Project reads need apiVersion 3 and project:read (or project:write); the manifest parser keeps permissions off older manifests. */
+  const readable = init.apiVersion >= 3 && canReadProject(init.manifest.permissions);
   const state: SandboxState = { ...init.state, selection: readable ? deepFreeze(init.state.selection ?? null) : null };
   /** True while a view's `activate` replays; see the mode comment above. */
   let quiet = false;
@@ -229,7 +234,7 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     // A rendered frame shows the project as much as its data does.
     if (method === 'invoke' && args[0] === 'project' && args[1] === 'snapshot' && !readable) {
       report('permission', 'project.snapshot');
-      return Promise.reject(new ProjectReadPermissionError('project.snapshot'));
+      return Promise.reject(new ProjectReadPermissionError('project.snapshot', init.apiVersion));
     }
     if (method === 'invoke' && !init.manifest.permissions?.includes('project:write')) {
       const [namespace, member, params] = args;
@@ -305,7 +310,7 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     if (typeof fn !== 'function') throw new TypeError('events.on needs a listener function');
     if (PROJECT_READ_EVENTS.has(name) && !readable) {
       report('permission', `events.on('${name}')`);
-      throw new ProjectReadPermissionError(`events.on('${name}')`);
+      throw new ProjectReadPermissionError(`events.on('${name}')`, init.apiVersion);
     }
     let entry = listeners.get(name);
     if (!entry) { entry = { fns: new Set(), interest: registration('events', { event: name }) }; listeners.set(name, entry); }
@@ -387,11 +392,10 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
       return registration('panels', panelInfo(def), [], def);
     }, list: () => list('panels').map(item => item.id), open: (id: string, options?: unknown) => fire('invoke', 'panels', 'open', options === undefined ? [id] : [id, options]), close: (id: string) => fire('invoke', 'panels', 'close', [id]), refresh: (id: string) => fire('invoke', 'panels', 'refresh', [id]), isOpen: () => false },
     project: { get: () => {
-      if (!readable) { report('permission', 'project.get'); return Promise.reject(new ProjectReadPermissionError('project.get')); }
-      const promise = readProject();
-      return legacy ? watchPromise(promise, 'project.get', report) : promise;
+      if (!readable) { report('permission', 'project.get'); return Promise.reject(new ProjectReadPermissionError('project.get', init.apiVersion)); }
+      return readProject();
     }, revision: () => state.revision, selection: () => {
-      if (!readable) { report('permission', 'project.selection'); throw new ProjectReadPermissionError('project.selection'); }
+      if (!readable) { report('permission', 'project.selection'); throw new ProjectReadPermissionError('project.selection', init.apiVersion); }
       return state.selection;
     },
       time: () => state.time, playing: () => state.playing,

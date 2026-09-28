@@ -18,8 +18,9 @@ Nothing here has shipped to Store users yet, so the sandbox contract may change.
    site in one process, so every Store extension shared a renderer. An
    infinite loop or OOM in one froze or crashed all of them. (The editor itself
    was already in a different process.)
-4. **No liveness check.** A spinning extension burned a core forever; removing
-   its iframe does not stop the process.
+4. **No liveness check.** A spinning extension burned a core forever, and
+   since every extension shared one process, removing its iframe did not stop
+   that process.
 
 ## Design
 
@@ -66,6 +67,9 @@ Nothing here has shipped to Store users yet, so the sandbox contract may change.
   reports a runtime error with `code: 'sandbox_fatal'`, which the loader treats
   as an immediate disable (no windowed count): the extension shows
   "runtime-error" health and a toast.
+- With one process per extension, removing its frames alone also ends it:
+  Chromium tears a renderer down about 10 s after its last frame goes. The
+  SIGKILL makes that immediate and does not wait on a spinning process.
 - A crashed process (OOM) looks the same: pings stop answering.
 - The watchdog runs only when the extension has its own process and main can
   end it: an Electron `app://<host>` document and a bridge with
@@ -96,8 +100,8 @@ one flush: `time` and `selection` keep the last value; duplicate
 order. `project:changed` and `selection` require project read access.
 
 **Project reads.** `api.project.get()` returns `Promise<Project>` in the
-sandbox (all apiVersions; apiVersion ≤ 2 gets the `watchPromise` misuse report).
-It requires `project:read` (or `project:write`, which implies it). The
+sandbox. It requires apiVersion 3 and `project:read` (or `project:write`, which
+implies it); see §4. The
 document caches the parsed snapshot by `generation`: if `state.generation`
 equals the cached one, it resolves at once without a message. Otherwise it
 calls `project-snapshot` (one call in flight, shared by concurrent callers),
@@ -143,8 +147,16 @@ trusted: the document's RPC for the kernel port skips size and rate limits
 `project:read`: "Reads your project". Needed for `project.get`,
 `project.selection`, and the `project:changed` and `selection` events.
 `project:write` implies it. `time`, `playing`, `revision`, `transport` and
-`time` events need no permission. The publish-time scan and the Sandbox check
-flag undeclared reads.
+`time` events need no permission.
+
+Like every permission, it needs apiVersion 3: the manifest parser rejects
+`permissions` below it, and the shim grants apiVersion 1 and 2 documents no
+project reads either way. So apiVersion ≤ 2 code never reads the project in the
+sandbox. The
+runtime `PermissionError`, the publish-time scan (desktop plan and cloud, both
+from `packages/registry/src/scan.ts`) and the Sandbox check all say to set
+apiVersion 3 and declare `project:read` for such code, and just to declare it
+otherwise; publishing is blocked until it does.
 
 ## Acceptance
 

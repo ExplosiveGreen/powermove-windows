@@ -1,6 +1,6 @@
 import type { ExtensionRecord } from '../../../shared/extensions';
 import { createRpc, createRpcBudget, rpcTransfers, type Rpc } from '../../../shared/sandbox-rpc';
-import { canReadProject, panelInfo, PROJECT_READ_EVENTS, PROJECT_READ_MEMBERS, type SandboxEvent, type SandboxInit, type SandboxKey, type SandboxSnapshot, type SandboxState, type SandboxViewInit } from '../../sandbox/shim-api';
+import { canReadProject, panelInfo, PROJECT_READ_EVENTS, PROJECT_READ_MEMBERS, projectReadHint, type SandboxEvent, type SandboxInit, type SandboxKey, type SandboxSnapshot, type SandboxState, type SandboxViewInit } from '../../sandbox/shim-api';
 import type { Disposable, Selection } from './api';
 import { createExtensionAPI, type ExtensionHandle, type HostDeps } from './host';
 import type { Kernel } from './registries';
@@ -310,7 +310,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
         if (observer?.permission) observer.permission(member);
         else if (!warned.has(`p:${member}`)) {
           warned.add(`p:${member}`);
-          host.api.log('warn', PROJECT_READ_MEMBERS.has(member) ? `api.${member} needs the project:read permission` : `api.${member} needs full access and is unavailable in the sandbox`);
+          host.api.log('warn', PROJECT_READ_MEMBERS.has(member) ? `api.${member} needs the project:read permission. ${projectReadHint(manifest.apiVersion)}` : `api.${member} needs full access and is unavailable in the sandbox`);
         }
       } else if (event.kind === 'async') {
         if (observer?.asyncMisuse) observer.asyncMisuse(member);

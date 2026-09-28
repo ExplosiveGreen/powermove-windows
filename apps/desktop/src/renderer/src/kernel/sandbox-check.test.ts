@@ -17,7 +17,7 @@ it('keeps the live transport still during a compatibility check', () => {
   expect(step).not.toHaveBeenCalled();
 });
 
-function harness(activate: (api: PowermoveAPI) => void, permissions: ExtensionPermission[] = []) {
+function harness(activate: (api: PowermoveAPI) => void, permissions: ExtensionPermission[] = [], apiVersion = 3) {
   const kernel = createKernel();
   const project = { get: () => ({ id: 'test' }), revision: () => 1,
     selection: () => ({ layers: [], keys: [], chan: null }), time: () => 0, playing: () => false,
@@ -31,7 +31,7 @@ function harness(activate: (api: PowermoveAPI) => void, permissions: ExtensionPe
     panelsBackend: { open: vi.fn(), close: vi.fn(), isOpen: () => false, refresh: vi.fn(), list: () => [] },
     paletteOpen: vi.fn() } as unknown as Omit<HostDeps, 'reportRuntimeError'>;
   const record = { id: 'check-fixture', trust: 'local', scope: 'user',
-    manifest: { id: 'check-fixture', name: 'Check fixture', version: '1.0.0', apiVersion: 3, permissions },
+    manifest: { id: 'check-fixture', name: 'Check fixture', version: '1.0.0', apiVersion, permissions },
     dir: '/tmp/check-fixture', enabled: true, bundleUrl: '/ext/check-fixture/bundle.js', bundleHash: 'x',
     health: { state: 'ok' }, updatedAt: 0 } as ExtensionRecord;
   const frame = document.createElement('iframe');
@@ -81,6 +81,17 @@ it('reports project reads without project:read, naming the permission, and allow
   expect(allowed.permissionErrors).toEqual([]);
   expect(allowed.ok).toBe(true);
   expect(read).toEqual({ id: 'test' });
+});
+
+it('denies project reads to apiVersion 2 code and reports its apiVersion for the repair line', async () => {
+  let message = '';
+  const report = await harness(async api => {
+    try { await (api.project.get() as unknown as Promise<unknown>); } catch (error) { message = (error as Error).message; }
+  }, ['project:read' as ExtensionPermission], 2);
+  expect(report.apiVersion).toBe(2);
+  expect(report.permissionErrors).toEqual([{ namespace: 'project', member: 'get', count: 1, needs: 'project:read' }]);
+  expect(report.ok).toBe(false);
+  expect(message).toBe('project.get requires project:read permission. Set "apiVersion": 3 and declare "project:read" in the manifest\'s permissions.');
 });
 
 it('reports a panel that throws while mounting', async () => {

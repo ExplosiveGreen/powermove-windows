@@ -33,10 +33,12 @@ export interface SandboxPanelResult { id: string; mounted: boolean; error?: stri
 
 export interface SandboxCheckReport {
   ok: boolean;
+  /** The manifest's. Below 3 it can declare no permissions, so every repair starts with raising it. Absent without a manifest. */
+  apiVersion?: number;
   /** Set when the manifest declares `full-access`: it never runs sandboxed, so nothing ran. */
   skipped?: 'full-access';
   activation: 'ok' | { error: string };
-  /** Trusted-only members reached (they throw `PermissionError('full-access')`), and project reads without `project:read`. */
+  /** Trusted-only members reached (they throw `PermissionError('full-access')`), and project reads without apiVersion 3 and `project:read`. */
   permissionErrors: SandboxPermissionHit[];
   cspViolations: SandboxCspHit[];
   /** apiVersion ≤ 2 code that read a sync result from a method that returns a Promise in the sandbox. */
@@ -148,6 +150,7 @@ export async function runSandboxCheck(record: ExtensionRecord, options: SandboxC
     return report;
   };
 
+  if (record.manifest) report.apiVersion = record.manifest.apiVersion;
   const permissions = [...(options.permissions ?? record.manifest?.permissions ?? [])];
   if (permissions.includes('full-access')) {
     report.skipped = 'full-access';
