@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
@@ -133,6 +134,34 @@ describe('agent sandbox rules', () => {
     expect(rules).not.toMatch(/\(allow network-outbound\)/);
     expect(rules).toContain('(deny file-read* (subpath "/Users/me/.ssh") (subpath "/Users/me/Library/Application Support/Powermove/codex-runtime"))');
     expect(() => agentSeatbeltRules(0, [])).toThrow('port');
+  });
+
+  it('denies listening sockets and LaunchServices', () => {
+    const rules = agentSeatbeltRules(4321, []);
+    expect(rules).toContain('(deny network-bind (local ip "*:*"))(deny network-inbound (local ip "*:*"))');
+    expect(rules).toContain('(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") (global-name-regex #"^com\\.apple\\.lsd\\."))');
+    expect(rules).not.toMatch(/\(allow network-(?:bind|inbound)/);
+  });
+
+  it.runIf(process.platform === 'darwin')('lets a sandboxed command reach the proxy but not listen or launch apps', async () => {
+    const proxy = net.createServer(socket => socket.end('proxied'));
+    await new Promise<void>(resolve => proxy.listen(0, '127.0.0.1', resolve));
+    cleanup.push(() => new Promise(resolve => proxy.close(resolve)));
+    const port = (proxy.address() as net.AddressInfo).port;
+    const profile = `(version 1)(allow default)${agentSeatbeltRules(port, [])}`;
+    const run = (command: string, args: string[]) => new Promise<string>(resolve => {
+      execFile('/usr/bin/sandbox-exec', ['-p', profile, command, ...args], { timeout: 10_000 }, (_error, stdout, stderr) => resolve(`${stdout}${stderr}`));
+    });
+    const script = `const net = require('node:net');
+      const listen = host => new Promise(done => { const server = net.createServer();
+        server.once('error', error => done(error.code)); server.listen(0, host, () => server.close(() => done('listening'))); });
+      const reach = () => new Promise(done => { const socket = net.connect(${port}, '127.0.0.1');
+        let text = ''; socket.on('data', chunk => text += chunk); socket.on('end', () => done(text)); socket.on('error', error => done(error.code)); });
+      (async () => console.log(JSON.stringify({ any: await listen('0.0.0.0'), loopback: await listen('127.0.0.1'), proxy: await reach() })))();`;
+    expect(JSON.parse(await run(process.execPath, ['-e', script]))).toEqual({ any: 'EPERM', loopback: 'EPERM', proxy: 'proxied' });
+    // lsappinfo only reads LaunchServices state, unlike `open`, which would launch an app if the rule regressed.
+    const front = await new Promise<string>(resolve => execFile('/usr/bin/lsappinfo', ['front'], (_error, stdout) => resolve(stdout)));
+    if (front.includes('ASN:')) expect(await run('/usr/bin/lsappinfo', ['front'])).not.toContain('ASN:');
   });
 
   it('lists account keys, provider logins and Powermove runtime homes by their real paths', async () => {

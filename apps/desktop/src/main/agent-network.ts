@@ -195,12 +195,20 @@ export async function agentCredentialPaths(userData: string, options: { codexHom
   return [...new Set([...paths, ...await Promise.all(paths.map(resolvedPath))])];
 }
 
+// `open` and every other app launch go through LaunchServices.
+const LAUNCH_SERVICES = '(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") (global-name-regex #"^com\\.apple\\.lsd\\."))';
+// Seatbelt's "localhost" also matches the wildcard address, so a loopback-only
+// listener cannot be told apart from one on every interface; no TCP or UDP
+// listeners at all. Unix sockets still bind.
+const NO_LISTENERS = '(deny network-bind (local ip "*:*"))(deny network-inbound (local ip "*:*"))';
+
 /** Seatbelt rules for a Project command: outbound traffic only to the
- * loopback proxy (no direct sockets, DNS or Unix sockets), and no reads of
- * credential paths. Later rules win, so these follow `(allow default)`. */
+ * loopback proxy (no direct sockets, DNS or Unix sockets), no listening
+ * sockets, no app launches, and no reads of credential paths. Later rules
+ * win, so these follow `(allow default)`. */
 export function agentSeatbeltRules(proxyPort: number, deniedReads: readonly string[]): string {
   if (!Number.isInteger(proxyPort) || proxyPort <= 0 || proxyPort > 65535) throw new Error('Invalid proxy port.');
   const reads = deniedReads.map(file => ` (subpath ${JSON.stringify(file)})`).join('');
-  return `(deny network-outbound)(allow network-outbound (remote ip "localhost:${proxyPort}"))`
+  return `(deny network-outbound)(allow network-outbound (remote ip "localhost:${proxyPort}"))${NO_LISTENERS}${LAUNCH_SERVICES}`
     + (reads ? `(deny file-read*${reads})` : '');
 }
