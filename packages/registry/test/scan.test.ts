@@ -34,6 +34,19 @@ test('inline CSS declaration lists are not credentials', () => {
   const css = "el.style.cssText='position:absolute;right:124px;top:7px;z-index:6;display:flex;align-items:center';";
   expect(scanText('viewer.ts', css)).toEqual([]);
 });
+test('capability scanner finds direct project reads in source files only', () => {
+  expect(scanCapabilities([
+    { path: 'index.ts', text: 'api.project.get()\napi.project . selection()\napi.events.on("project:changed", f)\napi.on(\'selection\', f)\napi.events.on(`time`, f)\napi.project.revision()\napi.project.getter\non("selectionchange", f)' },
+    { path: 'Panel.svelte', text: '<script>const p = await api.project.get();</script>' },
+    { path: 'README.md', text: 'Call api.project.get() and on("selection", fn).' }
+  ])).toEqual([
+    { path: 'index.ts', line: 1, capability: 'project:read' },
+    { path: 'index.ts', line: 2, capability: 'project:read' },
+    { path: 'index.ts', line: 3, capability: 'project:read' },
+    { path: 'index.ts', line: 4, capability: 'project:read' },
+    { path: 'Panel.svelte', line: 1, capability: 'project:read' }
+  ]);
+});
 test('capability scanner finds network and clipboard uses in text files', () => {
   expect(scanCapabilities([
     { path: 'index.ts', text: 'fetch("https://example.com")\nnew WebSocket("wss://example.com")\nXMLHttpRequest\nnew EventSource("/events")\nnavigator.sendBeacon("/ping")\nnavigator.clipboard.writeText("hi")' },

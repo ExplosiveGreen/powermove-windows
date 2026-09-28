@@ -25,7 +25,7 @@ export const ApiErrorBody = z.discriminatedUnion('error', [
   simple('too_large').extend({ limit: z.union([limitCode, z.literal('envelope')]) }),
   simple('object_missing').extend({ shas: z.array(Sha1) }),
   simple('scan_blocked').extend({ findings: z.array(z.object({ path: z.string(), line: z.number().int().positive(), kind: scanKind })) }),
-  simple('permission_undeclared').extend({ findings: z.array(z.object({ path: z.string(), line: z.number().int().positive(), capability: Permission.extract(['network', 'clipboard']) })) }),
+  simple('permission_undeclared').extend({ findings: z.array(z.object({ path: z.string(), line: z.number().int().positive(), capability: Permission.extract(['network', 'clipboard', 'project:read']) })) }),
   simple('limit_exceeded').extend({ code: limitCode }),
   simple('client_too_old').extend({ minimum: z.string() })
 ]);

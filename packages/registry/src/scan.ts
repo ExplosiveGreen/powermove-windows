@@ -1,9 +1,12 @@
 export type ScanKind = 'openai_key' | 'anthropic_key' | 'aws_access_key' | 'github_token' | 'gitlab_token' | 'slack_token' | 'stripe_key' | 'google_api_key' | 'jwt' | 'pem_private_key' | 'high_entropy';
 export interface ScanFinding { path: string; line: number; kind: ScanKind; hard: boolean; waived?: string }
 export interface ScanResult { blocked: ScanFinding[]; waived: ScanFinding[] }
-export interface CapabilityFinding { path: string; line: number; capability: 'network' | 'clipboard' }
+export interface CapabilityFinding { path: string; line: number; capability: 'network' | 'clipboard' | 'project:read' }
+/** Direct project reads: `api.project.get/selection` and subscriptions to the `project:changed` and `selection` events. */
+export const PROJECT_READ = /\bapi\s*\.\s*project\s*\.\s*(?:get|selection)\b|\bon\s*\(\s*(['"`])(?:project:changed|selection)\1/;
 export const WAIVER_COMMENT = /powermove-secret-ok:\s*(.{3,200})/;
 const textFile = /(?:\.(?:ts|js|mjs|svelte|json|md|txt|css|html|frag|vert|glsl|wgsl|yml|yaml|toml)|(?:^|\/)\.env[^/]*)$/i;
+const sourceFile = /\.(?:[cm]?[jt]sx?|svelte)$/i;
 const hardPatterns: [ScanKind, RegExp][] = [
   ['anthropic_key', /\bsk-ant-[A-Za-z0-9_-]{16,}\b/g],
   ['stripe_key', /\b(?:sk_live_|rk_live_)[A-Za-z0-9]{16,}\b/g],
@@ -73,6 +76,8 @@ export function scanCapabilities(files: { path: string; text: string }[]): Capab
     for (const [index, line] of file.text.split(/\r?\n/).entries()) {
       if (network.test(line)) findings.push({ path: file.path, line: index + 1, capability: 'network' });
       if (clipboard.test(line)) findings.push({ path: file.path, line: index + 1, capability: 'clipboard' });
+      // Code only: a README documenting the API is not a read.
+      if (sourceFile.test(file.path) && PROJECT_READ.test(line)) findings.push({ path: file.path, line: index + 1, capability: 'project:read' });
     }
   }
   return findings;
