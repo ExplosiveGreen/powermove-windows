@@ -159,6 +159,7 @@ function makeProject(PM: LegacyPM): ProjectAPI {
   });
   return {
     get: () => PM?.proj as Project,
+    latest: () => PM?.proj as Project | undefined,
     revision: () => Number(PM?.proj?.revision ?? 0),
     apply: (commands: EditCommand | EditCommand[], meta?: EditMeta): EditResult =>
       (PM?.Edit?.apply?.(commands, meta) as EditResult | undefined) ?? { ok: false, message: 'editing engine unavailable' },

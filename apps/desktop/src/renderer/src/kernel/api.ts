@@ -318,9 +318,11 @@ export interface ThemeDefinition {
 export interface ThemeAPI {
   register(def: ThemeDefinition): Disposable;
   activate(id: string): void;
+  /** Reactive (see {@link ProjectAPI}): re-runs its readers when the theme changes. */
   active(): string;
   list(): ThemeDefinition[];
-  /** Kernel scheme preference (System/Light/Dark) as chosen in Settings. */
+  /** Kernel scheme preference (System/Light/Dark) as chosen in Settings; sandboxed, the scheme the panel shows
+   * (`light` or `dark`). Reactive (see {@link ProjectAPI}). */
   scheme(): 'light' | 'dark' | 'system';
   setScheme(mode: 'light' | 'dark' | 'system'): void;
 }
@@ -376,20 +378,37 @@ export interface Selection {
   chan: string | null;
 }
 
+/**
+ * Reactive reads: `latest`, `time`, `playing`, `revision` and `selection` here, `time` and `playing` on
+ * `transport`, `active` and `scheme` on `theme`. Read inside a Svelte template, `$derived` or `$effect`, one
+ * re-runs that reader whenever its value changes, so there is no `events.on` + `$state` to wire by hand; the
+ * subscription starts with the first such reader and ends with the last. Called anywhere else it returns the
+ * plain value and subscribes nothing.
+ *
+ * `time()` re-runs its readers on every frame during playback, like the editor's own playhead. Narrow what
+ * depends on it with `$derived` (`const second = $derived(Math.floor(api.project.time()))` updates its readers
+ * once a second), or sample it on an interval outside a reactive context while `playing()`.
+ */
 export interface ProjectAPI {
   /** Current project object graph; mutate through `apply`. Returns a Promise when the extension runs sandboxed
    * (Store installs): a deep-frozen snapshot without `edits`, asset blob/source fields or `library`/`notes`
    * secrets, cached until the project changes. Needs no permission. */
   get(): Project;
-  /** Synchronous in the sandbox; needs no permission. */
+  /** The project, reactively. In-realm the live object `get()` returns (edited in place, so read the fields you
+   * need in the same reactive expression); readers re-run on every `project:changed`. Sandboxed, the snapshot
+   * this document pulled last, `undefined` until the first pull (or while the project is too large to
+   * snapshot): a reader starts a pull and re-runs when it lands, and each change pulls once more while one
+   * reads. Always synchronous; needs no permission. */
+  latest(): Project | undefined;
+  /** Reactive; synchronous in the sandbox; needs no permission. */
   revision(): number;
   /** Typed, validated, undoable edit. `meta.origin` is forced to `ext:<id>`. Returns a Promise when sandboxed. */
   apply(commands: EditCommand | EditCommand[], meta?: Omit<EditMeta, 'origin'>): EditResult;
-  /** Synchronous in the sandbox; needs no permission. */
+  /** Reactive; synchronous in the sandbox; needs no permission. */
   selection(): Selection;
   /** Returns a Promise when the extension runs sandboxed (Store installs). */
   select(layerIds: string[], add?: boolean): void;
-  /** Synchronous in the sandbox; needs no permission. */
+  /** Reactive (every frame during playback); synchronous in the sandbox; needs no permission. */
   time(): number;
   /** Returns a Promise when the extension runs sandboxed (Store installs). */
   setTime(t: number): void;
@@ -397,7 +416,7 @@ export interface ProjectAPI {
   play(): void;
   /** Returns a Promise when the extension runs sandboxed (Store installs). */
   pause(): void;
-  /** Synchronous in the sandbox; needs no permission. */
+  /** Reactive; synchronous in the sandbox; needs no permission. */
   playing(): boolean;
   /** Returns a Promise when the extension runs sandboxed (Store installs). */
   undo(): void;
@@ -508,6 +527,7 @@ export interface SetTimeOptions { raw?: boolean; force?: boolean }
  * Transport owns mutable playhead, playback and preview-quality state. Changing time or playback emits the backing transport events and invalidates rendering/UI; `invalidate` preserves the legacy immediate-render and coalesced UI invalidation behavior.
  */
 export interface TransportAPI {
+  /** Reactive (every frame during playback; see {@link ProjectAPI}). */
   time(): number;
   /** Transport controls return Promises when the extension runs sandboxed (Store installs). */
   setTime(time: number, options?: SetTimeOptions): void;
@@ -517,6 +537,7 @@ export interface TransportAPI {
   pause(): void;
   /** Returns a Promise when the extension runs sandboxed (Store installs). */
   toggle(): void;
+  /** Reactive (see {@link ProjectAPI}). */
   playing(): boolean;
   /** Returns a Promise when the extension runs sandboxed (Store installs). */
   step(frames: number): void;
