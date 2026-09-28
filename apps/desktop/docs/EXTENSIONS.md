@@ -225,8 +225,9 @@ These reads are reactive: `api.project.time()`, `playing()`, `revision()`,
 and that reader re-runs when the value changes. Anywhere else (`activate`, an
 event handler, a timer) it returns the current value and subscribes to nothing.
 The subscription starts with the first reactive reader and ends with the last, so
-a closed panel, or code that never reads reactively, costs nothing. Do not wire
-`events.on` into `$state` for these values.
+code that never reads reactively costs nothing. Closing a panel keeps its component
+mounted, with its state, for when it reopens, so its readers keep running while it
+is closed. Do not wire `events.on` into `$state` for these values.
 
 ```svelte
 <script lang="ts">
@@ -390,6 +391,7 @@ in-realm API after the person installing the extension accepts the trust dialog.
 - **services** — LIFO typed runtime service registration; disposing an override restores the previous implementation.
 - **storage** — per-extension `get/set/delete` (persisted).
 - **events / on** — `project:changed`, `selection`, `time`, `transport`, `fonts` (complete family list), `layout`, `theme:changed`, `frame:rendered`, `extension:loaded/unloaded`.
+  An extension's own events use names without `:`: sandboxed, `emit('pinned', value)` reaches `on('pinned')` in every document of that extension only, and a name containing `:` is refused.
 - **extensions** — introspection: `list`, `fork`, `rebase`, `setEnabled`, `remove`, `reload`, `reveal`, `requestFix`, `setUp` (opens the values sheet).
 - **vars** — `get(key)`, `has(key)`, `keys()`: the values the user entered for this extension's declared `vars` (see "Variables").
 - **model.cloneLayer** — `cloneLayer(layer): Layer` deep-clones a layer and refreshes its layer/keyframe ids and numbered name.
