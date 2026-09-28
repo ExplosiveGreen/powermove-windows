@@ -124,6 +124,8 @@ export interface LibraryItemDto {
   trust: NonNullable<ExtensionRecord['trust']>;
   /** What the manifest declares (apiVersion 3). */
   permissions: ExtensionPermission[];
+  /** The manifest's `links` (apiVersion 3), when it declares any. */
+  links?: string[];
   description: string | null;
   group: LibraryGroup;
   maker: LibraryMaker;

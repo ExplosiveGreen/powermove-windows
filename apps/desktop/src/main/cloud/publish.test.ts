@@ -64,7 +64,7 @@ function release(body: PutReleaseBody, treeSha: string): ReleaseDto {
     id: MY_RELEASE, repoId: MY_REPO, version: body.version, commitSha: body.commitSha, treeSha, tarSha256: 'a'.repeat(64),
     apiVersion: 2, fileCount: 3, sizeBytes: 100, notes: body.notes ?? null, publishedAt: '2026-09-23T12:00:00.000Z', yankedAt: null,
     basedOnReleaseId: null,
-    manifest: { id: 'glass-blur', name: 'Glass blur', version: body.version, apiVersion: 2, contributes: ['effects'], vars: [], forkedFrom: null, description: null, permissions: [] }
+    manifest: { id: 'glass-blur', name: 'Glass blur', version: body.version, apiVersion: 2, contributes: ['effects'], vars: [], forkedFrom: null, description: null, permissions: [], links: [] }
   };
 }
 

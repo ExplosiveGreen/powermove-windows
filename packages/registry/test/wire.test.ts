@@ -16,6 +16,13 @@ const samples: [string, z.ZodType, unknown][] = [
   ['PublisherDto', W.PublisherDto, owner], ['LineageDto', W.LineageDto, { repoId: id, handle: 'my-handle', slug: 'my-extension', releaseId: id, version: '1.0.0' }], ['ReleaseSummaryDto', W.ReleaseSummaryDto, listing.latest], ['ListingDto', W.ListingDto, listing], ['ManifestSummaryDto', W.ManifestSummaryDto, manifest], ['ReleaseDto', W.ReleaseDto, release], ['ExtensionDetailDto', W.ExtensionDetailDto, { ...listing, about: null, releases: [release], moderation: 'none' }], ['TreeFileDto', W.TreeFileDto, tree.files[0]], ['TreeDto', W.TreeDto, tree], ['CompareStatus', W.CompareStatus, 'added'], ['CompareDto', W.CompareDto, compare], ['InstallDto', W.InstallDto, install], ['MeDto', W.MeDto, me], ['SessionDto', W.SessionDto, session]
 ];
 for (const [name, schema, sample] of samples) test(name, () => { expect(schema.safeParse(sample).success).toBe(true); expect(schema.safeParse(null).success).toBe(false); });
+test('manifest links default to none and carry only canonical https origins', () => {
+  expect(W.ManifestSummaryDto.parse(manifest).links).toEqual([]);
+  expect(W.ManifestSummaryDto.parse({ ...manifest, links: ['https://replicate.com'] }).links).toEqual(['https://replicate.com']);
+  for (const links of [['http://replicate.com'], ['https://replicate.com/path'], ['https://127.0.0.1'], Array.from({ length: 6 }, (_, index) => `https://a${index}.example.com`)]) {
+    expect(W.ManifestSummaryDto.safeParse({ ...manifest, links }).success).toBe(false);
+  }
+});
 test('error codes and status are exhaustive', () => {
   expect(Object.keys(W.API_ERROR_STATUS).sort()).toEqual([...W.API_ERROR_CODES].sort());
   for (const code of [...W.API_ERROR_CODES]) expect(W.API_ERROR_STATUS[code]).toBeGreaterThanOrEqual(400);

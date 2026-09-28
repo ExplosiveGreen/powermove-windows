@@ -148,6 +148,16 @@ export function permissionLines(permissions: readonly string[] | undefined): Per
     .map((permission) => ({ label: PERMISSION_LABEL[permission], warn: permission === 'full-access' }));
 }
 
+/**
+ * The origins a manifest's `links` lets it open in the browser without
+ * asking, as hosts ("replicate.com"). They only skip the prompt alongside
+ * `network`, so without it there is nothing to disclose.
+ */
+export function linkHosts(links: readonly string[] | undefined, permissions: readonly string[] | undefined): string[] {
+  if (!(permissions ?? []).includes('network')) return [];
+  return (links ?? []).map((origin) => origin.replace(/^https:\/\//, ''));
+}
+
 export function asksFullAccess(permissions: readonly string[] | undefined): boolean {
   return (permissions ?? []).includes('full-access');
 }
@@ -237,6 +247,8 @@ export type VersionEntry = { id: string; version: string; date: string; note: st
 export type StoreDetail = StoreListing & {
   about: string | null;
   contributes: string[];
+  /** The latest release's manifest `links`. */
+  links: string[];
   versions: VersionEntry[];
 };
 
@@ -248,6 +260,7 @@ export function detailFromDto(dto: ExtensionDetailDto, library: readonly Library
     ...listing,
     about: dto.about ?? latest?.manifest.description ?? null,
     contributes: latest?.manifest.contributes ?? [],
+    links: latest?.manifest.links ?? [],
     versions: dto.releases.map((release) => ({
       id: release.id,
       version: release.version,
