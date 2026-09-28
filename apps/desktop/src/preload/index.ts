@@ -327,6 +327,7 @@ const bridge: PowermoveBridge = {
     ipcRenderer.send(IPC.log, { level, text });
   },
   openExternal: (url) => ipcRenderer.invoke(IPC.openExternal, url) as Promise<void>,
+  extensionOpenExternal: (url) => ipcRenderer.invoke(IPC.extensionOpenExternal, url) as Promise<void>,
   nativeEdit: (action: NativeEditAction) => ipcRenderer.send(IPC.nativeEdit, action),
   updates: {
     status: () => ipcRenderer.invoke(IPC.updateStatus) as Promise<AppUpdateState>,

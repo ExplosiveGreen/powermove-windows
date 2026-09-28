@@ -124,6 +124,8 @@ export const IPC = {
   menuPopup: 'menu:popup',
   log: 'log',
   openExternal: 'shell:open-external',
+  /** An extension's `ui.openExternal`, after the host's own policy: https only, re-checked here. */
+  extensionOpenExternal: 'shell:open-extension-url',
   nativeEdit: 'edit:native',
   menuCommand: 'menu:command', // main → renderer
   updateStatus: 'update:status',
@@ -798,6 +800,8 @@ export interface PowermoveBridge {
   };
   log(level: LogLevel, text: string): void;
   openExternal(url: string): Promise<void>;
+  /** For extension URLs: main accepts only https, at most 2 KB, without credentials. */
+  extensionOpenExternal?(url: string): Promise<void>;
   nativeEdit(action: NativeEditAction): void;
   onMenuCommand(cb: (cmd: MenuCommand) => void): () => void;
 
