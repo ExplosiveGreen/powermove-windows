@@ -61,7 +61,7 @@ import { installMenu, installRendererMenuShortcutRouting } from './menu';
 import { openProjectForWindow, registerSaveIpc } from './save';
 import { ProjectFiles } from './project-files';
 import { registerShellIpc } from './shell';
-import { CONTENT_SECURITY_POLICY, SANDBOX_CONTENT_SECURITY_POLICY, extensionSandboxCsp, sandboxFrameNavigationAllowed, sandboxProcessesToKill, type ContentsFrames } from './security-policy';
+import { CONTENT_SECURITY_POLICY, SANDBOX_CONTENT_SECURITY_POLICY, extensionSandboxCsp, sandboxFrameNavigationAllowed, sandboxHostOwner, sandboxProcessesToKill, type ContentsFrames } from './security-policy';
 import { SANDBOX_DOCUMENT, isSandboxHost, sandboxDocumentId, sandboxHost } from '../shared/sandbox-origin';
 import { EXTENSION_ID } from '../shared/extensions';
 import { createStore, installQuitFlush, registerStoreIpc, type Store } from './storage';
@@ -211,19 +211,26 @@ function rendererFile(rendererRoot: string, requestedPath: string): string | nul
   return relativePath === '..' || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath) ? null : filePath;
 }
 
+/* Every installed extension id, once the registry exists: a sandbox host is
+   served and terminated only for the one id on it (sandboxHostOwner). */
+let installedExtensionIds: () => string[] = () => [];
+
 /**
  * One Store extension's host, `app://<sandboxHost(id)>` (docs/sandbox-data-plane.md
  * §1): its sandbox document, the static files that document loads, and its
- * own bundle. Node's URL.origin is "null" for custom schemes, so the origin is
- * spelled out.
+ * own bundle. A host no installed extension owns (or, fail closed, several
+ * would) serves nothing. Node's URL.origin is "null" for custom schemes, so
+ * the origin is spelled out.
  */
 async function serveSandboxHost(requestUrl: URL, rendererRoot: string): Promise<Response> {
   const host = requestUrl.host;
+  const owner = sandboxHostOwner(host, installedExtensionIds());
+  if (owner === null) return errorResponse(404, 'Not found');
   const origin = `app://${host}`;
   const requestedPath = decodeURIComponent(requestUrl.pathname).replace(/^\/+/, '');
   if (requestedPath === SANDBOX_DOCUMENT) {
     const id = sandboxDocumentId(requestUrl.href);
-    const manifest = id ? sandboxManifestFor(id) : null;
+    const manifest = id === owner ? sandboxManifestFor(id) : null;
     if (!id || !manifest || requestUrl.searchParams.get('perms') !== (manifest.permissions ?? []).join(',')) return errorResponse(404, 'Not found');
     const headers = responseHeaders('text/html; charset=utf-8');
     headers['Cross-Origin-Resource-Policy'] = 'same-origin';
@@ -249,7 +256,7 @@ async function serveSandboxHost(requestUrl: URL, rendererRoot: string): Promise<
   const ext = /^ext\/([^/]+)\//.exec(requestedPath);
   if (ext) {
     // Another extension's bundle never loads from this host.
-    if (sandboxHost(ext[1] ?? '') !== host) return errorResponse(404, 'Not found');
+    if (ext[1] !== owner) return errorResponse(404, 'Not found');
     const asset = await serveExtensionAsset(requestedPath);
     if (asset === null) return errorResponse(404, 'Not found');
     const headers = responseHeaders('text/javascript; charset=utf-8');
@@ -812,8 +819,14 @@ if (!hasSingleInstanceLock) {
         return 0;
       }
     }
+    // Another installed id on the same host would die with it: kill nothing.
+    const host = sandboxHost(extensionId);
+    if (sandboxHostOwner(host, [extensionId, ...installedExtensionIds()]) !== extensionId) {
+      console.error('[sandbox] extension host is not its own; not terminating', extensionId);
+      return 0;
+    }
     let killed = 0;
-    for (const pid of sandboxProcessesToKill(sandboxHost(extensionId), contents)) {
+    for (const pid of sandboxProcessesToKill(host, contents)) {
       try { process.kill(pid, 'SIGKILL'); killed++; } catch { /* already gone */ }
     }
     return killed;
@@ -937,6 +950,7 @@ if (!hasSingleInstanceLock) {
         isTrusted: isTrustedSender,
         beforeRemove
       });
+      installedExtensionIds = () => extensionRegistry.list().map((record) => record.id);
       storeDeps = { registry: extensionRegistry, builtinIds, beforeRemove, hasValues: (id) => vars.hasValues(id) };
       registerVarsIpc(ipcMain, { registry: extensionRegistry, vars, isTrusted: isTrustedSender });
       refreshRestoredExtensions = async (ids) => {

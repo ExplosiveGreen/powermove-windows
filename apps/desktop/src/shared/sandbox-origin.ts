@@ -6,22 +6,24 @@
  * module is pure and synchronous.
  */
 
+import { sha256Hex } from './sha256';
+
 export const SANDBOX_DOCUMENT = 'host/ext-sandbox.html';
-const SANDBOX_HOST = /^x-(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?-)?[a-z2-7]{13}$/;
+const SLUG_LENGTH = 20, CODE_LENGTH = 26;
+const SANDBOX_HOST = /^x-(?:[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?-)?[a-z2-7]{26}$/;
 const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
-const FNV_OFFSET = 0xcbf29ce484222325n, FNV_PRIME = 0x100000001b3n, MASK = (1n << 64n) - 1n;
 
-export function fnv1a64(text: string): bigint {
-  let hash = FNV_OFFSET;
-  for (const byte of new TextEncoder().encode(text)) hash = ((hash ^ BigInt(byte)) * FNV_PRIME) & MASK;
-  return hash;
-}
-
-/** `x-<slug>-<hash>`: one DNS label, readable in DevTools, and the 64-bit hash keeps distinct ids apart. */
+/**
+ * `x-<slug>-<code>`: one DNS label (at most 2 + 20 + 1 + 26 = 49 of 63 chars),
+ * readable in DevTools. The code is the leading 130 bits of the id's SHA-256
+ * in base32, so no one can publish an id that lands on another extension's
+ * host (and so its process). SHA-256 runs in plain JS because main and the
+ * renderer must agree synchronously; crypto.subtle is async.
+ */
 export function sandboxHost(id: string): string {
-  const slug = id.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 20).replace(/^-+|-+$/g, '');
-  let hash = fnv1a64(id), code = '';
-  for (let index = 0; index < 13; index++) { code = BASE32.charAt(Number(hash & 31n)) + code; hash >>= 5n; }
+  const slug = id.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, SLUG_LENGTH).replace(/^-+|-+$/g, '');
+  let hash = BigInt(`0x${sha256Hex(new TextEncoder().encode(id)).slice(0, 33)}`) >> 2n, code = '';
+  for (let index = 0; index < CODE_LENGTH; index++) { code = BASE32.charAt(Number(hash & 31n)) + code; hash >>= 5n; }
   return slug ? `x-${slug}-${code}` : `x-${code}`;
 }
 

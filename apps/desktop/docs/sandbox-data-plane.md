@@ -28,14 +28,19 @@ Nothing here has shipped to Store users yet, so the sandbox contract may change.
 - Each Store extension's documents (runtime and panel views) load from its own
   host: `app://<sandboxHost(id)>/host/ext-sandbox.html?id=…&perms=…[&view=…]`.
   `sandboxHost(id)` (`src/shared/sandbox-origin.ts`) is `x-<slug>-<hash>`, a DNS-safe,
-  lowercase label: a readable slug (≤ 20 chars) plus a 64-bit FNV-1a hash in
-  base32 so distinct ids never collide. Different hosts = different sites =
-  different processes (verified: two extensions → two pids, editor a third).
+  lowercase label (≤ 49 chars): a readable slug (≤ 20 chars) plus the leading
+  130 bits of the id's SHA-256 in base32 (26 chars), so no one can craft an id
+  that lands on another extension's host. The hash is a synchronous pure-JS
+  SHA-256 (`src/shared/sha256.ts`) so main and the renderer agree. Different
+  hosts = different sites = different processes (verified: two extensions →
+  two pids, editor a third).
 - The extension's bundle is served from its own host only:
   `app://<host>/ext/<id>/bundle.js`. A sandbox host serves exactly: its
   `host/ext-sandbox.html` (id must hash to the host; perms must match the
   manifest), the static chunks that document needs (`host/*.js`, `assets/*`,
-  fonts), and `ext/<its own id>/…`. Everything else is 404.
+  fonts), and `ext/<its own id>/…`. Everything else is 404. Main fails closed
+  on a collision: a host that no installed id, or more than one, hashes to
+  serves nothing, and `sandboxTerminate` kills nothing there.
 - CSP of the sandbox document is derived from the manifest as today, with the
   extension's own origin: `script-src app://<host>/host/ app://<host>/ext/<id>/`.
   The editor's own CSP allows `frame-src app:`; the navigation guard allows

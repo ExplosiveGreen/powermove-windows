@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { sandboxDocumentUrl, sandboxHost } from '../shared/sandbox-origin';
-import { CONTENT_SECURITY_POLICY, SANDBOX_CONTENT_SECURITY_POLICY, extensionSandboxCsp, sandboxFrameNavigationAllowed, sandboxProcessesToKill } from './security-policy';
+import { CONTENT_SECURITY_POLICY, SANDBOX_CONTENT_SECURITY_POLICY, extensionSandboxCsp, sandboxFrameNavigationAllowed, sandboxHostOwner, sandboxProcessesToKill } from './security-policy';
 
 describe('renderer security policy', () => {
   it('allows trusted extensions to make HTTP requests and WebSocket connections', () => {
@@ -82,5 +82,22 @@ describe('sandboxProcessesToKill', () => {
   it('ignores unknown pids and non-sandbox hosts', () => {
     expect(sandboxProcessesToKill(a, [editor(10, [{ url: url(a), pid: 0 }, { url: url(a), pid: -1 }])])).toEqual([]);
     expect(sandboxProcessesToKill('powermove', [editor(10, [{ url: 'app://powermove/x', pid: 20 }])])).toEqual([]);
+  });
+});
+
+describe('sandboxHostOwner', () => {
+  const a = sandboxHost('a-ext');
+
+  it('is the one installed id on that host', () => {
+    expect(sandboxHostOwner(a, ['b-ext', 'a-ext', 'a-ext'])).toBe('a-ext');
+    expect(sandboxHostOwner(a, ['b-ext'])).toBeNull();
+    expect(sandboxHostOwner(a, [])).toBeNull();
+    expect(sandboxHostOwner('powermove', ['a-ext'])).toBeNull();
+  });
+
+  it('fails closed when two ids share a host', () => {
+    const colliding = (id: string) => (id === 'victim' || id === 'crafted' ? a : sandboxHost(id));
+    expect(sandboxHostOwner(a, ['victim', 'crafted'], colliding)).toBeNull();
+    expect(sandboxHostOwner(a, ['victim', 'other'], colliding)).toBe('victim');
   });
 });

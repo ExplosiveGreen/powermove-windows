@@ -1,4 +1,4 @@
-import { isSandboxHost, sandboxDocumentId } from '../shared/sandbox-origin';
+import { isSandboxHost, sandboxDocumentId, sandboxHost } from '../shared/sandbox-origin';
 
 /**
  * Trusted extensions can use the network; project-authored scripts run in a
@@ -49,6 +49,22 @@ export function sandboxFrameNavigationAllowed(target: string, from: ReadonlyArra
   if (sandboxDocumentId(target) === null) return false;
   const host = hostOf(target);
   return from.every(url => { const other = hostOf(url); return !isSandboxHost(other) || other === host; });
+}
+
+/**
+ * The one extension among `ids` whose sandbox host is `host`, else null. Two
+ * ids on one host would share a process, so a collision (infeasible with
+ * SHA-256, but main never trusts that) owns nothing: main then serves and
+ * kills nothing there. `hostFor` is only replaced by tests.
+ */
+export function sandboxHostOwner(host: string, ids: Iterable<string>, hostFor: (id: string) => string = sandboxHost): string | null {
+  let owner: string | null = null;
+  for (const id of new Set(ids)) {
+    if (hostFor(id) !== host) continue;
+    if (owner !== null) return null;
+    owner = id;
+  }
+  return owner;
 }
 
 export interface ContentsFrames { mainFramePid: number; frames: ReadonlyArray<{ url: string; pid: number }> }
