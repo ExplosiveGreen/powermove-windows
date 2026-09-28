@@ -160,8 +160,8 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   const ready = new Promise<void>((resolve, reject) => { activated = resolve; rejected = reject; });
   void ready.catch(() => {}); // a load failure can settle before activation is awaited
   const permissions = manifest.permissions ?? [];
-  // Read as strings: `project:read` joins the manifest permission type separately. Re-read each time; the list may change.
-  const readable = (): boolean => canReadProject(permissions as readonly string[]);
+  // The kernel applies the read rule itself (apiVersion 3 plus project:read or write), whatever the parser or shim allowed.
+  const readable = (): boolean => (manifest.apiVersion ?? 1) >= 3 && canReadProject(permissions as readonly string[]);
   const violations = new Set<string>();
   const persistedStorage = (deps.pm as { store?: { get?: (key: string, fallback: unknown) => unknown } }).store?.get?.(`ext.${record.id}`, {});
   const storageValues = new Map<string, unknown>(persistedStorage && typeof persistedStorage === 'object' && !Array.isArray(persistedStorage)
