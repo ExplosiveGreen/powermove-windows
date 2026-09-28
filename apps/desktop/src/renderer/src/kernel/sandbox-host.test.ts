@@ -270,6 +270,8 @@ async function planeRuntime(kernel: ReturnType<typeof createKernel>, deps: HostD
   return { runtime, api, ticks, init: () => init, rpc };
 }
 const flushed = () => new Promise(resolve => setTimeout(resolve, 0));
+/* A tick crosses a real port, which one macrotask does not always cover under load. */
+const until = async (check: () => boolean) => { for (let wait = 0; wait < 100 && !check(); wait++) await new Promise(resolve => setTimeout(resolve, 10)); expect(check()).toBe(true); };
 
 it('inits with state and no project, ticks small deltas, and forwards only subscribed events, coalesced', async () => {
   const kernel = createKernel();
@@ -342,7 +344,7 @@ it('sends small ticks during playback and builds one snapshot for three extensio
   live.proj.revision += 1;
   live.proj.layers[0].name = 'Renamed';
   kernel.events.emit('project:changed', { kind: 'values' });
-  await flushed();
+  await until(() => docs.every(doc => doc.api.project.revision() === live.proj.revision));
   const second = await Promise.all(docs.map(doc => doc.api.project.get()));
   expect(stats.snapshotBuilds - builds).toBe(1);
   expect(second.map(project => project.layers[0].name)).toEqual(['Renamed', 'Renamed', 'Renamed']);
@@ -370,8 +372,9 @@ it('sends each document one full copy per generation, however often it asks', as
   expect(await other.rpc.call('project-snapshot')).toEqual({ generation, json: JSON.stringify({ revision: 1, layers: [{ id: 'a' }] }) });
   expect(await other.rpc.call('project-snapshot')).toEqual({ generation, unchanged: true });
   live.proj.layers[0].id = 'b';
+  reader.ticks.length = 0;
   kernel.events.emit('project:changed', { kind: 'values' });
-  await flushed();
+  await until(() => reader.ticks.some(tick => tick.includes('"generation"')));
   const next = await reader.api.project.get();
   expect(next).toEqual({ revision: 1, layers: [{ id: 'b' }] });
   expect(await reader.rpc.call('project-snapshot')).toEqual({ generation: generation + 1, unchanged: true });
@@ -406,7 +409,7 @@ it('copies and stringifies the selection once per change for every document, and
   live.selection = { layers: ['L7'], keys: [], chan: 'opacity' };
   kernel.events.emit('selection', deps.project.selection());
   read.mockClear();
-  await flushed();
+  await until(() => heard.length === 2);
   expect(read).toHaveBeenCalledTimes(1);
   expect(stats.selectionBuilds - builds).toBe(1);
   expect(docs.map(doc => doc.api.project.selection())).toEqual([live.selection, live.selection]);
