@@ -66,6 +66,16 @@ describe('promotion scan', () => {
     } finally { warn.mockRestore(); }
   });
 
+  it('does not warn about code that reads the project', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const layout = await stage({ 'index.ts': 'api.events.on("project:changed", async () => draw(await api.project.get()));\napi.on("selection", draw);\n' });
+      await expect(validateStagedExtensions(layout, [{ id: 'weather', action: 'created' }])).resolves.toBeUndefined();
+      expect(warn).not.toHaveBeenCalled();
+      expect(compileExtension).toHaveBeenCalledTimes(1);
+    } finally { warn.mockRestore(); }
+  });
+
   it('lets a waived high-entropy string through to compilation', async () => {
     const layout = await stage({
       'index.ts': `// powermove-secret-ok: fixture hash for the test palette\nconst id = '${RANDOM}';\nexport default () => id;\n`

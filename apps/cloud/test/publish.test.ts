@@ -56,10 +56,10 @@ test('publish requires declared capabilities and exposes permissions', () =>
     expect((await data.db.select().from(releases))[0]?.permissions).toEqual(['network']);
     expect((await data.db.select().from(extensions))[0]?.permissions).toEqual(['network']);
   }));
-test('apiVersion 2 code that reads the project is told to move to apiVersion 3 and declare project:read', () =>
+test('apiVersion 2 code that uses a capability is told to move to apiVersion 3 and declare it', () =>
   withData(async (data) => {
     const env = makeEnv(data), a = await publisher(data, env, 'alice');
-    const source = { path: 'panel.ts', bytes: txt('api.on("selection", draw);\n') };
+    const source = { path: 'panel.ts', bytes: txt('fetch("https://example.com");\n') };
     const legacy = files('demo', '1.0.0', [source]).map((file) => file.path === 'manifest.json'
       ? { path: file.path, bytes: txt(JSON.stringify({ id: 'demo', name: 'Demo', version: '1.0.0', apiVersion: 2, description: 'A test extension' })) }
       : file);
@@ -67,27 +67,23 @@ test('apiVersion 2 code that reads the project is told to move to apiVersion 3 a
     const rejected = await publishRequest(data, env, a, 'demo', built.commitSha);
     expect(rejected.status).toBe(422);
     expect(await rejected.json() as any).toEqual({
-      error: 'permission_undeclared', findings: [{ path: 'panel.ts', line: 1, capability: 'project:read' }],
-      detail: 'panel.ts:1 needs the project:read permission, which manifest.json doesn\'t declare. Set `apiVersion: 3` and add `permissions: ["project:read"]` to manifest.json.'
+      error: 'permission_undeclared', findings: [{ path: 'panel.ts', line: 1, capability: 'network' }],
+      detail: 'panel.ts:1 needs the network permission, which manifest.json doesn\'t declare. Set `apiVersion: 3` and add `permissions: ["network"]` to manifest.json.'
     });
   }));
-test('project reads need project:read, which project:write implies', () =>
+test('reading the project needs no permission, at any apiVersion', () =>
   withData(async (data) => {
     const env = makeEnv(data), a = await publisher(data, env, 'alice');
-    const source = { path: 'panel.ts', bytes: txt('api.events.on("project:changed", async () => render(await api.project.get()));\n') };
-    const undeclared = await uploadTree(data, env, a, files('demo', '1.0.0', [source], ['network']));
-    const rejected = await publishRequest(data, env, a, 'demo', undeclared.commitSha);
-    expect(rejected.status).toBe(422);
-    expect(await rejected.json() as any).toEqual({
-      error: 'permission_undeclared', findings: [{ path: 'panel.ts', line: 1, capability: 'project:read' }],
-      detail: 'panel.ts:1 needs the project:read permission, which manifest.json doesn\'t declare. Add `permissions: ["project:read"]` to manifest.json.'
-    });
-    const written = await uploadTree(data, env, a, files('writer', '1.0.0', [source], ['project:write']));
-    expect((await publishRequest(data, env, a, 'writer', written.commitSha)).status).toBe(201);
-    const read = await uploadTree(data, env, a, files('reader', '1.0.0', [source], ['project:read']));
-    const accepted = await publishRequest(data, env, a, 'reader', read.commitSha);
+    const source = { path: 'panel.ts', bytes: txt('api.events.on("project:changed", async () => render(await api.project.get()));\napi.on("selection", draw);\n') };
+    const current = await uploadTree(data, env, a, files('demo', '1.0.0', [source]));
+    const accepted = await publishRequest(data, env, a, 'demo', current.commitSha);
     expect(accepted.status).toBe(201);
-    expect((await accepted.json() as any).repo.permissions).toEqual(['project:read']);
+    expect((await accepted.json() as any).repo.permissions).toEqual([]);
+    const legacy = files('legacy', '1.0.0', [source]).map((file) => file.path === 'manifest.json'
+      ? { path: file.path, bytes: txt(JSON.stringify({ id: 'legacy', name: 'Legacy', version: '1.0.0', apiVersion: 2, description: 'A test extension' })) }
+      : file);
+    const built = await uploadTree(data, env, a, legacy);
+    expect((await publishRequest(data, env, a, 'legacy', built.commitSha)).status).toBe(201);
   }));
 test('parent, version, author, objects, manifest and scanner failures', () =>
   withData(async (data) => {

@@ -198,12 +198,19 @@ describe('publish: prepare', () => {
     await expect(publisher.publish('glass-blur', firstForm)).rejects.toThrow(/network permission/);
   });
 
-  it('blocks an apiVersion 2 project read, and says to set apiVersion 3 and declare project:read', async () => {
-    const { publisher } = await setup({ folder: files('api.on("selection", draw);\n') });
+  it('blocks an apiVersion 2 network use, and says to set apiVersion 3 and declare network', async () => {
+    const { publisher } = await setup({ folder: files('fetch("https://example.com");\n') });
     const plan = await publisher.prepare('glass-blur');
-    const text = 'Uses the \'selection\' event at index.ts:1 but doesn\'t declare the project:read permission. Set `apiVersion: 3` and add `permissions: ["project:read"]` to manifest.json.';
-    expect(plan.permissionFindings).toEqual([{ path: 'index.ts', line: 1, needs: 'project:read', text }]);
+    const text = 'Uses fetch() at index.ts:1 but doesn\'t declare the network permission. Set `apiVersion: 3` and add `permissions: ["network"]` to manifest.json.';
+    expect(plan.permissionFindings).toEqual([{ path: 'index.ts', line: 1, needs: 'network', text }]);
     await expect(publisher.publish('glass-blur', firstForm)).rejects.toMatchObject({ code: 'folder_invalid', detail: text });
+  });
+
+  it('lets apiVersion 2 code that reads the project publish without declaring anything', async () => {
+    const { publisher } = await setup({ folder: files('api.on("selection", draw);\nconst p = await api.project.get();\n') });
+    const plan = await publisher.prepare('glass-blur');
+    expect(plan.permissionFindings).toEqual([]);
+    await expect(publisher.publish('glass-blur', firstForm)).resolves.toMatchObject({ published: true });
   });
 
   it('refuses a fork identical to what was installed, before any network call', async () => {
