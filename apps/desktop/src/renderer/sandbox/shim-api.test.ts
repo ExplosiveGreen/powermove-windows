@@ -99,7 +99,7 @@ it('rejects project.get clearly when the snapshot is too large', async () => {
 it('gates project reads on project:read and reports each member, leaving time and transport open', async () => {
   const { api, calls } = harness([]);
   await expect(api.project.get()).rejects.toBeInstanceOf(ProjectReadPermissionError);
-  await expect(api.project.get()).rejects.toMatchObject({ name: 'PermissionError', code: 'project:read' });
+  await expect(api.project.get()).rejects.toMatchObject({ name: 'PermissionError', code: 'project:read', message: 'project.get requires project:read permission. Declare "project:read" in the manifest\'s permissions.' });
   expect(() => api.project.selection()).toThrow('project:read');
   expect(() => api.events.on('project:changed', () => {})).toThrow(ProjectReadPermissionError);
   expect(() => api.events.on('selection', () => {})).toThrow('project:read');
@@ -119,11 +119,24 @@ it('drops a pushed selection without read access', () => {
   expect(() => api.project.selection()).toThrow('project:read');
 });
 
-it('reports a synchronous read of project.get() from apiVersion 2 code', async () => {
-  const { api, calls } = harness(['project:read'], 2, { 'project-snapshot': (): SandboxSnapshot => ({ generation: 1, json: '{"layers":[]}' }) });
-  const result = api.project.get();
+it('reports a synchronous read of an async result from apiVersion 2 code', async () => {
+  const { api, calls } = harness([], 2, { invoke: () => ({ layers: [] }) });
+  const result = api.storage.get('layout');
   expect(result.layers).toBeUndefined();
   await expect(result).resolves.toEqual({ layers: [] });
   await settle();
-  expect(calls.filter(call => call[0] === 'sandbox-report').map(call => call[1])).toEqual([{ kind: 'async', member: 'project.get' }]);
+  expect(calls.filter(call => call[0] === 'sandbox-report').map(call => call[1])).toEqual([{ kind: 'async', member: 'storage.get' }]);
+});
+
+it('keeps project reads from apiVersion 2 code, and says to set apiVersion 3 and declare project:read', async () => {
+  // A legacy manifest can't declare permissions; one that claims project:read anyway is not trusted with it.
+  const { api, calls } = harness(['project:read'], 2, { 'project-snapshot': (): SandboxSnapshot => ({ generation: 1, json: '{"layers":[]}' }) });
+  const hint = 'requires project:read permission. Set "apiVersion": 3 and declare "project:read" in the manifest\'s permissions.';
+  await expect(api.project.get()).rejects.toThrow(`project.get ${hint}`);
+  expect(() => api.project.selection()).toThrow(`project.selection ${hint}`);
+  expect(() => api.events.on('selection', () => {})).toThrow(`events.on('selection') ${hint}`);
+  await expect(api.project.snapshot()).rejects.toThrow(`project.snapshot ${hint}`);
+  await settle();
+  expect(calls.filter(call => call[0] === 'project-snapshot')).toEqual([]);
+  expect(calls.filter(call => call[0] === 'sandbox-report').map(call => (call[1] as { kind: string }).kind)).toEqual(['permission', 'permission', 'permission', 'permission']);
 });
