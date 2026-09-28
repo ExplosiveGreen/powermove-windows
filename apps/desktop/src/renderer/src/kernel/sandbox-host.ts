@@ -262,19 +262,37 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   };
   /* A toast's `action.run` and `onDismiss` are handles of the document that
      raised it. They are released when the toast closes, however it closes,
-     so they never pile up against the handle limits. */
-  const toast = (docRpc: Rpc, live: () => boolean, args: unknown): void => {
-    const [text, options] = parseInvoke('ui', 'toast', args) as [string, { action?: { label: string; run: number }; onDismiss?: number } | undefined];
+     so they never pile up against the handle limits. A toast with buttons,
+     or with the extension's own `key`, is keyed by the host and dismissed
+     when its document goes (a closed panel, a reload, the extension's
+     dispose), so no button is left that can no longer answer. The key is
+     namespaced: an extension replaces only its own notices. */
+  const toastKeys = new Map<string, { link: object }>();
+  let toastSerial = 0;
+  const dismissToasts = (link: object | null): void => {
+    for (const [key, entry] of [...toastKeys]) {
+      if (link !== null && entry.link !== link) continue;
+      toastKeys.delete(key);
+      (deps.pm as { dismissToast?: (key: string) => void }).dismissToast?.(key);
+    }
+  };
+  const toast = (link: { rpc: Rpc }, live: () => boolean, args: unknown): void => {
+    const docRpc = link.rpc;
+    const [text, options] = parseInvoke('ui', 'toast', args) as [string, { action?: { label: string; run: number }; onDismiss?: number; key?: unknown } | undefined];
     const handles = [options?.action?.run, options?.onDismiss].filter((id): id is number => typeof id === 'number');
     claimHandles(handles);
+    const { action, onDismiss, key: ownKey, ...rest } = options ?? {};
+    const key = ownKey !== undefined ? `sandbox:${record.id}:${String(ownKey)}` : handles.length ? `sandbox:${record.id}:#${++toastSerial}` : undefined;
+    const entry = { link };
+    if (key) toastKeys.set(key, entry);
     let closed = false;
     const onClose = (): void => {
       if (closed) return; closed = true;
+      if (key && toastKeys.get(key) === entry) toastKeys.delete(key);
       for (const id of handles) { remoteHandles.delete(id); try { docRpc.release(id); } catch { /* document gone */ } }
     };
     const call = (id: number) => (): void => void docRpc.invokeHandle(id).catch(error => { if (live()) deps.reportRuntimeError(record.id, error); });
-    const { action, onDismiss, ...rest } = options ?? {};
-    host.api.ui.toast(text, { ...rest, ...(action ? { action: { label: action.label, run: call(action.run) } } : {}),
+    host.api.ui.toast(text, { ...rest, ...(key ? { key } : {}), ...(action ? { action: { label: action.label, run: call(action.run) } } : {}),
       ...(onDismiss !== undefined ? { onDismiss: call(onDismiss) } : {}), onClose } as Parameters<typeof host.api.ui.toast>[1]);
   };
   /* Handlers every extension document gets: the runtime iframe and each
@@ -356,7 +374,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     },
     'dispose-registration'(token: string) { link.registrations.get(token)?.dispose(); link.registrations.delete(token); },
     invoke: (namespace: string, method: string, args: unknown) => namespace === 'ui' && method === 'toast'
-      ? toast(link.rpc, () => !disposed && (runtime || links.has(link as ViewLink)), args) : invoke(namespace, method, args, runtime ? null : link as ViewLink),
+      ? toast(link, () => !disposed && (runtime || links.has(link as ViewLink)), args) : invoke(namespace, method, args, runtime ? null : link as ViewLink),
     /* Enforced here whatever the shim does: at most one full copy per
        generation for each document. A document asking again for the
        generation it already holds gets `unchanged`, however often it asks. */
@@ -506,7 +524,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   const views: ViewHost = {
     src: panelId => test?.onViewInit ? null : sandboxDocumentUrl(base, record.id, perms, panelId),
     init: link => initFor(openDoc(link, link.rpc)),
-    detach: link => { const doc = docOf.get(link); if (doc) docs.delete(doc); docOf.delete(link); },
+    detach: link => { const doc = docOf.get(link); if (doc) docs.delete(doc); docOf.delete(link); dismissToasts(link); },
     theme: () => viewTheme(kernel),
     keys: () => keyTable(reg, record.id),
     budget,
@@ -558,6 +576,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     keysOff.dispose(); themeWatch?.disconnect(); docs.clear();
     // Registrations first: panel views tell the runtime to close their ports.
     for (const item of registrations.values()) item.dispose(); registrations.clear();
+    dismissToasts(null);
     try { rpc.notify('dispose'); } catch { /* already closed */ }
     rpc.close();
     host.disposeAll(); frame.remove();

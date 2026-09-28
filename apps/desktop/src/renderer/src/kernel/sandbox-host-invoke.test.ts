@@ -25,7 +25,7 @@ async function runtime(permissions: string[]) {
   const imported = vi.fn(async (file: File) => ({ id: `asset-${file.size}`, name: file.name, kind: 'image', size: file.size }));
   const project = { get: () => ({ id: 'test' }), revision: () => 1, selection: () => ({ layers: [], keys: [], chan: null }), time: () => 0, playing: () => false,
     apply: vi.fn(), select: vi.fn(), setTime: vi.fn(), play: vi.fn(), pause: vi.fn(), undo: vi.fn(), redo: vi.fn(), snapshot: async () => '' } as unknown as ProjectAPI;
-  const deps = { pm: {}, state: { doc: {}, sel: {}, transport: {}, perf: {} }, project,
+  const deps = { pm: { dismissToast: vi.fn() }, state: { doc: {}, sel: {}, transport: {}, perf: {} }, project,
     ui: { controls: {}, toast: vi.fn(), confirm: async () => true, menu: vi.fn(), modal: vi.fn(), icon: () => '' },
     assets: { pick: async () => [], import: imported, get: () => undefined, readText: async () => '' },
     storage: () => ({ get: () => undefined, set: vi.fn(), delete: vi.fn() }),
@@ -119,6 +119,20 @@ it('counts assets.importUrl downloads against the same 2 GiB a minute, before th
   // The download's bytes are in the window: 2040 MiB leaves room for 8, not 9.
   await expect(client.call('invoke', 'assets', 'import', [fileOf(9)])).rejects.toMatchObject({ code: 'resource_limit' });
   await client.call('invoke', 'assets', 'import', [fileOf(8)]);
+});
+
+it('dismisses a panel’s toast buttons when that panel’s document goes, and leaves the runtime’s', async () => {
+  const { client, openView, deps } = await runtime([]);
+  const toast = vi.mocked(deps.ui.toast);
+  const dismissToast = vi.mocked((deps.pm as { dismissToast: (key: string) => void }).dismissToast);
+  const view = await openView();
+  await client.call('invoke', 'ui', 'toast', ['From the runtime', { action: { label: 'Open', run: 1 } }]);
+  await view.rpc.call('invoke', 'ui', 'toast', ['From the panel', { action: { label: 'Undo', run: 2 } }]);
+  const [runtimeKey, viewKey] = toast.mock.calls.map(call => (call[1] as { key?: string }).key);
+  expect(runtimeKey).not.toBe(viewKey);
+  view.frame.remove();
+  await vi.waitFor(() => expect(dismissToast).toHaveBeenCalledWith(viewKey));
+  expect(dismissToast).toHaveBeenCalledTimes(1);
 });
 
 /* ui.copy (report item 11): the manifest record's clipboard permission, a

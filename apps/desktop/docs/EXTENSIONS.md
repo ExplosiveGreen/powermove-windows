@@ -406,7 +406,11 @@ api.events.on('project:changed', async () => {
 
 Sandboxed panels render their `component` or `build` content in a separate
 view iframe. `panels.header`, `panels.moveSlot`, and `panels.library.render`
-are unavailable there; the host owns the panel chrome. Declare `network`,
+are unavailable there; the host owns the panel chrome. A toast's `action` and
+`onDismiss` run in the document that raised it, so a toast with either, or
+with a `key`, closes when that document does (its panel closes or reloads, or
+the extension is turned off). A `key` replaces only the extension's own
+toasts. Declare `network`,
 `clipboard`, `assets`, or `project:write` (with `apiVersion: 3`)
 when using their corresponding capabilities. `full-access` installs run with the
 in-realm API after the person installing the extension accepts the trust dialog.
