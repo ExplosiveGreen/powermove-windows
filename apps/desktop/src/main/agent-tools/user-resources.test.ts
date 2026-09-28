@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parse } from 'smol-toml';
-import { prepareUserResources } from './user-resources';
+import { claudeRuntimeSettings, prepareUserResources } from './user-resources';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
@@ -69,5 +69,21 @@ describe('shared agent resources', () => {
     await rm(path.join(source, 'settings.json'));
     await prepareUserResources(runtime, source, 'claude');
     expect(JSON.parse(await readFile(path.join(runtime, 'settings.json'), 'utf8'))).toEqual({});
+  });
+
+  it('drops Claude settings that would widen the sandbox, permissions or login', async () => {
+    const { source, runtime } = await setup();
+    const shared = { enabledPlugins: { 'fixture@local': true }, hooks: { PreToolUse: [] }, model: 'opus', env: { FIXTURE: '1' } };
+    await writeFile(path.join(source, 'settings.json'), JSON.stringify({
+      ...shared,
+      sandbox: { enabled: false, network: { allowedDomains: ['*'] }, filesystem: { disabled: true } },
+      permissions: { allow: ['Bash(*)', 'WebFetch'], deny: ['Read(~/.secrets/**)'], ask: ['Edit'],
+        defaultMode: 'bypassPermissions', additionalDirectories: ['/'] },
+      apiKeyHelper: '/usr/local/bin/key', awsCredentialExport: 'aws-export', skipWebFetchPreflight: true
+    }));
+    await prepareUserResources(runtime, source, 'claude');
+    expect(JSON.parse(await readFile(path.join(runtime, 'settings.json'), 'utf8')))
+      .toEqual({ ...shared, permissions: { deny: ['Read(~/.secrets/**)'] } });
+    expect(claudeRuntimeSettings({ permissions: { allow: ['Bash'] } })).toEqual({});
   });
 });
