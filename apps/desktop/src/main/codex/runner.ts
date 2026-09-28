@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -428,6 +428,7 @@ export class CodexRunner {
       }
 
       const deniedReads = authority === 'project' ? await agentCredentialPaths(options.userData, { codexHome: 'credentials' }) : [];
+      const workspaceRoots = [layout.root, await realpath(layout.root)];
       let resumeId = await readSession(layout.sessionPath);
       let attempt: AttemptResult | null = null;
       const executeAutonomous = async (prompt: string, sessionId: string | null) => {
@@ -451,6 +452,7 @@ export class CodexRunner {
           access: authority,
           shellNetwork: req.access === 'project',
           deniedReads,
+          workspaceRoots,
           extensionsDir: layout.extensionsDir,
           sessionId,
           nativeTools: options.nativeTools,

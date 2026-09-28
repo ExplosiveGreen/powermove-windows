@@ -68,6 +68,7 @@ describe('Codex CLI adapter', () => {
         access: 'project',
         shellNetwork: true,
         deniedReads: ['/Users/me/.ssh', '/user-data/codex-runtime/auth.json'],
+        workspaceRoots: ['/workspace', '/workspace'],
         extensionsDir: '/user-data/extensions',
         sessionId: null,
         instructions: 'AGENT INSTRUCTIONS',
@@ -82,6 +83,7 @@ describe('Codex CLI adapter', () => {
       '--config', 'approval_policy="on-request"',
       '--config', 'default_permissions="powermove"',
       '--config', 'permissions.powermove.extends=":workspace"',
+      '--config', 'projects={"/workspace"={trust_level="untrusted"}}',
       '--config', 'permissions.powermove.filesystem={"/Users/me/.ssh"="deny","/user-data/codex-runtime/auth.json"="deny"}',
       '--config', 'features.network_proxy=true',
       '--config', 'permissions.powermove.network.enabled=true',
@@ -132,6 +134,21 @@ describe('Codex CLI adapter', () => {
     expect(computer.join(' ')).not.toMatch(/network_proxy|default_permissions/);
     expect(buildEditorArgv(common).join(' ')).not.toMatch(/network_proxy|default_permissions/);
     expect(buildEditorArgv(common)).toEqual(expect.arrayContaining(['--sandbox', 'read-only']));
+  });
+
+  it('marks the shared workspace untrusted so its .codex config never loads', () => {
+    const common = {
+      schemaPath: '/workspace/schema.json', outputPath: '/workspace/result.json', prompt: 'Build',
+      imagePaths: [], model: null, reasoningEffort: null, extensionsDir: '/user-data/extensions',
+      instructions: 'AGENT INSTRUCTIONS', workspaceRoots: ['/var/ws', '/private/var/ws']
+    };
+    for (const sessionId of [null, 'thread-123']) {
+      const argv = buildAutonomousArgv({ ...common, access: 'project', sessionId });
+      const trust = argv.indexOf('projects={"/var/ws"={trust_level="untrusted"},"/private/var/ws"={trust_level="untrusted"}}');
+      expect(argv[trust - 1]).toBe('--config');
+      // An exec option, so `exec resume` applies it too.
+      expect(trust).toBeGreaterThan(argv.indexOf(sessionId ? 'resume' : 'exec'));
+    }
   });
 
   it('builds the exact resumed computer-authority autonomous argv', () => {

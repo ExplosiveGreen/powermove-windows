@@ -7,7 +7,7 @@ vi.mock('../agent-tools/user-mcp', async importOriginal => ({
 }));
 
 import { spawn } from 'node:child_process';
-import { chmod, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import os, { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -304,6 +304,8 @@ describe('CodexRunner lifecycle', () => {
       const filesystem = launchedArgs.find(arg => arg.startsWith(`permissions.${PROJECT_PERMISSION_PROFILE}.filesystem=`)) ?? '';
       expect(filesystem).toContain(`${JSON.stringify(path.join(isolatedCodexHome(userData), 'auth.json'))}="deny"`);
       expect(filesystem).toContain(`${JSON.stringify(path.join(os.homedir(), '.ssh'))}="deny"`);
+      const workspace = await realpath(agentWorkspaceRoot(userData, 'runner-project'));
+      expect(launchedArgs.find(arg => arg.startsWith('projects='))).toContain(`${JSON.stringify(workspace)}={trust_level="untrusted"}`);
     }
   );
 

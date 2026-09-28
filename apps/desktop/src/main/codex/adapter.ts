@@ -34,8 +34,12 @@ export const PROJECT_PERMISSION_PROFILE = 'powermove';
  * commands through Codex's network proxy, which admits only the shared
  * allowlist; the sandbox blocks direct sockets and DNS. They follow `exec`
  * because root-level approval and profile overrides do not reach it.
+ *
+ * The workspace is marked untrusted: other agents can write it, and a trusted
+ * project would load its `.codex` config, MCP servers, hooks and rules
+ * outside the sandbox.
  */
-export function projectSandboxArgv(options: { shellNetwork: boolean; deniedReads: readonly string[] }): string[] {
+export function projectSandboxArgv(options: { shellNetwork: boolean; deniedReads: readonly string[]; workspaceRoots: readonly string[] }): string[] {
   const profile = `permissions.${PROJECT_PERMISSION_PROFILE}`;
   const table = (entries: [string, string][]) => `{${entries.map(([key, value]) => `${JSON.stringify(key)}=${JSON.stringify(value)}`).join(',')}}`;
   const config = [
@@ -44,6 +48,9 @@ export function projectSandboxArgv(options: { shellNetwork: boolean; deniedReads
     `default_permissions=${JSON.stringify(PROJECT_PERMISSION_PROFILE)}`,
     `${profile}.extends=":workspace"`
   ];
+  if (options.workspaceRoots.length) {
+    config.push(`projects={${[...new Set(options.workspaceRoots)].map(root => `${JSON.stringify(root)}={trust_level="untrusted"}`).join(',')}}`);
+  }
   if (options.deniedReads.length) config.push(`${profile}.filesystem=${table(options.deniedReads.map(file => [file, 'deny']))}`);
   if (options.shellNetwork) {
     config.push(
@@ -79,6 +86,8 @@ export interface AutonomousArgvOptions extends CommonArgvOptions {
   shellNetwork?: boolean;
   /** Paths sandboxed shell commands may not read. */
   deniedReads?: readonly string[];
+  /** The workspace as given and as its real path; Codex keys trust by the real one. */
+  workspaceRoots?: readonly string[];
 }
 
 function appendModelOptions(
@@ -141,7 +150,9 @@ export function buildAutonomousArgv(options: AutonomousArgvOptions): string[] {
   if (options.sessionId !== null && options.sessionId.trim() !== '') argv.push('resume');
   argv.push(
     '--skip-git-repo-check',
-    ...sandboxed ? projectSandboxArgv({ shellNetwork: options.shellNetwork === true, deniedReads: options.deniedReads ?? [] }) : [],
+    ...sandboxed ? projectSandboxArgv({
+      shellNetwork: options.shellNetwork === true, deniedReads: options.deniedReads ?? [], workspaceRoots: options.workspaceRoots ?? []
+    }) : [],
     ...userMcpArgv(options.externalMcpServers),
     ...nativeMcpArgv(options.nativeTools),
     '--output-schema',
