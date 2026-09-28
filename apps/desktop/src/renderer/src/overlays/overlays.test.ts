@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { installSvelteOverlays, unmountSvelteOverlays } from './install';
 import { paletteEntries, scorePaletteMatch } from './palette';
+import { withWhenCheck } from '../kernel/registries';
 
 let PM: Record<string, any>;
 
@@ -709,6 +710,51 @@ describe('palette with asynchronous providers', () => {
 
     type('fresher');
     expect(labels()).not.toContain('Fresh answer');
+  });
+});
+
+describe('palette with sandboxed command when()', () => {
+  function sandboxedCommand(id: string, label: string, last: boolean) {
+    let answer!: (value: boolean) => void;
+    const check = { last: () => last, ask: vi.fn(() => new Promise<boolean>(resolve => { answer = resolve; })) };
+    PM.commands[id] = { id, label, cat: 'Edit', run: vi.fn() };
+    return { check, answer: async (value: boolean) => { answer(value); await new Promise(resolve => setTimeout(resolve, 0)); flushSync(); } };
+  }
+  function open(checks: Record<string, ReturnType<typeof sandboxedCommand>['check']>) {
+    PM.Kernel = { paletteProviders: () => [], commands: { get: (id: string) => checks[id] ? withWhenCheck({ id }, checks[id]!) : undefined } };
+    PM.commands.palette.run();
+    flushSync();
+    const input = document.querySelector<HTMLInputElement>('#palette input[role="combobox"]')!;
+    return {
+      type(value: string) { input.value = value; input.dispatchEvent(new InputEvent('input', { bubbles: true })); flushSync(); },
+      enter() { input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); },
+      labels: () => [...document.querySelectorAll('#palette [role="option"]')].map(option => option.textContent?.trim())
+    };
+  }
+
+  it('shows a sandboxed command at once by its last answer', async () => {
+    const clean = sandboxedCommand('ext.clean', 'Clean up layers', true);
+    const palette = open({ 'ext.clean': clean.check });
+    palette.type('clean');
+    expect(palette.labels()).toEqual(['Clean up layers']);
+    await clean.answer(true); // same answer: nothing moves
+    expect(palette.labels()).toEqual(['Clean up layers']);
+    palette.enter();
+    expect(PM.cmd).toHaveBeenCalledWith('ext.clean');
+  });
+
+  it('runs the highlighted row on Enter after a late answer moves it', async () => {
+    const tidy = sandboxedCommand('ext.tidy', 'New solid tidy', false);
+    PM.commands = { 'ext.tidy': PM.commands['ext.tidy'], ...PM.commands }; // listed before New solid
+    const palette = open({ 'ext.tidy': tidy.check });
+    palette.type('new solid');
+    expect(palette.labels()).toEqual(['New solid ⌘Y']);
+    await tidy.answer(true); // lands above the highlighted row
+    expect(palette.labels()).toEqual(['New solid tidy', 'New solid ⌘Y']);
+    expect(document.querySelector('#palette [role="option"][aria-selected="true"]')?.textContent?.trim()).toBe('New solid ⌘Y');
+    palette.enter();
+    expect(PM.cmd).toHaveBeenCalledWith('newSolid');
+    expect(PM.cmd).not.toHaveBeenCalledWith('ext.tidy');
   });
 });
 

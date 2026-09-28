@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createKernel } from '../kernel/registries';
+import { createKernel, settledWhen, withWhenCheck } from '../kernel/registries';
 import { paletteEntries } from './palette-model';
 
 function model(kernel = createKernel()) {
@@ -102,8 +102,33 @@ describe('palette entries with kernel contributions', () => {
     const late = vi.fn();
 
     expect(paletteEntries(PM, '', late).map((entry) => entry.id)).toEqual(['command:first', 'command:last']);
-    await vi.waitFor(() => expect(late).toHaveBeenCalledTimes(2));
-    expect(late.mock.calls[1]![0].map((entry: { id: string }) => entry.id)).toEqual(['command:first', 'command:shown', 'command:last']);
+    await vi.waitFor(() => expect(late).toHaveBeenCalledOnce()); // the false answer changes nothing
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(late).toHaveBeenCalledOnce();
+    expect(late.mock.calls[0]![0].map((entry: { id: string }) => entry.id)).toEqual(['command:first', 'command:shown', 'command:last']);
+  });
+
+  it('shows a sandboxed command by its last when() answer at once, and moves only when the fresh one differs', async () => {
+    const PM = model();
+    const answers = new Map<string, boolean>([['kept', true], ['dropped', false]]);
+    for (const id of ['kept', 'dropped']) {
+      const { when, check } = settledWhen(async () => answers.get(id)!);
+      PM.Kernel.commands.register('sandboxed', withWhenCheck({ id, label: id, run: () => {}, when }, check));
+    }
+    PM.commands = Object.fromEntries(['kept', 'dropped'].map(id => [id, { id, label: id, cat: 'A', when: () => PM.Kernel.commands.get(id).when(), run: () => {} }]));
+    const late = vi.fn();
+
+    // Nothing answered yet: both show, in place.
+    expect(paletteEntries(PM, '', late).map((entry) => entry.id)).toEqual(['command:kept', 'command:dropped']);
+    await vi.waitFor(() => expect(late).toHaveBeenCalledOnce());
+    expect(late.mock.calls[0]![0].map((entry: { id: string }) => entry.id)).toEqual(['command:kept']);
+
+    // Now the last answers stand in for the fresh ones until they land.
+    late.mockClear();
+    answers.set('dropped', true);
+    expect(paletteEntries(PM, '', late).map((entry) => entry.id)).toEqual(['command:kept']);
+    await vi.waitFor(() => expect(late).toHaveBeenCalledOnce());
+    expect(late.mock.calls[0]![0].map((entry: { id: string }) => entry.id)).toEqual(['command:kept', 'command:dropped']);
   });
 
   it('asks when() only of commands that match the query', () => {
