@@ -240,11 +240,14 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
         case 'media-defaults': item = host.api.media.registerImportDefaults(value as unknown as Parameters<typeof host.api.media.registerImportDefaults>[0]); break;
         case 'commands': item = host.api.commands.register({ ...value, id: String(value.id), label: String(value.label), run: (...args: unknown[]) => rpc.invokeHandle(Number(value.run), ...args), ...(value.when ? { when: cached(rpc, Number(value.when), true) } : {}) }); break;
         case 'status': item = host.api.status.register({ ...value, id: String(value.id), text: cached(rpc, Number(value.text), null), ...(value.onClick ? { onClick: () => void rpc.invokeHandle(Number(value.onClick)) } : {}) }); break;
-        case 'palette': item = host.api.palette.registerProvider(cached(rpc, Number(value.provider), [], result => paletteEntriesSchema.parse(result).map(entry => {
-          claimHandles([entry.run]);
-          if (!ownId(record.id, entry.id) || reg.commands.topEntry(entry.id)?.ownerId && reg.commands.topEntry(entry.id)?.ownerId !== record.id) denied('Palette entry id collides with another owner', 'id_collision');
-          return { ...entry, run: () => rpc.invokeHandle(entry.run) };
-        }))); break;
+        /* Asked for every query; the palette keeps a reply only while it still
+           shows the query that reply answers. */
+        case 'palette': item = host.api.palette.registerProvider(query => rpc.invokeHandle(Number(value.provider), query)
+          .then(result => paletteEntriesSchema.parse(result).map(entry => {
+            claimHandles([entry.run]);
+            if (!ownId(record.id, entry.id) || reg.commands.topEntry(entry.id)?.ownerId && reg.commands.topEntry(entry.id)?.ownerId !== record.id) denied('Palette entry id collides with another owner', 'id_collision');
+            return { ...entry, run: () => rpc.invokeHandle(entry.run) };
+          }))); break;
         /* Asked afresh on every open, with that open's ctx: the reply to this
            call is the only one these items can come from, so a menu never
            shows (or runs) items built for another target. The kernel bounds

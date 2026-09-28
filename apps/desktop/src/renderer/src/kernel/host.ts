@@ -431,7 +431,7 @@ export function createExtensionAPI(
   const palette: PaletteAPI = {
     registerProvider(provider: PaletteProvider) {
       if (typeof provider !== 'function') throw new Error(`[ext:${id}] palette.registerProvider requires a function`);
-      const guarded = guard(polled((query: string): PaletteEntry[] => provider(query) ?? []), 'palette provider', [] as PaletteEntry[]);
+      const guarded = guard(polled((query: string) => provider(query) ?? []), 'palette provider', [] as PaletteEntry[]);
       return collect(kernel.registerPaletteProvider(id, guarded));
     },
     open: (query) => deps.paletteOpen(query)

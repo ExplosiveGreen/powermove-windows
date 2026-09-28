@@ -90,3 +90,18 @@ it('opens a sandboxed menu without an answer that misses the deadline, and the l
   await run(items, 'Tag B');
   expect(ran).toEqual(['B']);
 });
+
+it('answers a sandboxed palette provider for the query asked, the first one included', async () => {
+  const ran: string[] = [];
+  const kernel = await sandboxed(api => {
+    api.palette.registerProvider(async (query: string) => [{ id: `menu-ext.find-${query}`, label: `Find ${query}`, category: 'Find', run: () => { ran.push(query); } }]);
+  });
+  const provider = kernel.paletteProviders()[0]!.provider;
+  const first = await provider('alpha');
+  expect(first.map(entry => entry.label)).toEqual(['Find alpha']);
+  const second = await provider('beta');
+  expect(second.map(entry => entry.label)).toEqual(['Find beta']);
+  await second[0]!.run();
+  await first[0]!.run();
+  expect(ran).toEqual(['beta', 'alpha']);
+});

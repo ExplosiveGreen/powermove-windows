@@ -76,7 +76,7 @@ describe('kernel palette, menus, events, theme', () => {
     const entry = (id: string): PaletteEntry => ({ id, label: id, category: 'Test', run: () => id });
     kernel.registerPaletteProvider('a', () => [entry('a1')]);
     const second = kernel.registerPaletteProvider('b', () => [entry('b1')]);
-    expect(kernel.paletteProviders().flatMap((p) => p.provider('').map((e) => e.id))).toEqual(['a1', 'b1']);
+    expect(kernel.paletteProviders().flatMap((p) => (p.provider('') as PaletteEntry[]).map((e) => e.id))).toEqual(['a1', 'b1']);
     second.dispose();
     expect(kernel.paletteProviders()).toHaveLength(1);
 

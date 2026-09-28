@@ -352,10 +352,12 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     palette: { registerProvider(fn: (...args: any[]) => unknown) {
       if (mode === 'view') return registration('palette', { provider: 0 }, [], fn);
       let current: HandleId[] = [], previous: HandleId[] = [];
-      const id = handle((query: string) => {
+      /* The entries may be a Promise. Handles live for this query and the next. */
+      const id = handle(async (query: string) => {
+        const entries = await fn(query) as Record<string, any>[];
         for (const item of previous) rpc.release(item);
         previous = current; current = [];
-        return (fn(query) as Record<string, any>[]).map(entry => {
+        return entries.map(entry => {
           const run = handle(entry.run); current.push(run); return { ...entry, run };
         });
       });

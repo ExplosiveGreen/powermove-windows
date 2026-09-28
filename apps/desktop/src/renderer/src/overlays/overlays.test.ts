@@ -645,6 +645,35 @@ describe('installSvelteOverlays', () => {
   });
 });
 
+describe('palette with asynchronous providers', () => {
+  it('shows a late answer only while its query is still the one typed', async () => {
+    const kernel = { paletteProviders: () => [{ ownerId: 'sandboxed', provider }] };
+    const answers = new Map<string, (entries: unknown[]) => void>();
+    function provider(query: string) {
+      return new Promise(resolve => answers.set(query, resolve));
+    }
+    PM.Kernel = kernel;
+    PM.commands.palette.run();
+    flushSync();
+    const input = document.querySelector<HTMLInputElement>('#palette input[role="combobox"]')!;
+    const type = (value: string) => { input.value = value; input.dispatchEvent(new InputEvent('input', { bubbles: true })); flushSync(); };
+    const labels = () => [...document.querySelectorAll('#palette [role="option"]')].map(option => option.textContent?.trim());
+    const entry = (label: string) => [{ id: label, label, category: 'Ext', run: vi.fn() }];
+
+    type('stale');
+    type('fresh');
+    answers.get('fresh')!(entry('Fresh answer'));
+    await vi.waitFor(() => { flushSync(); expect(labels()).toContain('Fresh answer'); });
+    answers.get('stale')!(entry('Stale answer'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    flushSync();
+    expect(labels()).toEqual(['Fresh answer']);
+
+    type('fresher');
+    expect(labels()).not.toContain('Fresh answer');
+  });
+});
+
 describe('scorePaletteMatch legacy parity', () => {
   it.each([
     ['New solid', '', 0],

@@ -336,7 +336,9 @@ export interface PaletteEntry {
   kb?: string | null;
   run(): unknown;
 }
-export type PaletteProvider = (query: string) => PaletteEntry[];
+/** Called for every query. A Promise lands in the palette when it settles,
+ *  if the palette still shows the query it was asked for. */
+export type PaletteProvider = (query: string) => PaletteEntry[] | Promise<PaletteEntry[]>;
 
 export type MenuLocation = 'titlebar:right' | 'panel:context' | 'layer:context' | 'timeline:context' | 'viewer:context';
 
