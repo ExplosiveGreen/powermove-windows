@@ -1,9 +1,11 @@
-import { execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
+import os from 'node:os';
 import path from 'node:path';
 
 const SYSTEM_PATH = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'];
 const START = '__POWERMOVE_PATH_START__';
 const END = '__POWERMOVE_PATH_END__';
+const PROBE_TIMEOUT_MS = 5_000;
 
 let probe: Promise<string[]> | null = null;
 
@@ -23,23 +25,64 @@ export function markedPath(stdout: string): string | null {
   return start < 0 ? null : stdout.slice(start + START.length, end);
 }
 
-function readLoginShellPath(): Promise<string[]> {
+/**
+ * How to ask a login shell for its PATH. Directory services name the login
+ * shell ($SHELL is only inherited); fish joins its PATH list itself, and a
+ * shell whose syntax is unknown falls back to zsh, the macOS default.
+ */
+export function loginShellCommand(shell: string | undefined): [string, string[]] {
+  const posix = `printf '${START}%s${END}' "$PATH"`;
+  const name = shell && path.isAbsolute(shell) ? path.basename(shell) : '';
+  if (name === 'fish') return [shell!, ['-l', '-i', '-c', `printf '${START}%s${END}' (string join : $PATH)`]];
+  if (['zsh', 'bash', 'sh', 'ksh', 'dash'].includes(name)) return [shell!, ['-ilc', posix]];
+  return ['/bin/zsh', ['-ilc', posix]];
+}
+
+function userShell(): string | undefined {
+  try { return os.userInfo().shell || process.env.SHELL; } catch { return process.env.SHELL; }
+}
+
+function readLoginShellPath(): Promise<string[] | null> {
   return new Promise(resolve => {
-    // Only PATH crosses over; the login environment can hold tokens.
-    execFile('/bin/zsh', ['-ilc', `printf '${START}%s${END}' "$PATH"`],
-      { encoding: 'utf8', timeout: 5_000, maxBuffer: 1024 * 1024 },
-      (error, stdout) => resolve(error ? [] : absolutePathEntries(markedPath(stdout) ?? '')));
+    const [file, args] = loginShellCommand(userShell());
+    let stdout = '', settled = false;
+    const finish = (entries: string[] | null) => {
+      if (settled) return;
+      settled = true; clearTimeout(timer); child.stdout?.destroy();
+      resolve(entries);
+    };
+    // Only PATH crosses over; the login environment can hold tokens. No
+    // stdin, so a profile that reads input cannot hold the probe.
+    const child = spawn(file, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+    const timer = setTimeout(() => { child.kill('SIGKILL'); finish(null); }, PROBE_TIMEOUT_MS);
+    child.stdout!.setEncoding('utf8').on('data', (chunk: string) => {
+      stdout += chunk;
+      if (stdout.length > 1024 * 1024) { child.kill('SIGKILL'); finish(null); return; }
+      // A profile may leave a daemon holding stdout open; the marker is enough.
+      const marked = markedPath(stdout);
+      if (marked !== null) finish(absolutePathEntries(marked));
+    });
+    child.on('error', () => finish(null));
+    child.on('close', () => finish(null));
   });
 }
 
 /**
  * The user's login-shell PATH, so Dock and Finder launches (which get a
- * minimal PATH) still find Homebrew, bun and node tools. Probed once.
+ * minimal PATH) still find Homebrew, bun and node tools. Homebrew and bun
+ * folders are appended when the profile left them out. A successful probe is
+ * kept for the app's lifetime; a failed one is retried by the next command.
  */
 export async function loginShellPath(home = process.env.HOME): Promise<string> {
-  probe ??= process.platform === 'darwin' ? readLoginShellPath() : Promise.resolve([]);
-  const login = await probe;
-  const fallback = login.length ? [] : ['/opt/homebrew/bin', '/usr/local/bin', ...(home && path.isAbsolute(home) ? [path.join(home, '.bun', 'bin')] : [])];
+  let login: string[] = [];
+  if (process.platform === 'darwin') {
+    const current = probe ??= readLoginShellPath().then(entries => {
+      if (!entries?.length) throw new Error('The login shell reported no PATH.');
+      return entries;
+    });
+    login = await current.catch(() => { if (probe === current) probe = null; return []; });
+  }
+  const fallback = ['/opt/homebrew/bin', '/usr/local/bin', ...(home && path.isAbsolute(home) ? [path.join(home, '.bun', 'bin')] : [])];
   return absolutePathEntries([...login, ...fallback, ...absolutePathEntries(process.env.PATH), ...SYSTEM_PATH].join(':')).join(':');
 }
 
