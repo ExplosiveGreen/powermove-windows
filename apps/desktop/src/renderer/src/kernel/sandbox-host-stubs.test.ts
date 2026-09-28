@@ -93,3 +93,13 @@ it('keeps plain toasts and drops callbacks that cannot cross', async () => {
   expect((h.toast.mock.calls[1] as ToastCall)[1]).not.toHaveProperty('icon');
   expect(h.reportRuntimeError).not.toHaveBeenCalled();
 });
+
+it('answers panels.isOpen for the extension’s own panels only', async () => {
+  const h = await start({ open: ['stub-ext.panel', 'layers'] });
+  await expect(h.api.panels.isOpen('stub-ext.panel')).resolves.toBe(true);
+  await expect(h.api.panels.isOpen('stub-ext.other')).resolves.toBe(false);
+  // Whether an app or another extension's panel is open is not this extension's to ask.
+  await expect(h.api.panels.isOpen('layers') as unknown as Promise<boolean>).rejects.toMatchObject({ code: 'permission_denied' });
+  h.open.delete('stub-ext.panel');
+  await expect(h.api.panels.isOpen('stub-ext.panel')).resolves.toBe(false);
+});

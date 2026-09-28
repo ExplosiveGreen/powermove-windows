@@ -47,7 +47,7 @@ export const invokeSchemas: Record<string, z.ZodType> = {
   'assets.pick': anyArgs, 'assets.import': z.tuple([z.custom<File>(value => typeof File !== 'undefined' && value instanceof File), data.optional()]), 'assets.get': oneId, 'assets.readText': oneId,
   'storage.get': z.tuple([storageKey]), 'storage.set': z.tuple([storageKey, data]), 'storage.delete': z.tuple([storageKey]),
   'ui.toast': z.tuple([data, toastOptions.optional()]), 'ui.confirm': anyArgs, 'ui.icon': anyArgs,
-  'panels.open': anyArgs, 'panels.close': oneId, 'panels.refresh': oneId,
+  'panels.open': anyArgs, 'panels.close': oneId, 'panels.refresh': oneId, 'panels.isOpen': oneId,
   'keybindings.unbind': oneId, 'theme.activate': oneId,
   'palette.open': anyArgs, 'media.getImportDefaults': z.tuple([]),
   'events.emit': z.tuple([id, data]), 'extensions.setUp': oneId

@@ -20,7 +20,7 @@ const SAFE_INVOKE: Record<string, Set<string>> = {
   commands: new Set(['run']), project: new Set(['apply', 'select', 'setTime', 'play', 'pause', 'undo', 'redo', 'snapshot']),
   transport: new Set(['step']), assets: new Set(['pick', 'import', 'get', 'readText']),
   storage: new Set(['get', 'set', 'delete']), ui: new Set(['toast', 'confirm', 'icon']),
-  panels: new Set(['open', 'close', 'refresh']), keybindings: new Set(['unbind']),
+  panels: new Set(['open', 'close', 'refresh', 'isOpen']), keybindings: new Set(['unbind']),
   theme: new Set(['activate']), palette: new Set(['open']),
   media: new Set(['getImportDefaults']), events: new Set(['emit']),
   extensions: new Set(['setUp'])

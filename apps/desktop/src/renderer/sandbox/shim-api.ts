@@ -166,7 +166,7 @@ export function panelInfo(def: Record<string, any>): SandboxPanelInfo {
  * while it has a reader.
  */
 export type SandboxMode = 'runtime' | 'view';
-const VIEW_READS = new Set(['storage.get', 'assets.get', 'assets.readText', 'media.getImportDefaults', 'ui.icon']);
+const VIEW_READS = new Set(['storage.get', 'assets.get', 'assets.readText', 'media.getImportDefaults', 'ui.icon', 'panels.isOpen']);
 /*
  * A reactive read calls `read()`: inside a template, $derived or $effect that
  * subscribes the reader (the first one runs `start`), anywhere else it does
@@ -405,7 +405,7 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
          panels: the host draws the header from title, and the Library shows
          the icon on the extension's art. */
       return registration('panels', panelInfo(def), [], def);
-    }, list: () => list('panels').map(item => item.id), open: (id: string, options?: unknown) => fire('invoke', 'panels', 'open', options === undefined ? [id] : [id, options]), close: (id: string) => fire('invoke', 'panels', 'close', [id]), refresh: (id: string) => fire('invoke', 'panels', 'refresh', [id]), isOpen: () => false },
+    }, list: () => list('panels').map(item => item.id), open: (id: string, options?: unknown) => fire('invoke', 'panels', 'open', options === undefined ? [id] : [id, options]), close: (id: string) => fire('invoke', 'panels', 'close', [id]), refresh: (id: string) => fire('invoke', 'panels', 'refresh', [id]), isOpen: (id: string) => later('panels.isOpen', 'invoke', 'panels', 'isOpen', [id]) },
     project: { get: () => legacy ? watchPromise(pullProject(), 'project.get', report) : pullProject(),
       latest: reactive(reads.project, () => snapshot?.value), revision: reactive(reads.revision, () => state.revision), selection: reactive(reads.selection, () => state.selection),
       time: reactive(reads.time, () => state.time), playing: reactive(reads.playing, () => state.playing),

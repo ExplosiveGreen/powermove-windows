@@ -151,3 +151,19 @@ it('lets apiVersion 2 code read the project, and names project.get when it reads
   await settle();
   expect(calls.filter(call => call[0] === 'sandbox-report').map(call => call[1])).toEqual([{ kind: 'async', member: 'project.get' }]);
 });
+
+it('asks panels.isOpen of the host even while a view replays activate', async () => {
+  const channel = new MessageChannel();
+  const asked: unknown[] = [];
+  const host = createRpc(channel.port2, { invoke: (namespace: string, method: string, args: unknown[]) => { asked.push([namespace, method, args]); return true; } });
+  const rpc = createRpc(channel.port1, {}, 1000, { trusted: true });
+  close.push(() => { rpc.close(); host.close(); });
+  const init = { id: 'shim-ext', apiVersion: 3, manifest: { id: 'shim-ext', name: 'Shim', version: '1.0.0', apiVersion: 3, permissions: [] }, vars: {},
+    theme: { scheme: 'dark', tokens: {} }, bundleUrl: '', state: { time: 0, playing: false, revision: 1, generation: 1, selection: null } } as unknown as SandboxInit;
+  const api = createSandboxAPI(rpc, init, 'view') as any;
+  sandboxControl(api).setQuiet(true);
+  await expect(api.panels.isOpen('shim-ext.panel')).resolves.toBe(true);
+  api.panels.open('shim-ext.panel'); // a side effect the runtime already performed: dropped
+  await settle();
+  expect(asked).toEqual([['panels', 'isOpen', ['shim-ext.panel']]]);
+});
