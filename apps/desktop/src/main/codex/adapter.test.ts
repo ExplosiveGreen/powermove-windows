@@ -7,6 +7,7 @@ import {
   ADAPTER_VERSION,
   REQUIRED_CODEX_FLAGS,
   buildAutonomousArgv,
+  PROJECT_NETWORK_CONFIG,
   buildEditorArgv,
   capabilities
 } from './adapter';
@@ -71,6 +72,8 @@ describe('Codex CLI adapter', () => {
     ).toEqual([
       '--search',
       '--approve-for-me',
+      '--config',
+      'sandbox_workspace_write.network_access=true',
       '--add-dir',
       '/user-data/extensions',
       'exec',
@@ -84,6 +87,27 @@ describe('Codex CLI adapter', () => {
       '--image',
       '/workspace/inputs/references/reference-0.png'
     ]);
+  });
+
+  it('gives only project-authority shell commands outbound network', () => {
+    const common = {
+      schemaPath: '/workspace/schema.json', outputPath: '/workspace/result.json', prompt: 'Find useful footage',
+      imagePaths: [], model: null, reasoningEffort: null, extensionsDir: '/user-data/extensions',
+      instructions: 'AGENT INSTRUCTIONS'
+    };
+    for (const sessionId of [null, 'thread-123']) {
+      const argv = buildAutonomousArgv({ ...common, access: 'project', sessionId });
+      // A root option, so it also applies to `exec resume`, and never a sandbox mode override.
+      expect(argv.indexOf(PROJECT_NETWORK_CONFIG)).toBeLessThan(argv.indexOf('exec'));
+      expect(argv[argv.indexOf(PROJECT_NETWORK_CONFIG) - 1]).toBe('--config');
+      expect(argv).toContain('--search');
+      expect(argv).not.toContain('--sandbox');
+      expect(argv).not.toContain('--dangerously-bypass-approvals-and-sandbox');
+      expect(argv.join(' ')).not.toMatch(/writable_roots|danger-full-access|sandbox_mode/);
+    }
+    expect(buildAutonomousArgv({ ...common, access: 'computer', sessionId: null })).not.toContain(PROJECT_NETWORK_CONFIG);
+    expect(buildEditorArgv(common)).not.toContain(PROJECT_NETWORK_CONFIG);
+    expect(buildEditorArgv(common)).toEqual(expect.arrayContaining(['--sandbox', 'read-only']));
   });
 
   it('builds the exact resumed computer-authority autonomous argv', () => {
