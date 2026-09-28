@@ -63,22 +63,22 @@ export function evaluatedValue(api: InspectorAPI, layer: Layer, value: unknown, 
   return isProperty(value) ? api.anim.evP(layer, value as Channel, time, path) : value;
 }
 
-function currentValue(api: InspectorAPI, layer: Layer | null, command: EditCommand): unknown {
+function currentValue(api: InspectorAPI, layer: Layer | null, command: EditCommand, time = api.transport.time()): unknown {
   if (!layer) return undefined;
   if (command.type === 'set_content') {
     const field = Object.keys(command.patch ?? {})[0];
-    return field ? evaluatedValue(api, layer, inspectable(layer).d[field], api.transport.time(), `c.${field}`) : undefined;
+    return field ? evaluatedValue(api, layer, inspectable(layer).d[field], time, `c.${field}`) : undefined;
   }
   if (command.type === 'set_layer') {
     const field = Object.keys(command.patch ?? {})[0];
     const key = ({ visible: 'on', motionBlur: 'mblur' } as Record<string, string>)[field!] ?? field;
-    return key ? evaluatedValue(api, layer, layer[key as keyof Layer], api.transport.time(), `l.${key}`) : undefined;
+    return key ? evaluatedValue(api, layer, layer[key as keyof Layer], time, `l.${key}`) : undefined;
   }
   if (command.type === 'set_property') {
     const prop = api.anim.findProp(layer, command.path) ?? inspectable(layer).p?.[command.path];
-    if (prop) return api.anim.evP(layer, prop, command.time ?? api.transport.time(), command.path);
-    if (command.path.startsWith('c.')) return evaluatedValue(api, layer, inspectable(layer).d[command.path.slice(2)], api.transport.time(), command.path);
-    if (command.path.startsWith('l.')) return evaluatedValue(api, layer, layer[command.path.slice(2) as keyof Layer], api.transport.time(), command.path);
+    if (prop) return api.anim.evP(layer, prop, command.time ?? time, command.path);
+    if (command.path.startsWith('c.')) return evaluatedValue(api, layer, inspectable(layer).d[command.path.slice(2)], time, command.path);
+    if (command.path.startsWith('l.')) return evaluatedValue(api, layer, layer[command.path.slice(2) as keyof Layer], time, command.path);
   }
   return undefined;
 }
@@ -196,7 +196,8 @@ export function createInspectorEdit(api: InspectorAPI) {
   };
 }
 
-export function inspectorMixed(api: InspectorAPI, binding: ControlEditBinding, value: unknown): boolean {
+/** `time` is the one the inspector shows; the edit paths read the transport's own. */
+export function inspectorMixed(api: InspectorAPI, binding: ControlEditBinding, value: unknown, time = api.transport.time()): boolean {
   if (binding.mode !== 'command' || typeof binding.command !== 'function') return false;
   const selected = inspectorSelection(api, selectedLayers(api)).filter((layer) => !layer.lock);
   if (selected.length < 2) return false;
@@ -210,7 +211,7 @@ export function inspectorMixed(api: InspectorAPI, binding: ControlEditBinding, v
     const patch = command.type === 'set_content' ? translateContentPatch(primary, target, command.patch) : null;
     if (command.type === 'set_content' && !patch) return [];
     const next = { ...command, target: target.id, ...(path ? { path } : {}), ...(patch ? { patch } : {}) } as EditCommand;
-    return ['set_property', 'set_content', 'set_layer'].includes(next.type) ? [currentValue(api, target, next)] : [];
+    return ['set_property', 'set_content', 'set_layer'].includes(next.type) ? [currentValue(api, target, next, time)] : [];
   }));
   return values.length > 1 && values.some((candidate) => !Object.is(candidate, values[0]));
 }
