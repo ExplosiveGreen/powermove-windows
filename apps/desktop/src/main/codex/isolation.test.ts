@@ -7,7 +7,6 @@ import {
   ISOLATED_CODEX_HOME_NAME,
   POWERMOVE_AUTH_STORE_CONFIG,
   POWERMOVE_AUTH_OWNER_FILE,
-  discoverUserSkillFiles,
   isolatedCodexHome,
   prepareIsolatedCodexHome,
   userCodexHome
@@ -84,19 +83,4 @@ describe('isolated Codex home', () => {
     expect(isolatedCodexHome(userData, source)).toBe(path.join(userData, `${ISOLATED_CODEX_HOME_NAME}-isolated`));
   });
 
-  it('discovers nested and symlinked user skills for the session denylist', async () => {
-    const root = await mkdtemp(path.join(tmpdir(), 'powermove-user-skills-'));
-    const userHome = path.join(root, 'home');
-    const externalSkill = path.join(root, 'external-skill');
-    await mkdir(path.join(userHome, '.agents', 'skills', 'nested', 'local'), { recursive: true });
-    await mkdir(externalSkill, { recursive: true });
-    await writeFile(path.join(userHome, '.agents', 'skills', 'nested', 'local', 'SKILL.md'), '# Local');
-    await writeFile(path.join(externalSkill, 'SKILL.md'), '# Linked');
-    await symlink(externalSkill, path.join(userHome, '.agents', 'skills', 'linked'));
-
-    expect(await discoverUserSkillFiles(userHome)).toEqual([
-      path.join(userHome, '.agents', 'skills', 'linked', 'SKILL.md'),
-      path.join(userHome, '.agents', 'skills', 'nested', 'local', 'SKILL.md')
-    ]);
-  });
 });

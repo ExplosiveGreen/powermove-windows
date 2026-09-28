@@ -12,6 +12,15 @@ import {
 } from './adapter';
 
 describe('Codex CLI adapter', () => {
+  it('makes configured external tools available in the editor CLI path', () => {
+    const argv = buildEditorArgv({
+      schemaPath: '/tmp/schema.json', outputPath: '/tmp/result.json', prompt: 'Make audio',
+      imagePaths: [], model: null, reasoningEffort: null,
+      externalMcpServers: { studio: { command: 'fixture-server' } }
+    });
+    expect(argv).toContain('mcp_servers."studio"={"command"="fixture-server"}');
+  });
+
   it('builds the exact editor argv with the prompt before every image', () => {
     expect(
       buildEditorArgv({
@@ -21,30 +30,11 @@ describe('Codex CLI adapter', () => {
         imagePaths: ['/tmp/editor/frame-0.png', '/tmp/editor/frame-1.jpg'],
         model: 'gpt-5-codex',
         reasoningEffort: 'high',
-        disabledSkillPaths: ['/Users/test/.agents/skills/custom/SKILL.md']
       })
     ).toEqual([
       'exec',
       '--ephemeral',
       '--skip-git-repo-check',
-      '--ignore-user-config',
-      '--ignore-rules',
-      '--disable',
-      'plugins',
-      '--disable',
-      'apps',
-      '--disable',
-      'skill_search',
-      '--disable',
-      'skill_mcp_dependency_install',
-      '--config',
-      'mcp_servers={}',
-      '--config',
-      'skills.include_instructions=false',
-      '--config',
-      'skills.bundled.enabled=false',
-      '--config',
-      'skills.config=[{path="/Users/test/.agents/skills/custom/SKILL.md",enabled=false}]',
       '--sandbox',
       'read-only',
       '--output-schema',
@@ -77,7 +67,6 @@ describe('Codex CLI adapter', () => {
         extensionsDir: '/user-data/extensions',
         sessionId: null,
         instructions: 'AGENT INSTRUCTIONS',
-        disabledSkillPaths: []
       })
     ).toEqual([
       '--search',
@@ -85,22 +74,7 @@ describe('Codex CLI adapter', () => {
       '--add-dir',
       '/user-data/extensions',
       'exec',
-      '--ignore-user-config',
       '--skip-git-repo-check',
-      '--disable',
-      'plugins',
-      '--disable',
-      'apps',
-      '--disable',
-      'skill_search',
-      '--disable',
-      'skill_mcp_dependency_install',
-      '--config',
-      'mcp_servers={}',
-      '--config',
-      'skills.include_instructions=false',
-      '--config',
-      'skills.bundled.enabled=false',
       '--output-schema',
       '/workspace/.powermove/result-schema.json',
       '--output-last-message',
@@ -125,7 +99,6 @@ describe('Codex CLI adapter', () => {
         extensionsDir: '/user-data/extensions',
         sessionId: ' thread-123\n',
         instructions: 'AGENT INSTRUCTIONS',
-        disabledSkillPaths: []
       })
     ).toEqual([
       '--search',
@@ -134,22 +107,7 @@ describe('Codex CLI adapter', () => {
       '/user-data/extensions',
       'exec',
       'resume',
-      '--ignore-user-config',
       '--skip-git-repo-check',
-      '--disable',
-      'plugins',
-      '--disable',
-      'apps',
-      '--disable',
-      'skill_search',
-      '--disable',
-      'skill_mcp_dependency_install',
-      '--config',
-      'mcp_servers={}',
-      '--config',
-      'skills.include_instructions=false',
-      '--config',
-      'skills.bundled.enabled=false',
       '--output-schema',
       '/workspace/.powermove/result-schema.json',
       '--output-last-message',
@@ -164,7 +122,7 @@ describe('Codex CLI adapter', () => {
     ]);
   });
 
-  it('isolates every run from the user config while retaining Codex auth', () => {
+  it('allows user resources instead of suppressing integrations, rules and skills', () => {
     const argv = buildAutonomousArgv({
       schemaPath: '/workspace/.powermove/result-schema.json',
       outputPath: '/workspace/.powermove/result-run-3.json',
@@ -176,18 +134,15 @@ describe('Codex CLI adapter', () => {
       extensionsDir: '/user-data/extensions',
       sessionId: null,
       instructions: 'AGENT INSTRUCTIONS',
-      disabledSkillPaths: []
     });
-    expect(argv.slice(argv.indexOf('exec'), argv.indexOf('exec') + 3)).toEqual([
-      'exec',
-      '--ignore-user-config',
-      '--skip-git-repo-check'
-    ]);
-    expect(argv.filter(flag => flag === '--ignore-user-config')).toHaveLength(1);
-    expect(argv).toContain('mcp_servers={}');
+    expect(argv).not.toContain('--ignore-user-config');
+    expect(argv).not.toContain('--ignore-rules');
+    expect(argv).not.toContain('--disable');
+    expect(argv).not.toContain('mcp_servers={}');
+    expect(argv.join(' ')).not.toContain('skills.');
   });
 
-  it('adds only the run-scoped Powermove MCP server after clearing inherited servers', () => {
+  it('adds user tools and the run-scoped Powermove MCP server without clearing inherited resources', () => {
     const argv = buildAutonomousArgv({
       schemaPath: '/workspace/schema.json',
       outputPath: '/workspace/result.json',
@@ -199,17 +154,17 @@ describe('Codex CLI adapter', () => {
       extensionsDir: '/workspace/extensions',
       sessionId: null,
       instructions: 'AGENT INSTRUCTIONS',
-      disabledSkillPaths: [],
+      externalMcpServers: { external: { command: 'fixture-server' }, powermove: { command: 'wrong-server' } },
       nativeTools: {
         command: '/Applications/Powermove.app/Contents/MacOS/Powermove',
         args: ['/Applications/Powermove.app/Contents/Resources/agent-tools/mcp-server.mjs'],
         env: { POWERMOVE_AGENT_TOOL_TOKEN: 'secret', ELECTRON_RUN_AS_NODE: '1' }
       }
     });
-    const reset = argv.indexOf('mcp_servers={}');
     const command = argv.indexOf('mcp_servers.powermove.command="/Applications/Powermove.app/Contents/MacOS/Powermove"');
-    expect(reset).toBeGreaterThan(-1);
-    expect(command).toBeGreaterThan(reset);
+    expect(command).toBeGreaterThan(-1);
+    expect(argv.indexOf('mcp_servers."external"={"command"="fixture-server"}')).toBeGreaterThan(-1);
+    expect(argv.join(' ')).not.toContain('wrong-server');
     expect(argv).toContain('mcp_servers.powermove.args=["/Applications/Powermove.app/Contents/Resources/agent-tools/mcp-server.mjs"]');
     expect(argv).toContain('mcp_servers.powermove.env.ELECTRON_RUN_AS_NODE="1"');
     expect(argv).toContain('mcp_servers.powermove.env.POWERMOVE_AGENT_TOOL_TOKEN="secret"');

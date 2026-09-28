@@ -21,6 +21,7 @@ import {
 } from '../agent-tools/spec';
 import { fragmentText, humanLabel, outputExcerpt, toolDetail } from '../agent-tools/trace-format';
 import { imageExtension } from '../image-extension';
+import { loadUserMcpServers, type UserMcpServers } from '../agent-tools/user-mcp';
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const TURN_TIMEOUT_MS = 3_600_000;
@@ -34,6 +35,7 @@ interface AppServerRunOptions extends RunCallbacks {
   userData: string;
   codexBinaryPref?: string | null;
   nativeTools?: NativeMcpServerConfig;
+  externalMcpServers?: UserMcpServers;
 }
 
 interface ActiveTurn extends RunCallbacks {
@@ -87,10 +89,11 @@ const COLLAB_LABELS: Readonly<Record<string, string>> = {
   closeAgent: 'Close subagent', interruptAgent: 'Stop subagent', listAgents: 'List subagents'
 };
 
-function liveInspectionConfig(nativeTools: NativeMcpServerConfig): Record<string, unknown> {
+function liveInspectionConfig(nativeTools?: NativeMcpServerConfig, externalMcpServers: UserMcpServers = {}): Record<string, unknown> {
   return {
     mcp_servers: {
-      powermove: {
+      ...Object.fromEntries(Object.entries(externalMcpServers).filter(([name]) => name !== 'powermove')),
+      ...(nativeTools ? { powermove: {
         command: nativeTools.command,
         args: nativeTools.args,
         env: nativeTools.env,
@@ -99,7 +102,7 @@ function liveInspectionConfig(nativeTools: NativeMcpServerConfig): Record<string
         required: true,
         enabled_tools: [...POWERMOVE_LIVE_INSPECTION_TOOL_NAMES],
         default_tools_approval_mode: 'approve'
-      }
+      } } : {})
     }
   };
 }
@@ -301,6 +304,7 @@ export class CodexAppServerRunner {
     const cancelled = (): CodexRunResult => ({ ok: false, error: 'The Codex run was cancelled.', cancelled: true });
     try {
       await this.ensureStarted(options.userData, options.codexBinaryPref ?? null);
+      const externalMcpServers = options.externalMcpServers ?? await loadUserMcpServers('chatgpt');
       if (preparation.cancelled) return cancelled();
       directory = await mkdtemp(path.join(tmpdir(), 'powermove-codex-app-'));
       const input: Array<Record<string, string>> = [{ type: 'text', text: req.prompt }];
@@ -319,9 +323,9 @@ export class CodexAppServerRunner {
       const startedThread = await this.request('thread/start', {
         cwd: directory,
         approvalPolicy: 'never',
-        sandbox: 'readOnly',
+        sandbox: 'read-only',
         ephemeral: true,
-        ...(options.nativeTools ? { config: liveInspectionConfig(options.nativeTools) } : {}),
+        config: liveInspectionConfig(options.nativeTools, externalMcpServers),
         ...(req.model ? { model: req.model } : {}),
         serviceName: 'powermove'
       });

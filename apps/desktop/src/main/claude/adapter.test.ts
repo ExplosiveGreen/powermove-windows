@@ -5,7 +5,28 @@ import { buildClaudeArgv, CLAUDE_PROJECT_SANDBOX_SETTINGS } from './adapter';
 const schema = { type: 'object', required: ['message'], properties: { message: { type: 'string' } } };
 
 describe('Claude CLI adapter', () => {
-  it('uses structured streaming, safe mode, isolated settings, and strict project sandboxing', () => {
+  it.each(['editor', 'project', 'computer'] as const)('exposes every configured external server in %s mode', access => {
+    const externalMcpServers = {
+      studio: { type: 'stdio', command: 'fixture-server', args: ['--test'] },
+      remote: { type: 'http', url: 'https://example.test/mcp' },
+      powermove: { command: 'wrong-server' }
+    };
+    const argv = buildClaudeArgv({
+      schema, prompt: 'Use a tool', imagePaths: [], model: null, reasoningEffort: null,
+      sessionId: null, access, externalMcpServers
+    });
+    expect(JSON.parse(argv[argv.indexOf('--mcp-config') + 1]!)).toEqual({
+      mcpServers: { studio: externalMcpServers.studio, remote: externalMcpServers.remote }
+    });
+    if (access !== 'computer') {
+      for (const flag of ['--allowedTools']) {
+        expect(argv[argv.indexOf(flag) + 1]).toContain('mcp__studio__*');
+        expect(argv[argv.indexOf(flag) + 1]).toContain('mcp__remote__*');
+      }
+    }
+  });
+
+  it('uses structured streaming and user resources with the selected project sandbox', () => {
     const argv = buildClaudeArgv({
       schema,
       prompt: 'Make the title bounce',
@@ -20,7 +41,7 @@ describe('Claude CLI adapter', () => {
 
     expect(argv).toEqual(expect.arrayContaining([
       '--print', '--output-format', 'stream-json', '--include-partial-messages',
-      '--setting-sources', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+      '--tools', 'default', '--mcp-config', '{"mcpServers":{}}',
       '--json-schema', JSON.stringify(schema), '--model', 'sonnet', '--effort', 'high',
       '--resume', '11111111-1111-4111-8111-111111111111',
       '--permission-mode', 'acceptEdits', '--settings', CLAUDE_PROJECT_SANDBOX_SETTINGS,
@@ -28,6 +49,10 @@ describe('Claude CLI adapter', () => {
     ]));
     expect(argv).not.toContain('--dangerously-skip-permissions');
     expect(argv).not.toContain('--safe-mode');
+    expect(argv).not.toContain('--strict-mcp-config');
+    expect(argv).not.toContain('--disable-slash-commands');
+    expect(argv).not.toContain('--setting-sources');
+    expect(argv[argv.indexOf('--allowedTools') + 1]).toContain('Skill');
     expect(argv.at(-1)).toContain('/tmp/reference.png');
     expect(JSON.parse(CLAUDE_PROJECT_SANDBOX_SETTINGS)).toMatchObject({
       sandbox: { enabled: true, allowUnsandboxedCommands: false, failIfUnavailable: true }
