@@ -30,7 +30,7 @@ async function stage(files: Record<string, string | Uint8Array>) {
     await fs.mkdir(path.dirname(path.join(dir, name)), { recursive: true });
     await fs.writeFile(path.join(dir, name), contents);
   }
-  return { stagingDirectory, runDirectory: path.join(root, 'run') };
+  return { stagingDirectory, compiledDirectory: path.join(root, 'compiled') };
 }
 
 // Assembled so this test file does not itself look like it holds a key.

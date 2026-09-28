@@ -15,7 +15,7 @@ import {
 import { EXTENSION_ID } from '../../shared/extensions';
 import { isArrayOf, isBytes, isOneOf, isRecord, isString } from '../../shared/guards';
 import { buildAutonomousArgv, buildEditorArgv } from './adapter';
-import { publishExtensionChanges } from './change-history';
+import { publishExtensionChanges, withStageSnapshot } from './change-history';
 import { AgentResultValidationError, repairAgentResult } from './result-repair';
 import { validateStagedExtensions } from './validate-staged-extensions';
 import { collectArtifacts } from './artifacts';
@@ -505,9 +505,12 @@ export class CodexRunner {
         parsed.projectId = req.projectId;
         parsed.access = authority;
         const extensions = parseAgentExtensionChanges(parsed.extensions);
-        await validateStagedExtensions(layout, extensions ?? []);
-        if (this.cancelled.has(req.id)) throw new Error('The Codex run was cancelled.');
-        const changeSet = await publishExtensionChanges(layout, extensions ?? []);
+        // One private copy is checked and published; later stage writes cannot ship.
+        const changeSet = await withStageSnapshot(layout, async snapshot => {
+          await validateStagedExtensions(snapshot, extensions ?? []);
+          if (this.cancelled.has(req.id)) throw new Error('The Codex run was cancelled.');
+          return publishExtensionChanges(snapshot, extensions ?? []);
+        });
         return { parsed, extensions, changeSet };
       }, async prompt => {
         repairingResult = true;

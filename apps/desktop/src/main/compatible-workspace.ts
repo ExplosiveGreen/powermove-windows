@@ -8,7 +8,7 @@ import type { AgentToolContent, CodexRunResult } from '../shared/ipc';
 import { EXTENSION_ID, parseManifest } from '../shared/extensions';
 import { compileExtension } from './extensions/compiler';
 import { collectArtifacts, mimeTypeForPath } from './codex/artifacts';
-import { publishExtensionChanges } from './codex/change-history';
+import { publishExtensionChanges, withStageSnapshot } from './codex/change-history';
 import { loginShellPath } from './login-shell-path';
 import { killStrays, ProcessFamily } from './process-family';
 import { agentResultSchema } from './codex/instructions';
@@ -146,9 +146,9 @@ export class CompatibleWorkspace {
     throw new Error(`Unknown workspace tool: ${name}`);
   }
 
-  private async compile(id: unknown) {
+  private async compile(id: unknown, stagingDirectory = this.layout.stagingDirectory) {
     if (typeof id !== 'string' || !EXTENSION_ID.test(id)) throw new Error('Provide a valid extension id.');
-    const dir = path.join(this.layout.stagingDirectory, id);
+    const dir = path.join(stagingDirectory, id);
     const manifest = parseManifest(JSON.parse(await readFile(path.join(dir, 'manifest.json'), 'utf8')));
     if (!manifest.ok) throw new Error(manifest.error);
     if (manifest.manifest.id !== id) throw new Error('The manifest id must match its folder.');
@@ -177,17 +177,20 @@ export class CompatibleWorkspace {
         || !['created', 'updated', 'removed'].includes(item.action)) throw new Error('Invalid extension change.');
       return { id: item.id, action: item.action as 'created' | 'updated' | 'removed', summary: typeof item.summary === 'string' ? item.summary : '' };
     });
-    for (const change of extensions) {
+    // One private copy is compiled and published; later stage writes cannot ship.
+    return withStageSnapshot(this.layout, async snapshot => {
+      for (const change of extensions) {
+        signal.throwIfAborted();
+        if (change.action === 'removed') continue;
+        const compiled = await this.compile(change.id, snapshot.stagingDirectory);
+        if (!compiled.ok) throw new Error(`${change.id} failed compilation: ${compiled.error}`);
+      }
+      const artifacts = await collectArtifacts(this.layout.runDirectory, this.layout.runId, value.artifacts as unknown[]);
       signal.throwIfAborted();
-      if (change.action === 'removed') continue;
-      const compiled = await this.compile(change.id);
-      if (!compiled.ok) throw new Error(`${change.id} failed compilation: ${compiled.error}`);
-    }
-    const artifacts = await collectArtifacts(this.layout.runDirectory, this.layout.runId, value.artifacts);
-    signal.throwIfAborted();
-    const changeSet = await publishExtensionChanges(this.layout, extensions);
-    return { ok: true, access: this.access, text: JSON.stringify({ ...value, extensions, artifacts, projectId: this.layout.projectId }), extensions,
-      ...(changeSet ? { extensionChangeSetId: changeSet.id } : {}) };
+      const changeSet = await publishExtensionChanges(snapshot, extensions);
+      return { ok: true as const, access: this.access, text: JSON.stringify({ ...value, extensions, artifacts, projectId: this.layout.projectId }), extensions,
+        ...(changeSet ? { extensionChangeSetId: changeSet.id } : {}) };
+    });
   }
 }
 

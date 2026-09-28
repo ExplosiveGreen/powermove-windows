@@ -6,7 +6,7 @@ import path from 'node:path';
 import type { CodexRunRequest, CodexRunResult, CodexTraceEvent } from '../../shared/ipc';
 import { isRecord } from '../../shared/guards';
 import { collectArtifacts } from '../codex/artifacts';
-import { publishExtensionChanges } from '../codex/change-history';
+import { publishExtensionChanges, withStageSnapshot } from '../codex/change-history';
 import { AgentResultValidationError, repairAgentResult } from '../codex/result-repair';
 import { validateStagedExtensions } from '../codex/validate-staged-extensions';
 import { consumeToken } from '../codex/consent';
@@ -249,9 +249,12 @@ export class ClaudeRunner {
         parsed.projectId = req.projectId;
         parsed.access = authority;
         const extensions = parseAgentExtensionChanges(parsed.extensions);
-        await validateStagedExtensions(layout, extensions ?? []);
-        if (this.cancelled.has(req.id)) throw new Error('The Claude run was cancelled.');
-        const changeSet = await publishExtensionChanges(layout, extensions ?? []);
+        // One private copy is checked and published; later stage writes cannot ship.
+        const changeSet = await withStageSnapshot(layout, async snapshot => {
+          await validateStagedExtensions(snapshot, extensions ?? []);
+          if (this.cancelled.has(req.id)) throw new Error('The Claude run was cancelled.');
+          return publishExtensionChanges(snapshot, extensions ?? []);
+        });
         return { parsed, extensions, changeSet };
       }, async prompt => {
         repairingResult = true;
