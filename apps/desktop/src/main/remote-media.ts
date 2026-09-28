@@ -278,15 +278,16 @@ export class RemoteMediaService {
     if (this.active >= MAX_ACTIVE) throw new RemoteMediaError('Other imports are still downloading. Try again when they finish.');
     this.active += 1;
     const token = randomUUID();
-    const target = path.join(await this.dir(), token);
+    let target: string | null = null;
     try {
+      target = path.join(await this.dir(), token);
       const media = await downloadRemoteMedia(url, target, this.options);
       const timer = setTimeout(() => void this.release(owner, token), HOLD_MS);
       timer.unref?.();
       this.held.set(token, { owner, path: target, size: media.size, handle: null, timer });
       return { token, ...media };
     } catch (error) {
-      await rm(target, { force: true });
+      if (target) await rm(target, { force: true });
       throw error;
     } finally { this.active -= 1; }
   }
@@ -298,9 +299,10 @@ export class RemoteMediaService {
       (length as number) > REMOTE_MEDIA_CHUNK_BYTES || (offset as number) + (length as number) > entry.size) throw new RemoteMediaError('Invalid download read');
     entry.timer.refresh();
     entry.handle ??= await open(entry.path, 'r');
-    const buffer = Buffer.allocUnsafe(length as number);
-    const { bytesRead } = await entry.handle.read(buffer, 0, length as number, offset as number);
-    return new Uint8Array(buffer.buffer, buffer.byteOffset, bytesRead);
+    // Its own ArrayBuffer: IPC clones a view's whole backing store, so never hand back a slice of a pooled one.
+    const bytes = new Uint8Array(length as number);
+    const { bytesRead } = await entry.handle.read(bytes, 0, bytes.byteLength, offset as number);
+    return bytesRead === bytes.byteLength ? bytes : bytes.slice(0, bytesRead);
   }
 
   async release(owner: number, token: unknown): Promise<void> {

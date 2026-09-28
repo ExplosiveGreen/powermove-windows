@@ -44,7 +44,11 @@ export async function fetchRemoteMedia(value: unknown, decode: MediaDecoder = de
   if (!url) throw new TypeError('assets.importUrl accepts an https URL of at most 2 KB without credentials');
   const remote = bridge()?.remoteMedia;
   if (!remote) throw new Error('assets.importUrl is unavailable in this host');
-  const info = await remote.fetch(url.href);
+  let info: RemoteMediaInfo;
+  try { info = await remote.fetch(url.href); } catch (error) {
+    // Main's reason, without Electron's "Error invoking remote method" wrapper.
+    throw new Error(String((error as Error)?.message ?? error).replace(/^Error invoking remote method '[^']+': (?:\w*Error: )?/, ''));
+  }
   try {
     if (!Number.isSafeInteger(info.size) || info.size < 1 || info.size > MAX_BYTES) throw new Error('The download has an invalid size');
     const parts: Uint8Array[] = [];

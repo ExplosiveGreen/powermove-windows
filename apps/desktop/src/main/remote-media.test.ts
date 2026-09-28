@@ -256,7 +256,10 @@ describe('remote media IPC', () => {
     const info = await handlers.get(IPC.remoteMediaFetch)!(event(1), 'https://cdn.example/a.png') as { token: string; size: number };
     expect(info).toMatchObject({ size: PNG.byteLength, name: 'a.png', type: 'image/png', kind: 'image' });
     const read = handlers.get(IPC.remoteMediaRead)!;
-    expect(await read(event(1), { token: info.token, offset: 8, length: 4 })).toEqual(PNG.subarray(8, 12));
+    const chunk = await read(event(1), { token: info.token, offset: 8, length: 4 }) as Uint8Array;
+    expect(chunk).toEqual(PNG.subarray(8, 12));
+    // IPC clones a view's whole ArrayBuffer, so the chunk owns exactly its bytes.
+    expect(chunk.buffer.byteLength).toBe(4);
     await expect(read(event(2), { token: info.token, offset: 0, length: 4 })).rejects.toThrow('Unknown download');
     for (const bad of [{ offset: -1, length: 4 }, { offset: 0, length: 0 }, { offset: 0, length: PNG.byteLength + 1 }, { offset: 0, length: REMOTE_MEDIA_CHUNK_BYTES + 1 }, { offset: 0.5, length: 1 }]) {
       await expect(read(event(1), { token: info.token, ...bad })).rejects.toThrow('Invalid download read');
@@ -282,6 +285,11 @@ describe('remote media IPC', () => {
     destroy();
     await vi.waitFor(async () => expect(await readdir(path.join(dir, folder!))).toEqual([]));
     expect((await stat(path.join(dir, folder!))).isDirectory()).toBe(true);
+  });
+
+  it('frees its download slot when it cannot even create the file', async () => {
+    const service = new RemoteMediaService({ directory: path.join(await scratch(), 'missing', 'deeper'), resolve: dns({ 'cdn.example': [PUBLIC] }), transport: server({}) });
+    for (let attempt = 0; attempt < 6; attempt++) await expect(service.fetch(1, 'https://cdn.example/a.png')).rejects.toThrow('ENOENT');
   });
 
   it('refuses untrusted senders before touching the network', async () => {
