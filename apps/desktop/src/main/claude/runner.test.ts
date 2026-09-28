@@ -1,3 +1,11 @@
+vi.mock('../agent-tools/user-resources', () => ({ prepareUserResources: async () => undefined }));
+
+// Keep runner tests independent of the developer's configured external services.
+vi.mock('../agent-tools/user-mcp', async importOriginal => ({
+  ...await importOriginal<typeof import('../agent-tools/user-mcp')>(),
+  loadUserMcpServers: vi.fn(async () => ({}))
+}));
+
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import path from 'node:path';
@@ -120,7 +128,7 @@ describe('Claude runner', () => {
     expect(result).toEqual({ ok: true, text: '{"message":"hello"}', access: 'editor' });
     expect(spawnProcess).toHaveBeenCalledWith(
       '/bin/claude',
-      expect.arrayContaining(['--print', '--output-format', 'stream-json', '--strict-mcp-config']),
+      expect.arrayContaining(['--print', '--output-format', 'stream-json', '--tools', 'default']),
       expect.objectContaining({ detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
     );
     const argv = (spawnProcess.mock.calls[0] as unknown as [string, string[]])[1];

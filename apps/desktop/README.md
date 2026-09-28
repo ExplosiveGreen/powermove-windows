@@ -49,6 +49,29 @@ Project expressions run through a bounded parser/interpreter, so the privileged
 editor document does not permit `unsafe-eval`. Generated JavaScript remains in
 its separate opaque-origin sandbox with no network or native bridge.
 
+## Agent tools
+
+Codex and Claude agents can use all enabled user-scoped MCP servers configured
+for that provider, alongside Powermove's built-in tools. Registrations are read
+again on each message; there is no Powermove-specific external-tool allowlist.
+Codex reads `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`). Claude reads
+`~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`). Configure Claude servers
+with `claude mcp add --scope user` to make them available across projects.
+
+The `powermove` server name is reserved for the live editor connection. Disabled
+servers stay disabled. Provider-level tool restrictions and authentication still
+apply; remote services may need their own login in Powermove's provider runtime.
+User skills, plugins, hooks, rules, custom commands, and agent definitions are
+available through the provider's normal resource discovery. Powermove shares the
+resource folders and imports their settings without sharing login or session
+files. Existing private resource folders are backed up before migration.
+Resource configuration refreshes when the provider runtime starts; restart
+Powermove after changing plugin settings. Project-local resources are discovered
+from the agent workspace, not from unrelated repositories.
+Existing Editor, Project, and Computer file-access modes continue to apply to
+built-in tools. External MCP servers run with their configured access, which may
+include files or services beyond the project workspace.
+
 ## Development
 
 Requirements: macOS on Apple Silicon and bun 1.3 or newer (the repo pins `bun@1.3.14`). Xcode command line tools are needed to build the native haptics addon. Agent features additionally require the Codex CLI or Claude Code to be installed and signed in.

@@ -24,8 +24,8 @@ import { discoverCodexBinary } from './env';
 import { CodexEventParser } from './events';
 import { agentInstructions, agentResultSchema } from './instructions';
 import type { NativeMcpServerConfig } from '../agent-tools/spec';
+import { loadUserMcpServers, type UserMcpServers } from '../agent-tools/user-mcp';
 import {
-  discoverUserSkillFiles,
   isolatedCodexEnvironment,
   prepareIsolatedCodexHome
 } from './isolation';
@@ -69,8 +69,8 @@ export interface CodexRunOptions {
   onWarning?: (text: string) => void;
   spawnProcess?: SpawnLike;
   consumeConsentToken?: (token: string) => boolean;
-  discoverDisabledSkillPaths?: () => Promise<string[]>;
   nativeTools?: NativeMcpServerConfig;
+  externalMcpServers?: UserMcpServers;
 }
 
 interface ActiveRun {
@@ -373,9 +373,9 @@ export class CodexRunner {
 
       const binary = options.binary ?? await discoverCodexBinary(options.codexBinaryPref ?? null);
       if (this.cancelled.has(req.id)) return cancelledResult(state);
-      const [codexHome, disabledSkillPaths] = await Promise.all([
+      const [codexHome, externalMcpServers] = await Promise.all([
         prepareIsolatedCodexHome(options.userData),
-        (options.discoverDisabledSkillPaths ?? discoverUserSkillFiles)()
+        options.externalMcpServers ?? loadUserMcpServers('chatgpt')
       ]);
       if (this.cancelled.has(req.id)) return cancelledResult(state);
 
@@ -389,7 +389,7 @@ export class CodexRunner {
           imagePaths: input.imagePaths,
           model: req.model,
           reasoningEffort: req.reasoningEffort,
-          disabledSkillPaths
+          externalMcpServers
         });
         const attempt = await this.execute(req, state, binary, argv, input.directory, codexHome, null, options, (timer) => {
           timeout = timer;
@@ -449,8 +449,8 @@ export class CodexRunner {
           access: authority,
           extensionsDir: layout.extensionsDir,
           sessionId,
-          disabledSkillPaths,
-          nativeTools: options.nativeTools
+          nativeTools: options.nativeTools,
+          externalMcpServers
         });
         const result = await this.execute(req, state, binary, argv, layout.root, codexHome, layout, options, (timer) => {
           timeout = timer;

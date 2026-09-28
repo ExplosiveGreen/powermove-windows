@@ -26,6 +26,7 @@ import {
   type CodexAuthority
 } from '../codex/workspace';
 import { buildClaudeArgv } from './adapter';
+import { loadUserMcpServers, type UserMcpServers } from '../agent-tools/user-mcp';
 import { discoverClaudeBinary } from './env';
 import { ClaudeEventParser } from './events';
 import { isolatedClaudeEnvironment, prepareIsolatedClaudeHome } from './isolation';
@@ -50,6 +51,7 @@ export interface ClaudeRunOptions {
   spawnProcess?: SpawnLike;
   consumeConsentToken?: (token: string) => boolean;
   nativeTools?: NativeMcpServerConfig;
+  externalMcpServers?: UserMcpServers;
 }
 
 interface ActiveRun {
@@ -145,9 +147,10 @@ export class ClaudeRunner {
     let editorDirectory: string | null = null;
     let repairingResult = false;
     try {
-      const [binary, configDirectory] = await Promise.all([
+      const [binary, configDirectory, externalMcpServers] = await Promise.all([
         options.binary ?? discoverClaudeBinary(options.claudeBinaryPref ?? null),
-        prepareIsolatedClaudeHome(options.userData)
+        prepareIsolatedClaudeHome(options.userData),
+        options.externalMcpServers ?? loadUserMcpServers('claude')
       ]);
       if (this.cancelled.has(req.id)) return failure('The Claude run was cancelled.', true);
 
@@ -162,7 +165,8 @@ export class ClaudeRunner {
           reasoningEffort: req.reasoningEffort,
           sessionId: null,
           access: 'editor',
-          nativeTools: options.nativeTools
+          nativeTools: options.nativeTools,
+          externalMcpServers
         }), null, options);
         if (this.cancelled.has(req.id)) return failure('The Claude run was cancelled.', true);
         if (attempt.code !== 0 || attempt.resultError) return failure(humanizeFailure(attempt, 'Claude generation failed.'));
@@ -203,7 +207,8 @@ export class ClaudeRunner {
             context: req.context,
             extensionsDir: layout.extensionsDir
           }),
-          nativeTools: options.nativeTools
+          nativeTools: options.nativeTools,
+          externalMcpServers
         }), layout, options);
         if (this.cancelled.has(req.id)) throw new Error('The Claude run was cancelled.');
         return result;

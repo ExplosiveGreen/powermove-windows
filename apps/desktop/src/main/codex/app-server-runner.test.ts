@@ -1,3 +1,9 @@
+// Keep runner tests independent of the developer's configured external services.
+vi.mock('../agent-tools/user-mcp', async importOriginal => ({
+  ...await importOriginal<typeof import('../agent-tools/user-mcp')>(),
+  loadUserMcpServers: vi.fn(async () => ({}))
+}));
+
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -81,7 +87,7 @@ function request(): CodexRunRequest {
 }
 
 describe('CodexAppServerRunner steering', () => {
-  it('configures the editor thread with required live-inspection tools only', async () => {
+  it('configures editor threads with user MCP tools alongside live-inspection tools', async () => {
     const child = new FakeAppServer();
     const runner = new CodexAppServerRunner({
       discoverBinary: async () => '/fake/codex',
@@ -97,13 +103,16 @@ describe('CodexAppServerRunner steering', () => {
     };
     const run = runner.run(request(), {
       userData: '/tmp/powermove-app-server-test',
-      nativeTools
+      nativeTools,
+      externalMcpServers: { studio: { command: 'fixture-server' }, powermove: { command: 'wrong-server' } }
     });
     await vi.waitFor(() => expect(child.messages.some((message) => message.method === 'thread/start')).toBe(true));
 
     const started = child.messages.find((message) => message.method === 'thread/start');
+    expect(started?.params.sandbox).toBe('read-only');
     expect(started?.params.config).toEqual({
       mcp_servers: {
+        studio: { command: 'fixture-server' },
         powermove: {
           ...nativeTools,
           startup_timeout_sec: 30,

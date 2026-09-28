@@ -1,3 +1,11 @@
+vi.mock('../agent-tools/user-resources', () => ({ prepareUserResources: async () => undefined }));
+
+// Keep runner tests independent of the developer's configured external services.
+vi.mock('../agent-tools/user-mcp', async importOriginal => ({
+  ...await importOriginal<typeof import('../agent-tools/user-mcp')>(),
+  loadUserMcpServers: vi.fn(async () => ({}))
+}));
+
 import { spawn } from 'node:child_process';
 import { chmod, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -97,7 +105,6 @@ function fakeOptions(userData: string, environment: Record<string, string>): Cod
     ],
     binary: fakeCodex,
     timeoutMs: 10_000,
-    discoverDisabledSkillPaths: async () => [],
     spawnProcess: (command, args, options) => spawn(command, args, {
       ...options,
       env: { ...options.env, ...environment }
@@ -460,7 +467,7 @@ describe('CodexRunner lifecycle', () => {
     expect(progress).toContain('The agent stopped before it could start — retrying…');
   });
 
-  it('isolates a resumed session from broken user MCP configuration on the first attempt', async () => {
+  it('reports a failed user MCP connection without silently dropping user resources', async () => {
     const userData = await temporaryDirectory('runner-mcp-fallback');
     const invocationFile = path.join(userData, 'invocations.txt');
     const root = agentWorkspaceRoot(userData, 'runner-project');
@@ -477,9 +484,10 @@ describe('CodexRunner lifecycle', () => {
       onProgress: (text) => progress.push(text)
     });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain('MCP startup failed');
     expect((await readFile(invocationFile, 'utf8')).trim().split('\n')).toEqual(['resume']);
-    expect(await readFile(sessionPath, 'utf8')).toBe('thread-recorded-1');
+    await expect(readFile(sessionPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     expect(progress).not.toContain('One of your Codex integrations failed to start — retrying without integrations…');
   });
 

@@ -7,8 +7,10 @@ import {
   type NativeMcpServerConfig
 } from '../agent-tools/spec';
 
-const PROJECT_TOOLS = 'Read,Glob,Grep,Write,Edit,Bash,WebSearch,WebFetch';
-const EDITOR_TOOLS = 'Read,Glob,Grep';
+import type { UserMcpServers } from '../agent-tools/user-mcp';
+
+const PROJECT_TOOLS = 'Read,Glob,Grep,Write,Edit,Bash,WebSearch,WebFetch,Skill,Agent,Task';
+const EDITOR_TOOLS = 'Read,Glob,Grep,Skill,Agent,Task';
 
 const STRICT_SANDBOX = JSON.stringify({
   sandbox: {
@@ -30,6 +32,7 @@ interface ClaudeArgvOptions {
   extensionsDir?: string;
   instructions?: string;
   nativeTools?: NativeMcpServerConfig;
+  externalMcpServers?: UserMcpServers;
 }
 
 function promptWithImages(prompt: string, imagePaths: readonly string[]): string {
@@ -40,9 +43,13 @@ function promptWithImages(prompt: string, imagePaths: readonly string[]): string
 /** CLI arguments intentionally use only documented Claude Code flags. The
  * bundled executable remains Anthropic's unmodified native distribution. */
 export function buildClaudeArgv(options: ClaudeArgvOptions): string[] {
-  const mcpConfig = options.nativeTools
-    ? JSON.stringify({ mcpServers: { powermove: { type: 'stdio', ...options.nativeTools } } })
-    : '{"mcpServers":{}}';
+  const external = Object.fromEntries(Object.entries(options.externalMcpServers ?? {}).filter(([name]) => name !== 'powermove'));
+  const mcpConfig = JSON.stringify({ mcpServers: {
+    ...external,
+    ...(options.nativeTools ? { powermove: { type: 'stdio', ...options.nativeTools } } : {})
+  } });
+  const externalTools = Object.keys(external).map(name => `mcp__${name}__*`);
+  const withExternal = (tools: string): string => [tools, ...externalTools].join(',');
   const projectTools = options.nativeTools
     ? `${PROJECT_TOOLS},${POWERMOVE_MCP_TOOL_NAMES.join(',')}`
     : PROJECT_TOOLS;
@@ -54,11 +61,7 @@ export function buildClaudeArgv(options: ClaudeArgvOptions): string[] {
     '--output-format', 'stream-json',
     '--include-partial-messages',
     '--verbose',
-    '--setting-sources', '',
-    '--strict-mcp-config',
     '--mcp-config', mcpConfig,
-    '--no-chrome',
-    '--disable-slash-commands',
     '--json-schema', JSON.stringify(options.schema)
   ];
 
@@ -74,8 +77,8 @@ export function buildClaudeArgv(options: ClaudeArgvOptions): string[] {
     argv.push(
       '--permission-mode', options.access === 'editor' ? 'dontAsk' : 'acceptEdits',
       '--settings', STRICT_SANDBOX,
-      '--tools', options.access === 'editor' ? editorTools : projectTools,
-      '--allowedTools', options.access === 'editor' ? editorTools : projectTools
+      '--tools', 'default',
+      '--allowedTools', withExternal(options.access === 'editor' ? editorTools : projectTools)
     );
   }
 

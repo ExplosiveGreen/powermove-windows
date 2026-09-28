@@ -9,7 +9,7 @@ import { isolatedClaudeEnvironment, prepareIsolatedClaudeHome } from './isolatio
 describe('Claude runtime isolation', () => {
   it('uses an app-owned config directory without exposing credentials to Powermove', async () => {
     const userData = await mkdtemp(path.join(tmpdir(), 'powermove-claude-isolation-'));
-    const home = await prepareIsolatedClaudeHome(userData);
+    const home = await prepareIsolatedClaudeHome(userData, path.join(userData, 'source'));
     expect(home).toBe(path.join(userData, 'claude-runtime'));
     expect((await stat(home)).isDirectory()).toBe(true);
     const previous = process.env.CLAUDE_CODE_SAFE_MODE;
