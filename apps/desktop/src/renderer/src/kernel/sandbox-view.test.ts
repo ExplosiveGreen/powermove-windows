@@ -38,12 +38,14 @@ interface Harness {
   kernel: Kernel; runtime: SandboxRuntime; panelId: string;
   views: Array<{ frame: HTMLIFrameElement; message: SandboxViewInit; target: HTMLElement; port: MessagePort; view: Promise<SandboxView> }>;
   pm: Record<string, any>;
+  live: { revision: number };
 }
 
 async function start(): Promise<Harness> {
   vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('network mocked'))));
   const kernel = createKernel();
-  const project = { get: () => ({ id: 'test' }), revision: () => 7, selection: () => ({ layers: [], keys: [], chan: null }), time: () => 0, playing: () => false, apply: vi.fn(() => ({ ok: true })), select: vi.fn(), setTime: vi.fn(), play: vi.fn(), pause: vi.fn(), undo: vi.fn(), redo: vi.fn(), snapshot: async () => '' } as unknown as ProjectAPI;
+  const live = { revision: 7 };
+  const project = { get: () => ({ id: 'test' }), revision: () => live.revision, selection: () => ({ layers: [], keys: [], chan: null }), time: () => 0, playing: () => false, apply: vi.fn(() => ({ ok: true })), select: vi.fn(), setTime: vi.fn(), play: vi.fn(), pause: vi.fn(), undo: vi.fn(), redo: vi.fn(), snapshot: async () => '' } as unknown as ProjectAPI;
   const deps = { pm: {}, state: { doc: {}, sel: {}, transport: {}, perf: {} }, project,
     ui: { controls: {}, toast: vi.fn(), confirm: async () => true, menu: vi.fn(), modal: vi.fn(), icon: () => '' },
     assets: { pick: async () => [], import: async () => ({ id: 'x', name: 'x', kind: 'image' }), get: () => undefined, readText: async () => '' },
@@ -71,7 +73,7 @@ async function start(): Promise<Harness> {
   const panelId = 'sandboxed-ext.panel';
   await until(() => kernel.panels.has(panelId), 'panel registration');
   const pm: Record<string, any> = { PANELS: { [panelId]: kernel.panels.get(panelId) }, panelInst: {}, icon: () => null, Layout: { ws: null } };
-  return { kernel, runtime, panelId, views, pm };
+  return { kernel, runtime, panelId, views, pm, live };
 }
 
 /* happy-dom fires `load` for an inserted iframe, as Chromium does for the
@@ -105,9 +107,15 @@ it('docks a sandboxed Svelte panel as a frame panel with host chrome, refreshes 
   expect(first.message.vars).toEqual({ TOKEN: 'one' });
   await first.view;
   await until(() => frame.dataset.state === 'ready', 'view mounted');
-  // The component mounted from the view's own copy of the bundle, reading the mirror.
+  // The component mounted from the view's own copy of the bundle, reading the state its init carried.
   expect(first.target.textContent).toContain('Project revision');
   expect(first.target.querySelector('b')?.textContent).toBe('7');
+  expect(first.message.state).toMatchObject({ revision: 7, selection: { layers: [] } });
+  expect(first.message).not.toHaveProperty('project');
+  // A change reaches the view as a tick on its own port: the delta, then the event its listener asked for.
+  h.live.revision = 8;
+  h.kernel.events.emit('project:changed', { kind: 'values' });
+  await until(() => first.target.querySelector('b')?.textContent === '8', 'view tick');
   // Its registrations stayed local: the kernel still has exactly one owner per contribution.
   expect(h.kernel.commands.list().filter(command => command.id === 'sandboxed-ext.command')).toHaveLength(1);
 

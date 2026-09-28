@@ -1,16 +1,18 @@
 import type { ExtensionRecord } from '../../../shared/extensions';
 import { createRpc, createRpcBudget, rpcTransfers, type Rpc } from '../../../shared/sandbox-rpc';
-import { panelInfo, type SandboxInit, type SandboxKey, type SandboxMirror, type SandboxViewInit } from '../../sandbox/shim-api';
-import type { Disposable } from './api';
+import { canReadProject, panelInfo, PROJECT_READ_EVENTS, PROJECT_READ_MEMBERS, type SandboxEvent, type SandboxInit, type SandboxKey, type SandboxState, type SandboxViewInit } from '../../sandbox/shim-api';
+import type { Disposable, Selection } from './api';
 import { createExtensionAPI, type ExtensionHandle, type HostDeps } from './host';
 import type { Kernel } from './registries';
 import { themeScheme, themeTokens } from './theme-apply';
 import { mountSandboxView, type ViewHost, type ViewLink } from './sandbox-view';
 import { chordOfEvent, normalizeChord } from './keychord';
 import { bridge } from './bridge';
+import { plain, projectSnapshots, sandboxStats } from './project-snapshots';
 import { menuEntriesSchema, paletteEntriesSchema, parseHostEvent, parseInvoke, parseRegistration } from './sandbox-schemas';
 
-const MIRROR_EVENTS = new Set(['project:changed', 'selection', 'time', 'transport']);
+/** Kernel events that can change a document's SandboxState. */
+const STATE_EVENTS = ['project:changed', 'selection', 'time', 'transport'] as const;
 export interface SandboxRuntime { handle: ExtensionHandle; dispose(): void }
 const SAFE_INVOKE: Record<string, Set<string>> = {
   commands: new Set(['run']), project: new Set(['apply', 'select', 'setTime', 'play', 'pause', 'undo', 'redo', 'snapshot']),
@@ -28,63 +30,29 @@ function denied(message: string, code = 'permission_denied'): never {
   const error = new Error(message) as Error & { code: string };
   error.name = 'PermissionError'; error.code = code; throw error;
 }
-type PlainMode = 'project' | 'comps' | 'asset-map' | 'asset' | 'secrets';
-const MIRROR_LIMIT = 8 * 1024 * 1024;
-class MirrorTooLargeError extends Error {}
-function chargeMirror(budget: { bytes: number } | undefined, value: string): void {
-  if (!budget) return;
-  if (value.length > MIRROR_LIMIT - budget.bytes) throw new MirrorTooLargeError();
-  budget.bytes += new TextEncoder().encode(value).byteLength;
-  if (budget.bytes > MIRROR_LIMIT) throw new MirrorTooLargeError();
+/* One sandbox document (the runtime or a view) as the data plane sees it:
+   the state it was last told, the event names it listens to, and the
+   occurrences waiting for the next flush. */
+interface PlaneDoc {
+  rpc: Rpc; sent: SandboxState; selection: string;
+  interest: Map<string, { count: number; off: Disposable }>;
+  pending: SandboxEvent[];
 }
-function plain(value: unknown, seen = new WeakMap<object, Map<PlainMode | undefined, unknown>>(), mode?: PlainMode, budget?: { bytes: number }): unknown {
-  if (value === null || typeof value !== 'object') {
-    if (typeof value === 'string') chargeMirror(budget, value);
-    return typeof value === 'function' ? undefined : value;
+const STATE_KEYS = ['time', 'playing', 'revision', 'generation'] as const;
+/** Within one flush `time` and `selection` keep their last value and `project:changed` collapses per kind; everything else stays, in order. */
+export function coalesceEvents(events: SandboxEvent[]): SandboxEvent[] {
+  if (events.length < 2) return events;
+  const seen = new Set<string>();
+  const kept: SandboxEvent[] = [];
+  for (let index = events.length - 1; index >= 0; index--) {
+    const entry = events[index]!;
+    const [name, payload] = entry;
+    const key = name === 'time' || name === 'selection' ? name : name === 'project:changed' ? `${name}:${String((payload as { kind?: unknown } | null)?.kind)}` : null;
+    if (key !== null) { if (seen.has(key)) continue; seen.add(key); }
+    kept.push(entry);
   }
-  if (seen.get(value)?.has(mode)) return seen.get(value)?.get(mode);
-  if (value instanceof Date) return value.toISOString();
-  if (value instanceof Map || value instanceof Set) {
-    const entries: unknown[] = [];
-    const copies = seen.get(value) ?? new Map<PlainMode | undefined, unknown>();
-    copies.set(mode, entries); seen.set(value, copies);
-    if (value instanceof Map) for (const [key, item] of value) entries.push([plain(key, seen, mode, budget), plain(item, seen, mode, budget)]);
-    else for (const item of value) entries.push(plain(item, seen, mode, budget));
-    return entries;
-  }
-  const target: Record<string, unknown> | unknown[] = Array.isArray(value) ? [] : {};
-  const copies = seen.get(value) ?? new Map<PlainMode | undefined, unknown>();
-  copies.set(mode, target); seen.set(value, copies);
-  for (const [key, item] of Object.entries(value)) {
-    if (typeof item === 'function' || mode === 'asset' && /blob|source/i.test(key) || mode === 'secrets' && /token|secret|password|key$/i.test(key)) continue;
-    chargeMirror(budget, key);
-    const nextMode = mode === 'project' ? key === 'assets' ? 'asset-map' : key === 'library' || key === 'notes' ? 'secrets' : key === 'comps' ? 'comps' : undefined
-      : mode === 'comps' ? 'project' : mode === 'asset-map' ? 'asset' : mode;
-    (target as Record<string, unknown>)[key] = plain(item, seen, nextMode, budget);
-  }
-  return target;
+  return kept.reverse();
 }
-export function projectMirror(api: ExtensionHandle['api']): SandboxMirror {
-  const start = performance.now();
-  const revision = api.project.revision();
-  let project: unknown;
-  const budget = { bytes: 0 };
-  try { project = plain(api.project.get(), new WeakMap(), 'project', budget); }
-  catch (error) { if (!(error instanceof MirrorTooLargeError)) throw error; project = { tooLarge: true, revision }; }
-  let selection: unknown;
-  try { selection = plain(api.project.selection(), new WeakMap(), undefined, budget); }
-  catch (error) { if (!(error instanceof MirrorTooLargeError)) throw error; selection = null; project = { tooLarge: true, revision }; }
-  const mirror: SandboxMirror = { project, revision, selection, time: api.project.time(), playing: api.project.playing() };
-  if (new TextEncoder().encode(JSON.stringify(mirror)).byteLength > MIRROR_LIMIT) {
-    mirror.project = { tooLarge: true, revision };
-    if (new TextEncoder().encode(JSON.stringify(mirror)).byteLength > MIRROR_LIMIT) mirror.selection = null;
-  }
-  if (import.meta.env.DEV && performance.now() - start > 4 && Date.now() - lastCloneLog > 1000) {
-    lastCloneLog = Date.now(); console.debug(`[sandbox] mirror clone: ${(performance.now() - start).toFixed(1)} ms`);
-  }
-  return mirror;
-}
-let lastCloneLog = 0;
 export function cached<T>(rpc: Rpc, id: number, fallback: T, map: (value: unknown) => T = value => value as T): (...args: unknown[]) => T {
   let last = fallback;
   let pending = false;
@@ -132,7 +100,7 @@ function sandboxTheme(value: Record<string, unknown>): Record<string, unknown> {
  * to it instead of the loader's error policy.
  */
 export interface SandboxObserver {
-  /** A trusted-only member was reached (`render.gl`, `ui.menu`, `powermove.resolveContent`). */
+  /** A trusted-only member was reached (`render.gl`, `ui.menu`, `powermove.resolveContent`), or a project read without read access (PROJECT_READ_MEMBERS). */
   permission?(member: string): void;
   /** apiVersion ≤ 2 code read a property of a method's result that is a Promise here. */
   asyncMisuse?(member: string): void;
@@ -181,6 +149,8 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   const ready = new Promise<void>((resolve, reject) => { activated = resolve; rejected = reject; });
   void ready.catch(() => {}); // a load failure can settle before activation is awaited
   const permissions = manifest.permissions ?? [];
+  // Read as strings: `project:read` joins the manifest permission type separately. Re-read each time; the list may change.
+  const readable = (): boolean => canReadProject(permissions as readonly string[]);
   const violations = new Set<string>();
   const persistedStorage = (deps.pm as { store?: { get?: (key: string, fallback: unknown) => unknown } }).store?.get?.(`ext.${record.id}`, {});
   const storageValues = new Map<string, unknown>(persistedStorage && typeof persistedStorage === 'object' && !Array.isArray(persistedStorage)
@@ -233,7 +203,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
       if (!runtime && kind !== 'events') throw new Error(`Panel views cannot register ${kind}`);
       if (registrationCount >= 200) denied('Sandbox registration limit is 200', 'resource_limit');
       const value = parseRegistration(kind, input);
-      const handles = ['run', 'when', 'text', 'onClick', 'provider', 'items', 'fn']
+      const handles = ['run', 'when', 'text', 'onClick', 'provider', 'items']
         .map(key => value[key]).filter((handle): handle is number => typeof handle === 'number');
       if (new Set([...remoteHandles, ...handles]).size > 2000) denied('Sandbox handle limit is 2000', 'resource_limit');
       const id = value.id;
@@ -250,6 +220,8 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
         denied('Keybinding chord belongs to another owner', 'id_collision');
       if (kind === 'events' && !HOST_EVENTS.has(String(value.event)) && String(value.event).includes(':'))
         denied('Extension event names cannot contain a namespace separator');
+      if (kind === 'events' && PROJECT_READ_EVENTS.has(String(value.event)) && !readable())
+        denied(`events.on('${String(value.event)}') requires project:read permission`, 'project:read');
       const rpc = link.rpc;
       let item: Disposable;
       switch (kind) {
@@ -273,18 +245,9 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
           return { ...entry, run: () => rpc.invokeHandle(run) };
         })) as Parameters<typeof host.api.menus.contribute>[1]); break;
         case 'events': {
-          /* A mirror event reaches the sandbox after the mirror it describes:
-             flush a pending mirror push first (same port, so ordered). */
-          const event = String(value.event);
-          const mirrored = MIRROR_EVENTS.has(event);
-          const sourceEvent = HOST_EVENTS.has(event) ? event === 'theme' ? 'theme:changed' : event : `ext:${record.id}:${event}`;
-          item = host.api.events.on(sourceEvent as Parameters<typeof host.api.events.on>[0], (payload: unknown) => {
-            let forwarded: unknown;
-            try { forwarded = HOST_EVENTS.has(event) ? parseHostEvent(event, payload) : payload; }
-            catch { return; }
-            if (mirrored) flushMirror();
-            void rpc.invokeHandle(Number(value.fn), plain(forwarded)).catch(() => {});
-          });
+          const doc = docOf.get(link);
+          if (!doc) throw new Error('Sandbox document is not connected');
+          item = interest(doc, String(value.event));
           break;
         }
         case 'panels': {
@@ -301,6 +264,11 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     },
     'dispose-registration'(token: string) { link.registrations.get(token)?.dispose(); link.registrations.delete(token); },
     invoke,
+    /* Enforced here whatever the shim does. */
+    'project-snapshot'() {
+      if (!readable()) denied('project.get requires project:read permission', 'project:read');
+      return snapshots.read();
+    },
     'extensions-list'() { return host.api.extensions.list().map(({ dir: _dir, ...rest }) => rest); },
     log(level: unknown, message: unknown, data: unknown) { const now = Date.now(); if (now - logWindow >= 1000) { logWindow = now; logCount = 0; } if (++logCount > 50) return; if (level === 'info' || level === 'warn' || level === 'error') host.api.log(level, String(message).slice(0, 4096), ...(Array.isArray(data) ? data : [])); },
     'runtime-error': (error: { message: string }) => deps.reportRuntimeError(record.id, new Error(error?.message)),
@@ -321,7 +289,10 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
       if (!member) return;
       if (event.kind === 'permission') {
         if (observer?.permission) observer.permission(member);
-        else if (!warned.has(`p:${member}`)) { warned.add(`p:${member}`); host.api.log('warn', `api.${member} needs full access and is unavailable in the sandbox`); }
+        else if (!warned.has(`p:${member}`)) {
+          warned.add(`p:${member}`);
+          host.api.log('warn', PROJECT_READ_MEMBERS.has(member) ? `api.${member} needs the project:read permission` : `api.${member} needs full access and is unavailable in the sandbox`);
+        }
       } else if (event.kind === 'async') {
         if (observer?.asyncMisuse) observer.asyncMisuse(member);
         else if (!warned.has(`a:${member}`)) { warned.add(`a:${member}`); host.api.log('warn', `api.${member} returns a Promise in the sandbox; await it (apiVersion 3)`); }
@@ -337,10 +308,71 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     'activation-error': (error: { message: string }) => rejected(new Error(error.message))
   }, 10_000, { budget, onSustainedLimit: () => stopForBudget(), onRemoteHandleRelease: id => remoteHandles.delete(id) });
   runtimeLink.rpc = rpc;
-  const snapshot = (): SandboxInit => ({
+  /* Data plane (docs/sandbox-data-plane.md §3). Each document holds a small
+     SandboxState; state-changing kernel events and subscribed occurrences
+     mark a flush, and one flush per microtask sends each document at most
+     one `tick(delta, events)`, or nothing when neither changed for it. The
+     project is only ever pulled (`project-snapshot`, shared snapshots). */
+  const snapshots = projectSnapshots(kernel, deps.project);
+  const docs = new Set<PlaneDoc>();
+  const docOf = new WeakMap<object, PlaneDoc>();
+  const stateNow = (): SandboxState => ({
+    time: host.api.project.time(), playing: host.api.project.playing(), revision: host.api.project.revision(),
+    generation: snapshots.generation, selection: readable() ? plain(host.api.project.selection()) as Selection : null
+  });
+  const openDoc = (link: object, docRpc: Rpc): SandboxState => {
+    const state = stateNow();
+    const doc: PlaneDoc = { rpc: docRpc, sent: state, selection: JSON.stringify(state.selection), interest: new Map(), pending: [] };
+    docs.add(doc); docOf.set(link, doc);
+    return state;
+  };
+  let flushQueued = false;
+  const schedule = (): void => { if (flushQueued || disposed) return; flushQueued = true; queueMicrotask(flush); };
+  function flush(): void {
+    flushQueued = false;
+    if (disposed || !docs.size) return;
+    const state = stateNow();
+    const selection = JSON.stringify(state.selection);
+    for (const doc of docs) {
+      const delta: Partial<Record<keyof SandboxState, unknown>> = {};
+      for (const key of STATE_KEYS) if (doc.sent[key] !== state[key]) delta[key] = state[key];
+      if (doc.selection !== selection) delta.selection = state.selection;
+      const events = coalesceEvents(doc.pending);
+      doc.pending = [];
+      if (!events.length && !Object.keys(delta).length) continue;
+      doc.sent = state; doc.selection = selection;
+      try { doc.rpc.notify('tick', delta, events); sandboxStats().ticks += 1; } catch { /* document closing */ }
+    }
+  }
+  /* The document counts its own listeners; the kernel keeps one subscription
+     per document and name, however often the name is registered. */
+  const interest = (doc: PlaneDoc, event: string): Disposable => {
+    let entry = doc.interest.get(event);
+    if (!entry) {
+      const source = HOST_EVENTS.has(event) ? event === 'theme' ? 'theme:changed' : event : `ext:${record.id}:${event}`;
+      const off = host.api.events.on(source as Parameters<typeof host.api.events.on>[0], (payload: unknown) => {
+        if (!docs.has(doc)) return;
+        let forwarded: unknown;
+        try { forwarded = plain(HOST_EVENTS.has(event) ? parseHostEvent(event, payload) : payload); }
+        catch { return; }
+        doc.pending.push([event, forwarded]); schedule();
+      });
+      entry = { count: 0, off };
+      doc.interest.set(event, entry);
+    }
+    entry.count += 1;
+    const held = entry;
+    let released = false;
+    return { dispose() {
+      if (released) return; released = true;
+      if (--held.count > 0 || doc.interest.get(event) !== held) return;
+      doc.interest.delete(event); held.off.dispose();
+    } };
+  };
+  const initFor = (state: SandboxState): SandboxInit => ({
     id: record.id, apiVersion: manifest.apiVersion ?? 1, manifest, vars,
-    theme: themeSnapshot(kernel), activeTheme: kernel.theme.activeId,
-    project: projectMirror(host.api), bundleUrl: record.bundleUrl ?? `${base}/ext/${encodeURIComponent(record.id)}/bundle.js`,
+    theme: themeSnapshot(kernel), activeTheme: kernel.theme.activeId, state,
+    bundleUrl: record.bundleUrl ?? `${base}/ext/${encodeURIComponent(record.id)}/bundle.js`,
     catalog: {
       effects: plain(reg.effects.list()) as Array<Record<string, unknown>>,
       transitions: plain(reg.transitions.list()) as Array<Record<string, unknown>>,
@@ -358,7 +390,8 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   };
   const views: ViewHost = {
     src: panelId => test?.onViewInit ? null : `${base}/host/ext-sandbox.html?id=${encodeURIComponent(record.id)}&view=${encodeURIComponent(panelId)}&perms=${encodeURIComponent(perms)}`,
-    snapshot,
+    init: link => initFor(openDoc(link, link.rpc)),
+    detach: link => { const doc = docOf.get(link); if (doc) docs.delete(doc); docOf.delete(link); },
     theme: () => viewTheme(kernel),
     keys: () => keyTable(reg, record.id),
     budget,
@@ -402,7 +435,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   let disposed = false;
   const dispose = (): void => {
     if (disposed) return; disposed = true;
-    keysOff.dispose(); themeWatch?.disconnect();
+    keysOff.dispose(); themeWatch?.disconnect(); docs.clear();
     // Registrations first: panel views tell the runtime to close their ports.
     for (const item of registrations.values()) item.dispose(); registrations.clear();
     try { rpc.notify('dispose'); } catch { /* already closed */ }
@@ -410,23 +443,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     host.disposeAll(); frame.remove();
   };
   stopForBudget = () => { deps.reportRuntimeError(record.id, new Error('exceeded the sandbox message budget')); dispose(); };
-  /* One mirror push per frame to the runtime and every open view. */
-  let dirty = false;
-  let scheduled = false;
-  function flushMirror(): void {
-    if (!dirty || disposed) return; dirty = false;
-    try {
-      const mirror = projectMirror(host.api);
-      rpc.notify('mirror', mirror);
-      broadcast('mirror', mirror);
-    } catch (error) { deps.reportRuntimeError(record.id, error); }
-  }
-  const push = (): void => {
-    dirty = true;
-    if (scheduled) return; scheduled = true;
-    requestAnimationFrame(() => { scheduled = false; flushMirror(); });
-  };
-  for (const event of MIRROR_EVENTS) host.api.events.on(event as 'project:changed', push);
+  for (const event of STATE_EVENTS) host.api.events.on(event, schedule);
   host.api.events.on('theme:changed', () => { try { rpc.notify('theme', themeSnapshot(kernel)); } catch { /* disposed */ } });
   try {
     host.setActivating(true);
@@ -435,7 +452,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     document.body.append(frame);
     try {
       await loaded;
-      const init = snapshot();
+      const init = initFor(openDoc(runtimeLink, rpc));
       if (test?.onPostInit) test.onPostInit(channel.port2, init);
       else frame.contentWindow?.postMessage({ t: 'init', ...init }, '*', [channel.port2]);
       await ready;
