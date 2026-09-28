@@ -22,7 +22,10 @@ const STRICT_SANDBOX_SETTINGS = {
   failIfUnavailable: true
 } satisfies SandboxSettings;
 
-const STRICT_SANDBOX = JSON.stringify({ sandbox: STRICT_SANDBOX_SETTINGS });
+// dontAsk still auto-approves sandboxed Bash under autoAllowBashIfSandboxed,
+// so Edit runs turn that off and deny every shell and file-writing tool.
+const EDITOR_SANDBOX = JSON.stringify({ sandbox: { ...STRICT_SANDBOX_SETTINGS, autoAllowBashIfSandboxed: false } satisfies SandboxSettings });
+const EDITOR_DISALLOWED_TOOLS = 'Bash,Monitor,PowerShell,Write,Edit,NotebookEdit';
 
 /** Claude project Bash shares the one agent shell allowlist. WebSearch and
  * WebFetch stay available for research on any site. */
@@ -95,10 +98,11 @@ export function buildClaudeArgv(options: ClaudeArgvOptions): string[] {
   } else {
     argv.push(
       '--permission-mode', options.access === 'editor' ? 'dontAsk' : 'acceptEdits',
-      '--settings', options.access === 'editor' ? STRICT_SANDBOX : PROJECT_SANDBOX,
+      '--settings', options.access === 'editor' ? EDITOR_SANDBOX : PROJECT_SANDBOX,
       '--tools', 'default',
       '--allowedTools', withExternal(options.access === 'editor' ? editorTools : projectTools)
     );
+    if (options.access === 'editor') argv.push('--disallowedTools', EDITOR_DISALLOWED_TOOLS);
   }
 
   if (options.extensionsDir) argv.push('--add-dir', options.extensionsDir);
@@ -112,4 +116,4 @@ export function buildClaudeArgv(options: ClaudeArgvOptions): string[] {
 }
 
 export const CLAUDE_PROJECT_SANDBOX_SETTINGS = PROJECT_SANDBOX;
-export const CLAUDE_EDITOR_SANDBOX_SETTINGS = STRICT_SANDBOX;
+export const CLAUDE_EDITOR_SANDBOX_SETTINGS = EDITOR_SANDBOX;

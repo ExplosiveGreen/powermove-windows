@@ -104,6 +104,26 @@ describe('Claude CLI adapter', () => {
     expect(argv[argv.indexOf('--allowedTools') + 1]!.split(',')).not.toContain('Bash');
   });
 
+  it('never runs Bash or writes files in editor runs, and keeps Powermove tools', () => {
+    const nativeTools = { command: '/Applications/Powermove.app/Contents/MacOS/Powermove', args: ['mcp-server.mjs'], env: {} };
+    const argv = buildClaudeArgv({
+      schema, prompt: 'Inspect', imagePaths: [], model: null, reasoningEffort: null,
+      sessionId: null, access: 'editor', instructions: 'Inspect only.', nativeTools
+    });
+    // dontAsk would otherwise still auto-approve sandboxed Bash.
+    expect(JSON.parse(argv[argv.indexOf('--settings') + 1]!).sandbox).toMatchObject({ enabled: true, autoAllowBashIfSandboxed: false });
+    const disallowed = argv[argv.indexOf('--disallowedTools') + 1]!.split(',');
+    expect(disallowed).toEqual(expect.arrayContaining(['Bash', 'Monitor', 'PowerShell', 'Write', 'Edit', 'NotebookEdit']));
+    const allowed = argv[argv.indexOf('--allowedTools') + 1]!.split(',');
+    expect(allowed).toEqual(expect.arrayContaining(['Read', 'Glob', 'Grep', 'mcp__powermove__get_project_state']));
+    expect(allowed.filter(tool => disallowed.includes(tool))).toEqual([]);
+    expect(JSON.parse(argv[argv.indexOf('--mcp-config') + 1]!).mcpServers.powermove).toMatchObject({ type: 'stdio', command: nativeTools.command });
+    // Project runs keep sandboxed Bash.
+    const project = buildClaudeArgv({ schema, prompt: 'Build', imagePaths: [], model: null, reasoningEffort: null, sessionId: null, access: 'project', instructions: 'Build.' });
+    expect(project).not.toContain('--disallowedTools');
+    expect(JSON.parse(project[project.indexOf('--settings') + 1]!).sandbox.autoAllowBashIfSandboxed).toBe(true);
+  });
+
   it('only enables unrestricted CLI permissions after computer consent is handled by main', () => {
     const argv = buildClaudeArgv({
       schema,
