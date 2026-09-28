@@ -55,23 +55,28 @@ it('replays activate quietly, keeps registrations local, and mounts the recorded
   kernel.close(); runtime.close();
 });
 
-it('keeps ticks that arrive before the view has its API', async () => {
+it('keeps ticks and theme pushes that arrive before the view has its API', async () => {
   installSandboxRuntime();
   const kernelChannel = new MessageChannel();
   const runtimeChannel = new MessageChannel();
   let answer!: (value: unknown) => void;
   const kernel = createRpc(kernelChannel.port1, { mounted: () => {} });
   const runtime = createRpc(runtimeChannel.port1, { definition: (id: string) => new Promise(resolve => { answer = resolve; }).then(() => ({ id, title: 'Fake', kind: 'build' })) });
-  const seen: number[] = [];
-  const module = { default(api: any) { api.panels.register({ id: 'fake-panel', title: 'Fake', build() { seen.push(api.project.revision(), api.project.time()); } }); } };
+  const seen: unknown[] = [];
+  let viewApi: any;
+  const module = { default(api: any) { viewApi = api; api.panels.register({ id: 'fake-panel', title: 'Fake', build() { seen.push(api.project.revision(), api.project.time(), api.theme.active(), api.theme.scheme()); } }); } };
   const target = document.createElement('div');
   const pending = bootView(init('fake-panel'), kernelChannel.port2, runtimeChannel.port2, { load: async () => module, target });
   kernel.notify('tick', { revision: 4 }, []);
   kernel.notify('tick', { time: 2 }, []);
+  kernel.notify('theme', { id: 'day', scheme: 'light', tokens: {} });
   await new Promise(resolve => setTimeout(resolve, 10));
   answer(null);
   const view = await pending;
-  expect(seen).toEqual([4, 2]);
+  expect(seen).toEqual([4, 2, 'day', 'light']);
+  kernel.notify('theme', { id: 'night', scheme: 'dark', tokens: {} });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  expect([viewApi.theme.active(), viewApi.theme.scheme()]).toEqual(['night', 'dark']);
   view.dispose();
   kernel.close(); runtime.close();
 });

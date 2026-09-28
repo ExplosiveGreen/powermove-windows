@@ -65,7 +65,7 @@ export function cached<T>(rpc: Rpc, id: number, fallback: T, map: (value: unknow
 function themeSnapshot(kernel: Kernel): SandboxInit['theme'] {
   const definition = kernel.themes.get(kernel.theme.activeId);
   const scheme = themeScheme(definition, kernel.theme.scheme);
-  return { scheme, tokens: themeTokens(definition, scheme) };
+  return { id: kernel.theme.activeId, scheme, tokens: themeTokens(definition, scheme) };
 }
 /* Views sit inside the app's own panels, so they take the theme as the host
    document shows it: the kernel theme plus the workspace's overrides, both
@@ -79,7 +79,7 @@ function viewTheme(kernel: Kernel): SandboxInit['theme'] {
     if (key.startsWith('--')) tokens[key] = root.style.getPropertyValue(key).trim();
   }
   const attribute = root.dataset.theme;
-  return { scheme: attribute === 'dark' || attribute === 'light' ? attribute : base.scheme, tokens };
+  return { id: base.id, scheme: attribute === 'dark' || attribute === 'light' ? attribute : base.scheme, tokens };
 }
 function keyTable(kernel: Kernel, id: string): SandboxKey[] {
   return kernel.listBindings().filter(binding => binding.ownerId === id && ownId(id, binding.command) && kernel.commands.topEntry(binding.command)?.ownerId === id)

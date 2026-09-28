@@ -100,7 +100,7 @@ export async function bootRuntime(init: SandboxInit, port: MessagePort, load: Bu
   // The kernel's port is trusted: what arrives on it is not size- or rate-limited.
   const live = createRpc(port, {
     tick: ticks.tick,
-    theme: (theme: SandboxInit['theme']) => apply(theme),
+    theme: (theme: SandboxInit['theme']) => { apply(theme); control?.theme(theme); },
     mountPanel: (panelId: string, token: string, viewPort: MessagePort) => control?.mountPanel(panelId, token, viewPort),
     unmountPanel: (token: string) => control?.unmountPanel(token),
     dispose: () => control?.dispose(),
@@ -168,6 +168,7 @@ export async function bootView(init: SandboxViewInit, kernelPort: MessagePort, r
   const root = doc.documentElement;
   const apply = themeApplier(doc);
   let keys = init.keys ?? [];
+  let theme = init.theme;
   let control: ReturnType<typeof sandboxControl> | undefined;
   const ticks = tickQueue();
   let torn = false;
@@ -186,7 +187,8 @@ export async function bootView(init: SandboxViewInit, kernelPort: MessagePort, r
   };
   const kernel = createRpc(kernelPort, {
     tick: ticks.tick,
-    theme: (theme: SandboxInit['theme']) => apply(theme),
+    // The API may not exist yet; it starts from the latest push.
+    theme: (next: SandboxInit['theme']) => { theme = next; apply(next); control?.theme(next); },
     size: setSize,
     keys: (next: SandboxKey[]) => { keys = next; },
     dispose: teardown
@@ -220,7 +222,7 @@ export async function bootView(init: SandboxViewInit, kernelPort: MessagePort, r
   try {
     const info = await runtime.call('definition', init.panelId);
     if (!info) throw new Error(`Panel "${init.panelId}" is no longer registered.`);
-    const api = createSandboxAPI(kernel, init, 'view');
+    const api = createSandboxAPI(kernel, { ...init, theme }, 'view');
     control = sandboxControl(api);
     ticks.attach(control);
     const module = await load(init.bundleUrl);
