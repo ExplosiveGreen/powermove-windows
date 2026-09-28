@@ -21,7 +21,7 @@ import {
   parseAgentExtensionChanges,
   type CodexRunOptions
 } from './runner';
-import { PROJECT_PERMISSION_PROFILE } from './adapter';
+import { PERMISSION_PROFILES_UNSUPPORTED, PROJECT_PERMISSION_PROFILE } from './adapter';
 import { isolatedCodexHome } from './isolation';
 import { agentWorkspaceRoot, sessionPathFor } from './workspace';
 
@@ -308,6 +308,17 @@ describe('CodexRunner lifecycle', () => {
       expect(launchedArgs.find(arg => arg.startsWith('projects='))).toContain(`${JSON.stringify(workspace)}={trust_level="untrusted"}`);
     }
   );
+
+  it('fails a Project run closed on a Codex that ignores permission profiles', async () => {
+    const userData = await temporaryDirectory('runner-profile-unsupported');
+    const binary = path.join(userData, 'codex-without-profiles');
+    await writeFile(binary, '#!/bin/sh\n[ "$1" = sandbox ] || exit 3\nwhile [ "$1" != "--" ]; do shift; done; shift; exec "$@"\n');
+    await chmod(binary, 0o755);
+    const spawnProcess = vi.fn(() => { throw new Error('must not spawn'); });
+    const result = await new CodexRunner().run(request({ id: 'runner-profile-1234' }), { ...fakeOptions(userData, {}), binary, spawnProcess });
+    expect(result).toEqual({ ok: false, cancelled: false, error: PERMISSION_PROFILES_UNSUPPORTED });
+    expect(spawnProcess).not.toHaveBeenCalled();
+  });
 
   it('forwards structured traces from editor-mode stdout', async () => {
     const trace: unknown[] = [];

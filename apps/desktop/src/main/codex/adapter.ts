@@ -1,4 +1,8 @@
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import type { CodexAccess, ReasoningEffort } from '../../shared/ipc';
 import { discoverCodexBinary } from './env';
 import { AGENT_TESTING_INSTRUCTIONS } from '../../shared/agent-testing';
@@ -28,12 +32,14 @@ export const REQUIRED_CODEX_FLAGS = [
 export const PROJECT_PERMISSION_PROFILE = 'powermove';
 
 /**
- * `--approve-for-me` without its legacy `sandbox_mode="workspace-write"`,
- * which would override a permission profile. The profile extends Codex's
- * workspace sandbox, denies credential reads, and with shell network routes
- * commands through Codex's network proxy, which admits only the shared
- * allowlist; the sandbox blocks direct sockets and DNS. They follow `exec`
- * because root-level approval and profile overrides do not reach it.
+ * The sandbox is final: `never` stops the model from asking for an
+ * unsandboxed command, and there is no approval reviewer to grant one. No
+ * legacy `sandbox_mode` either, which would override a permission profile.
+ * The profile extends Codex's workspace sandbox, denies credential reads,
+ * and with shell network routes commands through Codex's network proxy,
+ * which admits only the shared allowlist; the sandbox blocks direct sockets
+ * and DNS. They follow `exec` because root-level approval and profile
+ * overrides do not reach it.
  *
  * The workspace is marked untrusted: other agents can write it, and a trusted
  * project would load its `.codex` config, MCP servers, hooks and rules
@@ -43,8 +49,7 @@ export function projectSandboxArgv(options: { shellNetwork: boolean; deniedReads
   const profile = `permissions.${PROJECT_PERMISSION_PROFILE}`;
   const table = (entries: [string, string][]) => `{${entries.map(([key, value]) => `${JSON.stringify(key)}=${JSON.stringify(value)}`).join(',')}}`;
   const config = [
-    'approvals_reviewer="auto_review"',
-    'approval_policy="on-request"',
+    'approval_policy="never"',
     `default_permissions=${JSON.stringify(PROJECT_PERMISSION_PROFILE)}`,
     `${profile}.extends=":workspace"`
   ];
@@ -112,6 +117,8 @@ function nativeMcpArgv(config?: NativeMcpServerConfig): string[] {
     '--config', `mcp_servers.powermove.command=${JSON.stringify(config.command)}`,
     '--config', `mcp_servers.powermove.args=${JSON.stringify(config.args)}`,
     '--config', 'mcp_servers.powermove.required=true',
+    // `never` would otherwise refuse the run-scoped tools, which carry no annotations.
+    '--config', 'mcp_servers.powermove.default_tools_approval_mode="approve"',
     '--config', 'mcp_servers.powermove.startup_timeout_sec=30',
     '--config', 'mcp_servers.powermove.tool_timeout_sec=120'
   ];
@@ -140,14 +147,18 @@ export function buildEditorArgv(options: EditorArgvOptions): string[] {
   return argv;
 }
 
+const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/;
+
 export function buildAutonomousArgv(options: AutonomousArgvOptions): string[] {
   const argv = ['--search'];
   const sandboxed = options.access !== 'computer';
   if (!sandboxed) argv.push('--dangerously-bypass-approvals-and-sandbox');
   argv.push('--add-dir', options.extensionsDir);
 
+  const sessionId = options.sessionId?.trim() || null;
+  if (sessionId !== null && !SESSION_ID.test(sessionId)) throw new Error('Invalid Codex session id.');
   argv.push('exec');
-  if (options.sessionId !== null && options.sessionId.trim() !== '') argv.push('resume');
+  if (sessionId !== null) argv.push('resume');
   argv.push(
     '--skip-git-repo-check',
     ...sandboxed ? projectSandboxArgv({
@@ -162,10 +173,12 @@ export function buildAutonomousArgv(options: AutonomousArgvOptions): string[] {
     '--json'
   );
   appendModelOptions(argv, options.model, options.reasoningEffort);
-  if (options.sessionId !== null && options.sessionId.trim() !== '') argv.push(options.sessionId.trim());
+  for (const imagePath of options.imagePaths) argv.push('--image', imagePath);
+  // Positionals follow `--`, so neither the session id nor the prompt can read as a flag.
+  argv.push('--');
+  if (sessionId !== null) argv.push(sessionId);
   const network = sandboxed && options.shellNetwork ? `\n\nSHELL NETWORK\n${AGENT_SHELL_NETWORK_INSTRUCTIONS}` : '';
-  const fullPrompt = `${options.instructions}${network}\n\nUSER REQUEST\n${options.prompt}`;
-  appendPromptAndImages(argv, fullPrompt, options.imagePaths);
+  argv.push(`${options.instructions}${network}\n\nUSER REQUEST\n${options.prompt}`);
   return argv;
 }
 
@@ -175,13 +188,53 @@ export interface AdapterCapabilities {
   missing: string[];
 }
 
-function execFileText(file: string, args: readonly string[]): Promise<string> {
+function execFileText(file: string, args: readonly string[], env?: NodeJS.ProcessEnv, timeout = 5_000): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(file, [...args], { encoding: 'utf8', timeout: 5_000, maxBuffer: 2 * 1024 * 1024 }, (error, stdout) => {
+    execFile(file, [...args], { encoding: 'utf8', timeout, maxBuffer: 2 * 1024 * 1024, env }, (error, stdout) => {
       if (error) reject(error);
       else resolve(stdout);
     });
   });
+}
+
+export const PERMISSION_PROFILES_UNSUPPORTED =
+  'This Codex runtime cannot enforce the Project sandbox, so Powermove will not run it with Project access. Use the built-in runtime or update Codex, then retry.';
+
+/** A Codex that does not know permission profiles ignores them and runs its
+ * default sandbox instead, so the profile a Project run uses must first be
+ * seen denying a read. */
+async function probePermissionProfiles(binary: string, env: NodeJS.ProcessEnv): Promise<void> {
+  const directory = await realpath(await mkdtemp(path.join(tmpdir(), 'powermove-codex-profile-')));
+  try {
+    const secret = path.join(directory, 'secret');
+    const workspace = path.join(directory, 'workspace');
+    const [token, marker] = [randomUUID(), randomUUID()];
+    await writeFile(secret, token, { mode: 0o600 });
+    await mkdir(workspace);
+    const config = projectSandboxArgv({ shellNetwork: false, deniedReads: [secret], workspaceRoots: [workspace] });
+    const output = await execFileText(binary, ['sandbox', ...config, '--permission-profile', PROJECT_PERMISSION_PROFILE,
+      '--cd', workspace, '--', '/bin/sh', '-c', 'cat "$1" 2>/dev/null; echo "$2"', 'sh', secret, marker], env, 15_000)
+      .catch(() => '');
+    if (output.includes(token) || !output.includes(marker)) {
+      throw new Error(PERMISSION_PROFILES_UNSUPPORTED);
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+const verifiedProfiles = new Map<string, Promise<void>>();
+/** Checked once per binary version; a failed check is retried next run. */
+export async function verifyPermissionProfiles(binary: string, env: NodeJS.ProcessEnv): Promise<void> {
+  const { mtimeMs, size } = await stat(binary);
+  const key = `${binary}\0${mtimeMs}\0${size}`;
+  let check = verifiedProfiles.get(key);
+  if (!check) {
+    check = probePermissionProfiles(binary, env);
+    verifiedProfiles.set(key, check);
+    check.catch(() => verifiedProfiles.delete(key));
+  }
+  return check;
 }
 
 export async function capabilities(binary?: string | null): Promise<AdapterCapabilities> {

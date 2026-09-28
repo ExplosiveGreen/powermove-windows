@@ -14,7 +14,7 @@ import {
 } from '../../shared/ipc';
 import { EXTENSION_ID } from '../../shared/extensions';
 import { isArrayOf, isBytes, isOneOf, isRecord, isString } from '../../shared/guards';
-import { buildAutonomousArgv, buildEditorArgv } from './adapter';
+import { buildAutonomousArgv, buildEditorArgv, verifyPermissionProfiles } from './adapter';
 import { publishExtensionChanges, withStageSnapshot } from './change-history';
 import { AgentResultValidationError, repairAgentResult } from './result-repair';
 import { validateStagedExtensions } from './validate-staged-extensions';
@@ -429,6 +429,7 @@ export class CodexRunner {
 
       const deniedReads = authority === 'project' ? await agentCredentialPaths(options.userData, { codexHome: 'credentials' }) : [];
       const workspaceRoots = [layout.root, await realpath(layout.root)];
+      if (authority === 'project') await verifyPermissionProfiles(binary, isolatedCodexEnvironment(codexHome));
       let resumeId = await readSession(layout.sessionPath);
       let attempt: AttemptResult | null = null;
       const executeAutonomous = async (prompt: string, sessionId: string | null) => {
