@@ -477,6 +477,7 @@ reads it at runtime. It never carries the value in its source.
 - Errors in `activate` → extension is disabled with the message shown in Mods; the app keeps running.
 - Two runtime errors within 10 s → auto-disabled.
 - A sandboxed extension that stops answering for 8 s, or whose process crashes → its process is ended and it is turned off.
+- A sandboxed extension that has not activated within 10 s → not loaded; if it also stopped answering (it is spinning), its process is ended and it is turned off instead, with one notice.
 - `apiVersion` newer than the app → not loaded (“needs update”).
 - Edits go through the typed boundary: locked layers and hand-edited channels are respected.
 

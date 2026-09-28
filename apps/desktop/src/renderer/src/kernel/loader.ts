@@ -68,6 +68,8 @@ const DEFAULT_LIMIT = 2;
 const BLOCKED = new Set(['build-error', 'manifest-error', 'needs-update', 'needs-setup', 'needs-trust']);
 
 const nameOf = (record: ExtensionRecord | undefined, id: string): string => record?.manifest?.name ?? id;
+/** A sandbox that stopped responding (sandbox-host.ts): it is turned off at once. */
+const isFatal = (error: unknown): boolean => (error as { code?: unknown } | null)?.code === 'sandbox_fatal';
 
 export function errorText(error: unknown): string {
   const raw = error instanceof Error ? error.message || String(error) : String(error);
@@ -234,7 +236,10 @@ export function createLoader(options: LoaderOptions): Loader {
 
     if (record.trust === 'store') {
       try {
-        const sandbox = await withTimeout(createSandboxRuntime(kernel, record, hostDeps, await valuesFor(record)), timeoutMs, `sandbox activation of "${id}" timed out`);
+        /* The sandbox keeps its own deadline: past it, it tears the runtime
+           down and tells a spinning one from a slow one, within this budget.
+           A second timer here would report the same failure twice. */
+        const sandbox = await createSandboxRuntime(kernel, record, hostDeps, await valuesFor(record), { timeoutMs });
         active.set(id, { record, module: null, handle: sandbox.handle, sandbox });
         activationFailures.delete(id);
         syncActive();
@@ -312,8 +317,17 @@ export function createLoader(options: LoaderOptions): Loader {
     activationFailures.add(id);
     console.error(`[kernel] extension "${id}" failed to activate`, error);
     kernel.disposeOwner(id);
-    reportHealth(id, { state: 'activation-error', error: errorText(error) });
     const name = nameOf(recordFor(id) ?? record, id);
+    /* A sandbox that spun while activating would spin again on every launch:
+       it is turned off, as when it stops responding later. */
+    if (isFatal(error)) {
+      const health = { state: 'runtime-error' as const, error: errorText(error) };
+      patchRecord(id, { enabled: false, health });
+      reportHealth(id, health);
+      stoppedToast(id, name);
+      return;
+    }
+    reportHealth(id, { state: 'activation-error', error: errorText(error) });
     /* An extension that will not load is that extension's alert. The editor is
        still whole, and the notice belongs to whoever broke. */
     deps.ui.toast(`${name} failed to load`, { sticky: true, source: { id, name } } as ToastArgs);
@@ -386,8 +400,7 @@ export function createLoader(options: LoaderOptions): Loader {
     stamps.push(now);
     failures.set(id, stamps);
     // A sandbox that stopped responding is already gone: no second chance to count.
-    const fatal = (error as { code?: unknown } | null)?.code === 'sandbox_fatal';
-    if (!fatal && stamps.length < limit) return;
+    if (!isFatal(error) && stamps.length < limit) return;
     failures.delete(id);
     const name = nameOf(recordFor(id), id);
     activationFailures.add(id);
@@ -396,8 +409,12 @@ export function createLoader(options: LoaderOptions): Loader {
       patchRecord(id, { enabled: false, health });
       await deactivate(id);
       reportHealth(id, health);
-      deps.ui.toast(`${name} stopped working — check Mods`, { sticky: true, source: { id, name } } as ToastArgs);
+      stoppedToast(id, name);
     });
+  }
+
+  function stoppedToast(id: string, name: string): void {
+    deps.ui.toast(`${name} stopped working — check Mods`, { sticky: true, source: { id, name } } as ToastArgs);
   }
 
   function enqueue(task: () => Promise<void>): Promise<void> {

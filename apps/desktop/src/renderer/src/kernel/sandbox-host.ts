@@ -118,6 +118,8 @@ export interface SandboxRuntimeOptions {
   /** Where registrations land. Defaults to `kernel`; the sandbox check passes a scratch kernel so nothing reaches the app. */
   registry?: Kernel;
   observer?: SandboxObserver;
+  /** The whole activation, the liveness probe after a timeout included. Defaults to 10 s, the loader's. */
+  timeoutMs?: number;
 }
 
 /** Starts a store extension behind an opaque-origin script-only iframe. */
@@ -458,11 +460,15 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   stopForBudget = () => { deps.reportRuntimeError(record.id, new Error('exceeded the sandbox message budget')); dispose(); };
   for (const event of STATE_EVENTS) host.api.events.on(event, schedule);
   host.api.events.on('theme:changed', () => { try { rpc.notify('theme', themeSnapshot(kernel)); } catch { /* disposed */ } });
+  /* The caller hears one outcome within the budget: the probe that tells a
+     spinning runtime from a waiting one comes out of it too. */
+  const budgetMs = test?.timeoutMs !== undefined && test.timeoutMs > 0 ? test.timeoutMs : 10_000;
+  const probeMs = isolated ? Math.min(1_500, budgetMs / 4) : 0;
   let timedOut = false;
   try {
     host.setActivating(true);
     const loaded = new Promise<void>((resolve, reject) => { frame.addEventListener('load', () => resolve(), { once: true }); frame.addEventListener('error', () => reject(new Error('Sandbox document failed to load')), { once: true }); });
-    const timeout = setTimeout(() => { timedOut = true; const error = new Error('Sandbox document or activation timed out'); rejected(error); frame.dispatchEvent(new Event('error')); }, 9_000);
+    const timeout = setTimeout(() => { timedOut = true; const error = new Error('Sandbox document or activation timed out'); rejected(error); frame.dispatchEvent(new Event('error')); }, budgetMs - probeMs);
     document.body.append(frame);
     try {
       await loaded;
@@ -483,11 +489,11 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     host.setActivating(false);
     /* A runtime still answering pings was only waiting (a slow fetch in
        activate); an isolated one that does not is spinning and would spin
-       again next launch, so it is killed and turned off. */
-    const spinning = isolated && timedOut && !await Promise.race([rpc.call('ping').then(() => true, () => false), new Promise<boolean>(resolve => setTimeout(() => resolve(false), 1500))]);
+       again next launch, so it is killed and turned off. The caller reports
+       it (sandbox_fatal), once. */
+    const spinning = isolated && timedOut && !await Promise.race([rpc.call('ping').then(() => true, () => false), new Promise<boolean>(resolve => setTimeout(() => resolve(false), probeMs))]);
     if (spinning) await terminate();
     dispose();
-    if (spinning) deps.reportRuntimeError(record.id, Object.assign(new Error('stopped responding while activating'), { code: 'sandbox_fatal' }));
-    throw error;
+    throw spinning ? Object.assign(new Error('stopped responding while activating'), { code: 'sandbox_fatal' }) : error;
   }
 }

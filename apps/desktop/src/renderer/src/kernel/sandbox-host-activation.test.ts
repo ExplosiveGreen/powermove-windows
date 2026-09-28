@@ -77,3 +77,35 @@ it('runs no watchdog where sandboxes share one process or cannot be terminated',
     vi.restoreAllMocks();
   }
 });
+
+/** Settles the activation of `doc` and reports how, and how long it took. */
+async function activation(doc: ReturnType<typeof runtimeDoc>, hostDeps: HostDeps, timeoutMs: number) {
+  const started = performance.now();
+  const pending = createSandboxRuntime(createKernel(), record, hostDeps, {}, { ...doc.test, timeoutMs });
+  doc.frame.dispatchEvent(new Event('load'));
+  const error = await pending.then(runtime => { runtime.dispose(); return null; }, (failure: Error & { code?: string }) => failure);
+  return { error, elapsed: performance.now() - started };
+}
+const spins = { ping: () => new Promise(() => {}), activate: () => {} };
+
+it('rejects a runtime that spins while activating as sandbox_fatal, killed, within the budget', async () => {
+  const { terminate } = host('electron');
+  const hostDeps = deps();
+  const { error, elapsed } = await activation(runtimeDoc(spins), hostDeps, 400);
+  expect(error).toMatchObject({ message: 'stopped responding while activating', code: 'sandbox_fatal' });
+  expect(terminate).toHaveBeenCalledWith('live-ext');
+  // The caller reports it; the sandbox does not report it a second time.
+  expect(hostDeps.reportRuntimeError).not.toHaveBeenCalled();
+  expect(elapsed).toBeGreaterThanOrEqual(390);
+  expect(elapsed).toBeLessThan(400 + 150);
+});
+
+it('a timeout where sandboxes share a process is a plain activation error', async () => {
+  const { terminate } = host('browser');
+  const hostDeps = deps();
+  const { error } = await activation(runtimeDoc(spins), hostDeps, 200);
+  expect(error?.message).toBe('Sandbox document or activation timed out');
+  expect(error?.code).toBeUndefined();
+  expect(terminate).not.toHaveBeenCalled();
+  expect(hostDeps.reportRuntimeError).not.toHaveBeenCalled();
+});
