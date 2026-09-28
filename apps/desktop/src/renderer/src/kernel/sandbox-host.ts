@@ -12,7 +12,7 @@ import { plain, projectSnapshots, sandboxStats } from './project-snapshots';
 import { sandboxBundleUrl, sandboxDocumentUrl, sandboxOrigin } from '../../../shared/sandbox-origin';
 import { watchSandbox } from './sandbox-watchdog';
 import { importedFile, menuEntriesSchema, paletteEntriesSchema, parseHostEvent, parseInvoke, parseRegistration } from './sandbox-schemas';
-import { sandboxOpenExternal } from './sandbox-links';
+import { sandboxOpenExternal, userActivated } from './sandbox-links';
 import { sandboxImportUrl } from './sandbox-import-url';
 
 /** Kernel events that can change a document's SandboxState. */
@@ -37,6 +37,8 @@ const MAX_VIOLATION_KEYS = 100;
    hold instead, checked on `file.size` before the host reads a byte. */
 const IMPORT_FILE_BYTES = 512 * 1024 * 1024;
 const IMPORT_MINUTE_BYTES = 2 * 1024 * 1024 * 1024;
+/** How long a person's click or key press stands behind the runtime's ui.openExternal, as long as a transient user activation. */
+const PERSON_ACTION_MS = 5_000;
 const LEGACY_EDIT_COMMANDS = new Set(['delete', 'duplicate', 'split', 'selectAll', 'deselect', 'groupLayers', 'ungroupLayers', 'nudgeSelection', 'nudgeKeyframes']);
 function denied(message: string, code = 'permission_denied'): never {
   const error = new Error(message) as Error & { code: string };
@@ -194,21 +196,25 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   const persistedStorage = (deps.pm as { store?: { get?: (key: string, fallback: unknown) => unknown } }).store?.get?.(`ext.${record.id}`, {});
   const storageValues = new Map<string, unknown>(persistedStorage && typeof persistedStorage === 'object' && !Array.isArray(persistedStorage)
     ? Object.entries(persistedStorage) : []);
+  /* assets.import and assets.importUrl share one quota: a download counts at
+     its size before the renderer reads it back. */
   const imports: Array<{ at: number; bytes: number }> = [];
-  const admitImport = (file: File): void => {
-    if (file.size > IMPORT_FILE_BYTES) denied('assets.import accepts files up to 512 MiB', 'resource_limit');
+  const admitImport = (bytes: number): void => {
+    if (bytes > IMPORT_FILE_BYTES) denied('assets.import accepts files up to 512 MiB', 'resource_limit');
     const now = Date.now();
     while (imports.length && now - imports[0]!.at >= 60_000) imports.shift();
-    if (imports.reduce((sum, entry) => sum + entry.bytes, file.size) > IMPORT_MINUTE_BYTES) denied('assets.import accepts up to 2 GiB a minute', 'resource_limit');
-    imports.push({ at: now, bytes: file.size });
+    if (imports.reduce((sum, entry) => sum + entry.bytes, bytes) > IMPORT_MINUTE_BYTES) denied('assets.import and assets.importUrl accept up to 2 GiB a minute', 'resource_limit');
+    imports.push({ at: now, bytes });
   };
   /* ui.copy: the kernel's manifest record grants it (never the document's
-     URL), the host itself sees the calling view focused, and it writes once
-     a second at most. The runtime has no focus to prove, so it never copies. */
+     URL), the host itself sees the calling view focused right after a real
+     click or key press, and it writes once a second at most. The runtime has
+     no focus to prove, so it never copies. Main checks focus and input again. */
   let copiedAt = -Infinity;
   const copy = async (text: string, view: ViewLink | null): Promise<void> => {
     if (!permissions.includes('clipboard')) denied('ui.copy requires clipboard permission', 'clipboard');
     if (!view?.focused?.()) denied('ui.copy works only from a panel that has focus');
+    if (!userActivated()) denied('ui.copy works only right after a click or key press in the panel');
     const write = bridge()?.clipboardWriteText;
     if (!write) throw new Error('The clipboard is unavailable');
     const now = Date.now();
@@ -216,8 +222,25 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     copiedAt = now;
     await write(text);
   };
-  const openExternal = sandboxOpenExternal({ manifest: () => manifest, ui: host.api.ui });
-  const importUrl = sandboxImportUrl({ manifest: () => manifest, assets: host.api.assets });
+  const openExternal = sandboxOpenExternal({ id: record.id, manifest: () => manifest, ui: host.api.ui });
+  /* A person's action, as the host saw it, for ui.openExternal's no-sheet
+     path: a focused view right after a real click or key press, or, for the
+     runtime, a run the host started while the app held that activation (a
+     command, a status item's click, a palette, menu or toast item) that is
+     still in flight and under 5 s old. The extension's own commands.run is
+     never one. */
+  let ownRun = false, personRuns = 0, personRunAt = -Infinity;
+  const forPerson = <T,>(start: () => Promise<T>): Promise<T> => {
+    if (ownRun || !userActivated()) return start();
+    personRuns += 1; personRunAt = performance.now();
+    let running: Promise<T>;
+    try { running = start(); } catch (error) { personRuns -= 1; throw error; }
+    return running.finally(() => { personRuns -= 1; });
+  };
+  const gesture = (view: ViewLink | null): boolean => view
+    ? view.focused?.() === true && userActivated()
+    : personRuns > 0 && performance.now() - personRunAt < PERSON_ACTION_MS;
+  const importUrl = sandboxImportUrl({ manifest: () => manifest, assets: host.api.assets, admit: admitImport });
   const invoke = (namespace: string, method: string, args: unknown, view: ViewLink | null = null): unknown => {
     if (!SAFE_INVOKE[namespace]?.has(method)) throw new Error(`Sandbox method unavailable: ${namespace}.${method}`);
     const parsed = parseInvoke(namespace, method, args);
@@ -236,14 +259,14 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
       return host.api.events.emit(`ext:${record.id}:${String(parsed[0])}` as Parameters<typeof host.api.events.emit>[0], parsed[1] as never);
     }
     if (namespace === 'keybindings') { reg.unbind(record.id, String(parsed[0]), false); return; }
-    if (namespace === 'ui' && method === 'openExternal') return openExternal(parsed[0]);
+    if (namespace === 'ui' && method === 'openExternal') return openExternal(parsed[0], gesture(view));
     if (namespace === 'assets' && method === 'importUrl') return importUrl(parsed[0]);
     if (namespace === 'panels' && !ownId(record.id, String(parsed[0]))) denied('panels may act only on your own ids');
     if (namespace === 'theme' && method === 'activate' && !ownId(record.id, String(parsed[0]))) denied('theme.activate accepts only your themes');
     if (namespace === 'assets' && method !== 'get' && !permissions.includes('assets')) {
       const error = new Error(`assets.${method} requires assets permission`); error.name = 'PermissionError'; throw error;
     }
-    if (namespace === 'assets' && method === 'import') admitImport(parsed[0] as File);
+    if (namespace === 'assets' && method === 'import') admitImport((parsed[0] as File).size);
     if (namespace === 'ui' && method === 'copy') return copy(String(parsed[0]), view);
     if (namespace === 'storage') {
       const key = String(parsed[0]);
@@ -256,24 +279,43 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
       if (method === 'delete') storageValues.delete(key);
     }
     const receiver = (host.api as unknown as Record<string, Record<string, (...a: unknown[]) => unknown>>)[namespace];
-    return receiver?.[method]?.(...parsed);
+    ownRun = namespace === 'commands';
+    try { return receiver?.[method]?.(...parsed); } finally { ownRun = false; }
   };
   /* A toast's `action.run` and `onDismiss` are handles of the document that
      raised it. They are released when the toast closes, however it closes,
-     so they never pile up against the handle limits. */
-  const toast = (docRpc: Rpc, live: () => boolean, args: unknown): void => {
-    const [text, options] = parseInvoke('ui', 'toast', args) as [string, { action?: { label: string; run: number }; onDismiss?: number } | undefined];
+     so they never pile up against the handle limits. A toast with buttons,
+     or with the extension's own `key`, is keyed by the host and dismissed
+     when its document goes (a closed panel, a reload, the extension's
+     dispose), so no button is left that can no longer answer. The key is
+     namespaced: an extension replaces only its own notices. */
+  const toastKeys = new Map<string, { link: object }>();
+  let toastSerial = 0;
+  const dismissToasts = (link: object | null): void => {
+    for (const [key, entry] of [...toastKeys]) {
+      if (link !== null && entry.link !== link) continue;
+      toastKeys.delete(key);
+      (deps.pm as { dismissToast?: (key: string) => void }).dismissToast?.(key);
+    }
+  };
+  const toast = (link: { rpc: Rpc }, live: () => boolean, args: unknown): void => {
+    const docRpc = link.rpc;
+    const [text, options] = parseInvoke('ui', 'toast', args) as [string, { action?: { label: string; run: number }; onDismiss?: number; key?: unknown } | undefined];
     const handles = [options?.action?.run, options?.onDismiss].filter((id): id is number => typeof id === 'number');
     claimHandles(handles);
+    const { action, onDismiss, key: ownKey, ...rest } = options ?? {};
+    const key = ownKey !== undefined ? `sandbox:${record.id}:${String(ownKey)}` : handles.length ? `sandbox:${record.id}:#${++toastSerial}` : undefined;
+    const entry = { link };
+    if (key) toastKeys.set(key, entry);
     let closed = false;
     const onClose = (): void => {
       if (closed) return; closed = true;
+      if (key && toastKeys.get(key) === entry) toastKeys.delete(key);
       for (const id of handles) { remoteHandles.delete(id); try { docRpc.release(id); } catch { /* document gone */ } }
     };
-    const call = (id: number) => (): void => void docRpc.invokeHandle(id).catch(error => { if (live()) deps.reportRuntimeError(record.id, error); });
-    const { action, onDismiss, ...rest } = options ?? {};
-    host.api.ui.toast(text, { ...rest, ...(action ? { action: { label: action.label, run: call(action.run) } } : {}),
-      ...(onDismiss !== undefined ? { onDismiss: call(onDismiss) } : {}), onClose } as Parameters<typeof host.api.ui.toast>[1]);
+    const call = (id: number) => (): Promise<unknown> => docRpc.invokeHandle(id).catch(error => { if (live()) deps.reportRuntimeError(record.id, error); });
+    host.api.ui.toast(text, { ...rest, ...(key ? { key } : {}), ...(action ? { action: { label: action.label, run: () => void forPerson(call(action.run)) } } : {}),
+      ...(onDismiss !== undefined ? { onDismiss: () => void call(onDismiss)() } : {}), onClose } as Parameters<typeof host.api.ui.toast>[1]);
   };
   /* Handlers every extension document gets: the runtime iframe and each
      panel view. Only the runtime may register contributions; a view may only
@@ -313,15 +355,15 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
         case 'theme': item = host.api.theme.register(sandboxTheme(value) as unknown as Parameters<typeof host.api.theme.register>[0]); break;
         case 'keybindings': item = host.api.keybindings.bind({ ...value, priority: 1000 } as unknown as Parameters<typeof host.api.keybindings.bind>[0]); break;
         case 'media-defaults': item = host.api.media.registerImportDefaults(value as unknown as Parameters<typeof host.api.media.registerImportDefaults>[0]); break;
-        case 'commands': item = host.api.commands.register({ ...value, id: String(value.id), label: String(value.label), run: (...args: unknown[]) => rpc.invokeHandle(Number(value.run), ...args), ...(value.when ? { when: freshWhen(rpc, Number(value.when)) } : {}) }); break;
-        case 'status': item = host.api.status.register({ ...value, id: String(value.id), text: cached(rpc, Number(value.text), null), ...(value.onClick ? { onClick: () => void rpc.invokeHandle(Number(value.onClick)) } : {}) }); break;
+        case 'commands': item = host.api.commands.register({ ...value, id: String(value.id), label: String(value.label), run: (...args: unknown[]) => forPerson(() => rpc.invokeHandle(Number(value.run), ...args)), ...(value.when ? { when: freshWhen(rpc, Number(value.when)) } : {}) }); break;
+        case 'status': item = host.api.status.register({ ...value, id: String(value.id), text: cached(rpc, Number(value.text), null), ...(value.onClick ? { onClick: () => void forPerson(() => rpc.invokeHandle(Number(value.onClick))) } : {}) }); break;
         /* Asked for every query; the palette keeps a reply only while it still
            shows the query that reply answers. */
         case 'palette': item = host.api.palette.registerProvider(query => rpc.invokeHandle(Number(value.provider), query)
           .then(result => paletteEntriesSchema.parse(result).map(entry => {
             claimHandles([entry.run]);
             if (!ownId(record.id, entry.id) || reg.commands.topEntry(entry.id)?.ownerId && reg.commands.topEntry(entry.id)?.ownerId !== record.id) denied('Palette entry id collides with another owner', 'id_collision');
-            return { ...entry, run: () => rpc.invokeHandle(entry.run) };
+            return { ...entry, run: () => forPerson(() => rpc.invokeHandle(entry.run)) };
           }))); break;
         /* Asked afresh on every open, with that open's ctx: the reply to this
            call is the only one these items can come from, so a menu never
@@ -332,7 +374,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
             if (typeof entry === 'string' || !('run' in entry) || !entry.run) return entry;
             const run = entry.run;
             claimHandles([run]);
-            return { ...entry, run: () => rpc.invokeHandle(run) };
+            return { ...entry, run: () => forPerson(() => rpc.invokeHandle(run)) };
           }) as MenuContribution[]), { [ASYNC_CONTRIBUTOR]: true })); break;
         case 'events': {
           const doc = docOf.get(link);
@@ -354,7 +396,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     },
     'dispose-registration'(token: string) { link.registrations.get(token)?.dispose(); link.registrations.delete(token); },
     invoke: (namespace: string, method: string, args: unknown) => namespace === 'ui' && method === 'toast'
-      ? toast(link.rpc, () => !disposed && (runtime || links.has(link as ViewLink)), args) : invoke(namespace, method, args, runtime ? null : link as ViewLink),
+      ? toast(link, () => !disposed && (runtime || links.has(link as ViewLink)), args) : invoke(namespace, method, args, runtime ? null : link as ViewLink),
     /* Enforced here whatever the shim does: at most one full copy per
        generation for each document. A document asking again for the
        generation it already holds gets `unchanged`, however often it asks. */
@@ -505,7 +547,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   const views: ViewHost = {
     src: panelId => test?.onViewInit ? null : sandboxDocumentUrl(base, record.id, perms, panelId),
     init: link => initFor(openDoc(link, link.rpc), link),
-    detach: link => { const doc = docOf.get(link); if (doc) docs.delete(doc); docOf.delete(link); },
+    detach: link => { const doc = docOf.get(link); if (doc) docs.delete(doc); docOf.delete(link); dismissToasts(link); },
     theme: () => viewTheme(kernel),
     keys: () => keyTable(reg, record.id),
     budget,
@@ -557,6 +599,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     keysOff.dispose(); themeWatch?.disconnect(); docs.clear();
     // Registrations first: panel views tell the runtime to close their ports.
     for (const item of registrations.values()) item.dispose(); registrations.clear();
+    dismissToasts(null);
     try { rpc.notify('dispose'); } catch { /* already closed */ }
     rpc.close();
     host.disposeAll(); frame.remove();

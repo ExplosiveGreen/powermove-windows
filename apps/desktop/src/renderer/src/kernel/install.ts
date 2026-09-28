@@ -103,7 +103,7 @@ import {
 } from '../layout/model';
 import { bridge as hostBridge } from './bridge';
 import { parseExtensionUrl } from '../../../shared/extension-url';
-import { fetchRemoteMedia } from './remote-media';
+import { fetchRemoteMedia, type AdmitDownload, type ImportUrl } from './remote-media';
 
 type LegacyPM = Record<string, any>;
 type ExtensionsHostBridge = ExtensionsBridge & Partial<Pick<PowermoveExtensionsBridge, 'fork'>>;
@@ -578,7 +578,7 @@ function makeAssets(PM: LegacyPM): AssetsAPI {
       if (!(blob instanceof Blob)) throw new Error(`Asset data is missing: ${meta.name || id}`);
       return blob.text();
     },
-    importUrl: async (url) => (await assets.import(await fetchRemoteMedia(url))).id
+    importUrl: (async (url: string, admit?: AdmitDownload) => (await assets.import(await fetchRemoteMedia(url, undefined, admit))).id) satisfies ImportUrl
   };
   return assets;
 }

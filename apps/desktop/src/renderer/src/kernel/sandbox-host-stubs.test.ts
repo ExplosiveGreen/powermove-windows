@@ -16,9 +16,10 @@ async function start(options: { maxHandles?: number; open?: string[] } = {}) {
   const kernel = createKernel();
   const project = { get: () => ({ id: 'test' }), revision: () => 1, selection: () => null, time: () => 0, playing: () => false } as unknown as ProjectAPI;
   const toast = vi.fn();
+  const dismissToast = vi.fn();
   const reportRuntimeError = vi.fn();
   const open = new Set(options.open ?? []);
-  const deps = { pm: {}, state: { doc: {}, sel: {}, transport: {}, perf: {} }, project,
+  const deps = { pm: { dismissToast }, state: { doc: {}, sel: {}, transport: {}, perf: {} }, project,
     ui: { controls: {}, toast, confirm: async () => true, menu: vi.fn(), modal: vi.fn(), icon: () => '' },
     storage: () => ({ get: () => undefined, set: vi.fn(), delete: vi.fn() }),
     extensions: { list: () => [] },
@@ -54,10 +55,10 @@ async function start(options: { maxHandles?: number; open?: string[] } = {}) {
     for (let wait = 0; wait < 50 && views.length === before; wait++) await settle(5);
     return views.at(-1)!;
   };
-  return { kernel, api, toast, reportRuntimeError, open, pushes: () => pushes, openView };
+  return { kernel, api, toast, dismissToast, runtime, reportRuntimeError, open, pushes: () => pushes, openView };
 }
 
-type ToastCall = [string, { action?: { label: string; run: () => void }; onDismiss?: () => void; onClose?: () => void; sticky?: boolean; source?: unknown }];
+type ToastCall = [string, { action?: { label: string; run: () => void }; onDismiss?: () => void; onClose?: () => void; sticky?: boolean; source?: unknown; key?: string }];
 
 it('sends toast callbacks as handles and releases them when the toast closes', async () => {
   // Two handles fit; a leak would make the second toast throw the handle limit.
@@ -89,6 +90,22 @@ it('sends toast callbacks as handles and releases them when the toast closes', a
   expect(run).toHaveBeenCalledOnce();
 });
 
+it('dismisses the runtime’s toasts with buttons, and its keyed ones, when the extension is disposed', async () => {
+  const h = await start();
+  const run = vi.fn();
+  h.api.ui.toast('Exported', { action: { label: 'Reveal', run } });
+  h.api.ui.toast('Syncing', { key: 'sync', sticky: true });
+  h.api.ui.toast('Plain');
+  await settle();
+  const keys = h.toast.mock.calls.map(call => (call as ToastCall)[1]?.key);
+  expect(keys).toEqual([expect.stringMatching(/^sandbox:stub-ext:#/), 'sandbox:stub-ext:sync', undefined]);
+  // One the person already closed is not dismissed again.
+  (h.toast.mock.calls[1] as ToastCall)[1].onClose!();
+  expect(h.dismissToast).not.toHaveBeenCalled();
+  h.runtime.dispose();
+  expect(h.dismissToast.mock.calls).toEqual([[keys[0]]]);
+});
+
 it('releases the handles of a toast the host refuses, and reports the refusal', async () => {
   const h = await start({ maxHandles: 2 });
   const run = vi.fn();
@@ -107,7 +124,9 @@ it('keeps plain toasts and drops callbacks that cannot cross', async () => {
   h.api.ui.toast('Keyed', { key: 'k', corner: 'top-right', icon: (() => 'x') as unknown as string });
   await settle();
   expect(h.toast.mock.calls.map(call => call[0])).toEqual(['Plain', 'Keyed']);
-  expect((h.toast.mock.calls[1] as ToastCall)[1]).toMatchObject({ key: 'k', corner: 'top-right' });
+  // The key is the extension's own: it can replace its notices, never the editor's.
+  expect((h.toast.mock.calls[0] as ToastCall)[1]).not.toHaveProperty('key');
+  expect((h.toast.mock.calls[1] as ToastCall)[1]).toMatchObject({ key: 'sandbox:stub-ext:k', corner: 'top-right' });
   expect((h.toast.mock.calls[1] as ToastCall)[1]).not.toHaveProperty('icon');
   expect(h.reportRuntimeError).not.toHaveBeenCalled();
 });

@@ -64,7 +64,7 @@ test('a sandboxed extension imports a remote image by URL, and private hosts are
   ]);
 
   for (const url of ['https://intranet.example.com/a.png', 'https://loopback.example.com/a.png', 'https://127.0.0.1/a.png', 'https://[::1]/a.png']) {
-    expect((await run(session, 'sandbox-links.import', url)).error).toContain('not a public internet address');
+    expect((await run(session, 'sandbox-links.import', url)).error).toContain('is not reachable on the public internet');
   }
   expect((await run(session, 'sandbox-links.import', 'http://images.example.com/a.png')).error).toContain('https URL');
   // Nothing refused reached the socket.
@@ -83,10 +83,12 @@ test('a sandboxed extension without network cannot import by URL', async ({ sess
 
 test('a sandboxed extension opens its listed origin directly and asks, showing the URL, for any other', async ({ session }) => {
   await start(session);
-  await session.app.evaluate(({ dialog, shell }) => {
+  await session.app.evaluate(({ BrowserWindow, dialog, shell }) => {
     const seen = { opened: [] as string[], asked: [] as Array<{ message: string; detail?: string }> };
     (globalThis as any).__links = seen;
     shell.openExternal = async (url: string) => { seen.opened.push(url); };
+    // The hidden harness's windows cannot take focus; main opens links only from a focused one.
+    for (const window of BrowserWindow.getAllWindows()) window.isFocused = () => true;
     dialog.showMessageBox = (async (_window: unknown, options: { message: string; detail?: string }) => {
       seen.asked.push({ message: options.message, detail: options.detail });
       return { response: seen.asked.length === 1 ? 0 : 1, checkboxChecked: false };
@@ -94,6 +96,8 @@ test('a sandboxed extension opens its listed origin directly and asks, showing t
   });
   const seen = () => session.app.evaluate(() => (globalThis as any).__links);
 
+  /* Playwright evaluates with a user gesture, so each run below is a command
+     a person just started (the unit tests cover calls with none). */
   expect(await run(session, 'sandbox-links.open', 'https://links.example.com/docs')).toEqual({ ok: true });
   expect(await seen()).toEqual({ opened: ['https://links.example.com/docs'], asked: [] });
 
@@ -104,8 +108,8 @@ test('a sandboxed extension opens its listed origin directly and asks, showing t
   expect(await seen()).toEqual({
     opened: ['https://links.example.com/docs', 'https://elsewhere.example.org/?q=1'],
     asked: [
-      { message: 'Sandbox links fixture wants to open a link in your browser', detail: 'https://elsewhere.example.org/?q=1' },
-      { message: 'Sandbox links fixture wants to open a link in your browser', detail: 'https://declined.example.org/' }
+      { message: 'The extension “sandbox-links” wants to open a link in your browser', detail: 'https://elsewhere.example.org/?q=1' },
+      { message: 'The extension “sandbox-links” wants to open a link in your browser', detail: 'https://declined.example.org/' }
     ]
   });
   // Too soon after the last one.

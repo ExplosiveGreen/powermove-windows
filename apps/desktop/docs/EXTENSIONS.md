@@ -80,7 +80,7 @@ reloaded, or removed. Return a `Disposable` or use `api.onDispose` for anything 
 | `forkedFrom` | no | `"<id>@<version>"` for a built-in or `"<handle>/<id>@<version>"` for a Store fork |
 | `vars` | no | `apiVersion: 2`; up to 32 declarations `{ key, label, secret?, hint? }`. Keys use uppercase letters, digits and underscores, starting with a letter. Read values through `api.vars`; never put credentials in source. |
 | `permissions` | no | `apiVersion: 3`; see [Permissions and the sandbox](#permissions-and-the-sandbox) |
-| `links` | no | `apiVersion: 3`; up to 5 https origins, written exactly as `"https://example.com"`, that `ui.openExternal` opens without asking when the extension also declares `network`. The Store lists them. See [Opening links and importing from a URL](#opening-links-and-importing-from-a-url). |
+| `links` | no | `apiVersion: 3`; up to 5 https origins, written exactly as `"https://example.com"`, that `ui.openExternal` opens without asking, when the extension also declares `network` and the person just acted. The Store lists them. See [Opening links and importing from a URL](#opening-links-and-importing-from-a-url). |
 | `author` | no | `powermove` \| `user` \| `agent` |
 
 Imports allowed: `powermove` (types only), the client-side Svelte modules listed in
@@ -113,9 +113,12 @@ sandbox.
   URLs and bundled `data:` fonts load, since neither leaves the machine.
 - `clipboard` allows `ui.copy(text)`, which writes plain text (up to 500,000
   characters, at most once a second) from one of the extension's panels while
-  that panel has focus. No permission lets an extension read the clipboard.
-  Treat it as a disclosure rather than a hard boundary: a focused panel can
-  also copy with `document.execCommand('copy')`.
+  that panel has focus and within 5 seconds of a click or key press (a modifier
+  key alone does not count, and neither does focus coming back to the window,
+  as after Command-Tab). The runtime never copies. No permission lets an
+  extension read the clipboard. `document.execCommand('copy')` in a panel is
+  no way around it: Chromium lets it write only right after a click or key
+  press in that panel, the same kind of gate.
 - `assets` allows picking, importing, and reading asset files. `assets.importUrl`
   also needs `network`.
 - `project:write` allows project mutation through `apply`, `undo`, `redo`, `select`, time and transport controls. `commands.run` can call an extension's own commands and, with this permission, the named legacy editing commands. It cannot call another extension's commands or File, app, export, settings, or mods commands.
@@ -134,15 +137,23 @@ Store extensions supply simple event names; the kernel publishes them as `ext:<e
 `await api.ui.openExternal(url)` opens an https URL in the person's browser and
 resolves `true`, or `false` when they decline. The URL must be https, at most 2
 KB, and carry no user name or password. One call may be pending and at most one
-runs every 2 s; others reject with `code: 'resource_limit'`.
+runs every 2 s; others reject with `code: 'resource_limit'`. Nothing opens
+while Powermove's window is in the background.
 
-- An origin listed in the manifest's `links` opens without asking, but only when
-  the extension also declares `network`. Origins match exactly: listing
+- An origin listed in the manifest's `links` opens without asking only when the
+  extension also declares `network` and the call answers something the person
+  just did: from one of the extension's panels while it has focus, within 5
+  seconds of a click or key press, or from a command, status item, palette,
+  menu or toast item the person started, within 5 seconds of starting it (not
+  from the extension's own `commands.run`, a timer or an event). At most 3
+  links a minute open this way. Origins match exactly: listing
   `https://example.com` covers neither `https://www.example.com` nor another port.
-- Every other URL, and every URL when the extension lacks `network`, opens only
-  after the person confirms a Powermove sheet that names the extension and shows
-  the whole URL. Without `network`, a link is the one way data could leave, so
-  it always asks.
+- Every other call, and every call when the extension lacks `network`, opens
+  only after the person confirms a Powermove sheet that names the extension by
+  its id (not its display name) and shows the whole URL. Without `network`, a
+  link is the one way data could leave, so it always asks.
+- After the person declines, calls that would ask reject with
+  `code: 'resource_limit'` for 30 seconds.
 
 ```json
 "permissions": ["network"],
@@ -163,7 +174,10 @@ itself, so CORS does not apply, but:
 - the file may be at most 512 MiB, must be PNG, JPEG, GIF, WebP, AVIF, BMP,
   MP4, MOV, WebM, MP3, AAC, M4A, WAV, Ogg or FLAC by its contents (not its
   name or `Content-Type`), and must decode. The asset is named after the last
-  path segment with the extension of what the bytes are.
+  path segment with the extension of what the bytes are;
+- a download counts toward the same 2 GiB a minute as `assets.import`, and one
+  that would pass it rejects with `code: 'resource_limit'` before it is
+  imported.
 
 The desktop app provides `importUrl`; `powermove serve` does not.
 
@@ -216,7 +230,7 @@ flush. Within one flush, `time` and `selection` deliver only their latest value,
 repeated `project:changed` of the same `kind` arrive once, and other events keep
 their order. The synchronous reads return the state as of the latest delivery.
 
-Each extension is limited to 200 registrations, 2,000 live callback handles, 50 open panel views, 200 RPC messages/s, 1 MiB per RPC payload (a file passed to `assets.import` is not counted; imports are capped at 512 MiB per file and 2 GiB a minute), 256 KiB of storage with keys at most 128 characters, and 50 logs/s. These limits apply to messages from the extension; data the host sends, such as project snapshots, is not limited by them.
+Each extension is limited to 200 registrations, 2,000 live callback handles, 50 open panel views, 200 RPC messages/s, 1 MiB per RPC payload (a file passed to `assets.import` is not counted; imports, including `assets.importUrl` downloads, are capped at 512 MiB per file and 2 GiB a minute), 256 KiB of storage with keys at most 128 characters, and 50 logs/s. These limits apply to messages from the extension; data the host sends, such as project snapshots, is not limited by them.
 
 ### Trusted-only APIs and publishing
 
@@ -405,7 +419,11 @@ api.events.on('project:changed', async () => {
 
 Sandboxed panels render their `component` or `build` content in a separate
 view iframe. `panels.header`, `panels.moveSlot`, and `panels.library.render`
-are unavailable there; the host owns the panel chrome. Declare `network`,
+are unavailable there; the host owns the panel chrome. A toast's `action` and
+`onDismiss` run in the document that raised it, so a toast with either, or
+with a `key`, closes when that document does (its panel closes or reloads, or
+the extension is turned off). A `key` replaces only the extension's own
+toasts. Declare `network`,
 `clipboard`, `assets`, or `project:write` (with `apiVersion: 3`)
 when using their corresponding capabilities. `full-access` installs run with the
 in-realm API after the person installing the extension accepts the trust dialog.

@@ -22,7 +22,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { lookup as dnsLookup } from 'node:dns/promises';
-import { mkdtemp, open, rm, type FileHandle } from 'node:fs/promises';
+import { access, mkdtemp, open, rm, type FileHandle } from 'node:fs/promises';
 import { request as httpsRequest } from 'node:https';
 import { isIP, type LookupFunction } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -104,13 +104,14 @@ export const systemResolve: Resolve = (hostname) => dnsLookup(hostname, { all: t
 export async function pinAddress(url: URL, resolve: Resolve): Promise<{ address: string; family: 4 | 6 }> {
   const host = url.hostname.replace(/^\[(.*)\]$/, '$1');
   const literal = isIP(host);
+  // One message for a name that does not resolve and one that resolves privately: telling them apart would map the intranet's DNS for the extension.
+  const unreachable = (): RemoteMediaError => new RemoteMediaError(`${url.hostname} is not reachable on the public internet`);
   let answers: ReadonlyArray<{ address: string; family: number }>;
   if (literal) answers = [{ address: host, family: literal }];
   else {
-    try { answers = await resolve(host); } catch { throw new RemoteMediaError(`Could not find ${url.hostname}`); }
+    try { answers = await resolve(host); } catch { throw unreachable(); }
   }
-  if (!answers.length) throw new RemoteMediaError(`Could not find ${url.hostname}`);
-  if (answers.some(({ address }) => !isPublicAddress(address))) throw new RemoteMediaError(`${url.hostname} is not a public internet address`);
+  if (!answers.length || answers.some(({ address }) => !isPublicAddress(address))) throw unreachable();
   const { address } = answers[0]!;
   return { address, family: isIP(address) as 4 | 6 };
 }
@@ -318,8 +319,20 @@ export class RemoteMediaService {
     await Promise.all([...this.held].filter(([, entry]) => entry.owner === owner).map(([token]) => this.release(owner, token)));
   }
 
-  private dir(): Promise<string> {
-    return this.directory ??= mkdtemp(path.join(this.options.directory ?? tmpdir(), 'powermove-remote-media-'));
+  /* Made once, but never trusted forever: a failed mkdtemp is not cached, and
+     a folder macOS purged from $TMPDIR since is made again. */
+  private async dir(): Promise<string> {
+    for (let attempt = 0; ; attempt++) {
+      const pending = this.directory ??= mkdtemp(path.join(this.options.directory ?? tmpdir(), 'powermove-remote-media-'));
+      try {
+        const directory = await pending;
+        await access(directory);
+        return directory;
+      } catch (error) {
+        if (this.directory === pending) this.directory = null;
+        if (attempt > 0 || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
   }
 }
 

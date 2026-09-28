@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { createServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -94,6 +94,13 @@ describe('address pinning', () => {
     expect(resolve.calls).not.toContain('127.0.0.1');
     expect(resolve.calls.filter((name) => /^[\d.[\]:]+$/.test(name))).toEqual([]);
   });
+
+  it('says the same thing for a name that does not resolve and one that resolves privately', async () => {
+    const resolve = dns({ 'wiki.corp.example': ['10.1.2.3'], 'empty.corp.example': [] });
+    const reasons = await Promise.all(['missing.corp.example', 'wiki.corp.example', 'empty.corp.example'].map((host) =>
+      pinAddress(new URL(`https://${host}/a.png`), resolve).then(() => 'resolved', (error: Error) => error.message.replace(host, '<host>'))));
+    expect(reasons).toEqual(Array(3).fill('<host> is not reachable on the public internet'));
+  });
 });
 
 describe('remote media download', () => {
@@ -119,7 +126,7 @@ describe('remote media download', () => {
     // A redirect back to the same name is resolved and checked again.
     const hop = dns({ 'rebind.example': [[PUBLIC], ['10.0.0.8']] });
     const redirected = server({ 'https://rebind.example/a': { status: 302, headers: { location: '/b' } }, 'https://rebind.example/b': { body: [PNG] } });
-    await expect(downloadRemoteMedia('https://rebind.example/a', path.join(dir, 'hop'), { resolve: hop, transport: redirected })).rejects.toThrow('not a public');
+    await expect(downloadRemoteMedia('https://rebind.example/a', path.join(dir, 'hop'), { resolve: hop, transport: redirected })).rejects.toThrow('not reachable on the public internet');
     expect(hop.calls).toEqual(['rebind.example', 'rebind.example']);
     expect(redirected.requests.map((request) => request.url)).toEqual(['https://rebind.example/a']);
   });
@@ -135,8 +142,8 @@ describe('remote media download', () => {
     await expect(downloadRemoteMedia('https://cdn.example/0', path.join(dir, 'six'), { resolve, transport: six })).rejects.toThrow('More than 5 redirects');
     expect(six.requests).toHaveLength(6);
 
-    for (const [location, message] of [['http://cdn.example/x', 'https URL'], ['file:///etc/passwd', 'https URL'], ['https://intranet.example/x', 'not a public'],
-      ['https://127.0.0.1/x', 'not a public'], ['https://[fd00::1]/x', 'not a public'], ['https://cdn.example:8443/x', 'default https port'], ['https://user:pw@cdn.example/x', 'https URL']] as const) {
+    for (const [location, message] of [['http://cdn.example/x', 'https URL'], ['file:///etc/passwd', 'https URL'], ['https://intranet.example/x', 'not reachable on the public internet'],
+      ['https://127.0.0.1/x', 'not reachable on the public internet'], ['https://[fd00::1]/x', 'not reachable on the public internet'], ['https://cdn.example:8443/x', 'default https port'], ['https://user:pw@cdn.example/x', 'https URL']] as const) {
       const transport = server({ 'https://cdn.example/start': { status: 301, headers: { location } } });
       await expect(downloadRemoteMedia('https://cdn.example/start', path.join(dir, `hop-${transport.requests.length}-${Math.random()}`), { resolve, transport }), location).rejects.toThrow(message);
       expect(transport.requests).toHaveLength(1);
@@ -287,9 +294,25 @@ describe('remote media IPC', () => {
     expect((await stat(path.join(dir, folder!))).isDirectory()).toBe(true);
   });
 
-  it('frees its download slot when it cannot even create the file', async () => {
-    const service = new RemoteMediaService({ directory: path.join(await scratch(), 'missing', 'deeper'), resolve: dns({ 'cdn.example': [PUBLIC] }), transport: server({}) });
+  it('frees its download slot when it cannot even create the file, and tries the folder again next time', async () => {
+    const parent = path.join(await scratch(), 'missing', 'deeper');
+    const service = new RemoteMediaService({ directory: parent, resolve: dns({ 'cdn.example': [PUBLIC] }), transport: server({ 'https://cdn.example/a.png': { body: [PNG] } }) });
     for (let attempt = 0; attempt < 6; attempt++) await expect(service.fetch(1, 'https://cdn.example/a.png')).rejects.toThrow('ENOENT');
+    // A failed mkdtemp is not remembered: once the parent exists, downloads work without a relaunch.
+    await mkdir(parent, { recursive: true });
+    await expect(service.fetch(1, 'https://cdn.example/a.png')).resolves.toMatchObject({ size: PNG.byteLength });
+  });
+
+  it('makes its folder again when the system purged it from the temporary directory', async () => {
+    const dir = await scratch();
+    const service = new RemoteMediaService({ directory: dir, resolve: dns({ 'cdn.example': [PUBLIC] }), transport: server({ 'https://cdn.example/a.png': { body: [PNG] } }) });
+    const first = await service.fetch(1, 'https://cdn.example/a.png');
+    await service.release(1, first.token);
+    const [folder] = await readdir(dir);
+    await rm(path.join(dir, folder!), { recursive: true });
+    const second = await service.fetch(1, 'https://cdn.example/a.png');
+    expect(await service.read(1, second.token, 0, 8)).toEqual(PNG.subarray(0, 8));
+    expect(await readdir(dir)).toHaveLength(1);
   });
 
   it('refuses untrusted senders before touching the network', async () => {
