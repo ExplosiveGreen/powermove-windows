@@ -56,6 +56,7 @@ import { registerContextMenuIpc } from './context-menu';
 import { registerCloudMediaIpc } from './cloud-media';
 import { registerConfirmIpc } from './native-confirm';
 import { registerClipboardIpc } from './clipboard';
+import { userInput } from './user-input';
 import { MediaProxyService, playbackConverter, previewConverter, imageSequenceConverter, stillImageConverter, registerMediaProxyIpc } from './media-proxy';
 import { registerNativeEditIpc } from './native-edit';
 import { installMenu, installRendererMenuShortcutRouting } from './menu';
@@ -485,6 +486,7 @@ function createWindow(options: EditorWindowOptions = {}): BrowserWindow {
   window.on('focus', () => editors.touch(window));
   window.webContents.once('did-finish-load', drainPendingOpenFiles);
   installRendererMenuShortcutRouting(window.webContents);
+  userInput.track(window.webContents, forget => window.on('blur', forget));
   let sandboxFocus = { focused: false, field: false, extensionId: '' };
   const onSandboxFocus = (event: Electron.IpcMainEvent, value: unknown): void => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || !value || typeof value !== 'object') return;

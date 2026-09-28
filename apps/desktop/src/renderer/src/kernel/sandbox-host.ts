@@ -12,7 +12,7 @@ import { plain, projectSnapshots, sandboxStats } from './project-snapshots';
 import { sandboxBundleUrl, sandboxDocumentUrl, sandboxOrigin } from '../../../shared/sandbox-origin';
 import { watchSandbox } from './sandbox-watchdog';
 import { importedFile, menuEntriesSchema, paletteEntriesSchema, parseHostEvent, parseInvoke, parseRegistration } from './sandbox-schemas';
-import { sandboxOpenExternal } from './sandbox-links';
+import { sandboxOpenExternal, userActivated } from './sandbox-links';
 import { sandboxImportUrl } from './sandbox-import-url';
 
 /** Kernel events that can change a document's SandboxState. */
@@ -205,12 +205,14 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     imports.push({ at: now, bytes });
   };
   /* ui.copy: the kernel's manifest record grants it (never the document's
-     URL), the host itself sees the calling view focused, and it writes once
-     a second at most. The runtime has no focus to prove, so it never copies. */
+     URL), the host itself sees the calling view focused right after a real
+     click or key press, and it writes once a second at most. The runtime has
+     no focus to prove, so it never copies. Main checks focus and input again. */
   let copiedAt = -Infinity;
   const copy = async (text: string, view: ViewLink | null): Promise<void> => {
     if (!permissions.includes('clipboard')) denied('ui.copy requires clipboard permission', 'clipboard');
     if (!view?.focused?.()) denied('ui.copy works only from a panel that has focus');
+    if (!userActivated()) denied('ui.copy works only right after a click or key press in the panel');
     const write = bridge()?.clipboardWriteText;
     if (!write) throw new Error('The clipboard is unavailable');
     const now = Date.now();

@@ -113,9 +113,12 @@ sandbox.
   URLs and bundled `data:` fonts load, since neither leaves the machine.
 - `clipboard` allows `ui.copy(text)`, which writes plain text (up to 500,000
   characters, at most once a second) from one of the extension's panels while
-  that panel has focus. No permission lets an extension read the clipboard.
-  Treat it as a disclosure rather than a hard boundary: a focused panel can
-  also copy with `document.execCommand('copy')`.
+  that panel has focus and within 5 seconds of a click or key press (a modifier
+  key alone does not count, and neither does focus coming back to the window,
+  as after Command-Tab). The runtime never copies. No permission lets an
+  extension read the clipboard. `document.execCommand('copy')` in a panel is
+  no way around it: Chromium lets it write only right after a click or key
+  press in that panel, the same kind of gate.
 - `assets` allows picking, importing, and reading asset files. `assets.importUrl`
   also needs `network`.
 - `project:write` allows project mutation through `apply`, `undo`, `redo`, `select`, time and transport controls. `commands.run` can call an extension's own commands and, with this permission, the named legacy editing commands. It cannot call another extension's commands or File, app, export, settings, or mods commands.

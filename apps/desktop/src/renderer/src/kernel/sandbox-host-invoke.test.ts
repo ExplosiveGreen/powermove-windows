@@ -137,9 +137,16 @@ it('dismisses a panel’s toast buttons when that panel’s document goes, and l
 
 /* ui.copy (report item 11): the manifest record's clipboard permission, a
    view the host sees focused, once a second, through main's write channel. */
+/** The app document's transient user activation, which only the browser sets. */
+function activation(isActive: boolean): void {
+  Object.defineProperty(navigator, 'userActivation', { configurable: true, value: { isActive, hasBeenActive: isActive } });
+}
+afterEach(() => { delete (navigator as { userActivation?: unknown }).userActivation; });
+
 async function copier(permissions: string[]) {
   const clipboardWriteText = vi.fn(async (_text: string) => {});
   installBridgeForTests({ clipboardWriteText } as unknown as PowermoveBridge);
+  activation(true);
   const harness = await runtime(permissions);
   const view = await harness.openView();
   view.frame.tabIndex = 0;
@@ -187,4 +194,15 @@ it('refuses ui.copy without the permission, from the runtime, and from an unfocu
   view.rpc.notify('pointer', { button: 0, x: 1, y: 1 });
   await expect(view.rpc.call('invoke', 'ui', 'copy', ['x'])).rejects.toMatchObject({ message: expect.stringContaining('focus') });
   expect(clipboardWriteText).not.toHaveBeenCalled();
+});
+
+it('refuses ui.copy from a focused panel nobody just clicked or typed in (focus restored by Command-Tab)', async () => {
+  const { view, clipboardWriteText } = await copier(['clipboard']);
+  view.frame.focus();
+  activation(false);
+  await expect(view.rpc.call('invoke', 'ui', 'copy', ['x'])).rejects.toMatchObject({ name: 'PermissionError', message: expect.stringContaining('click or key press') });
+  expect(clipboardWriteText).not.toHaveBeenCalled();
+  activation(true);
+  await view.rpc.call('invoke', 'ui', 'copy', ['x']);
+  expect(clipboardWriteText).toHaveBeenCalledWith('x');
 });

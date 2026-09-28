@@ -18,6 +18,15 @@ import type { UIAPI } from './api';
 
 export const OPEN_EXTERNAL_INTERVAL_MS = 2_000;
 
+/**
+ * The app document's transient user activation: a real click or key press in
+ * it, or in any frame inside it (a sandboxed view's included), within the
+ * last 5 s. The browser keeps it; nothing a sandbox sends can set it.
+ */
+export function userActivated(): boolean {
+  return (globalThis.navigator as { userActivation?: { isActive?: boolean } } | undefined)?.userActivation?.isActive === true;
+}
+
 function limited(message: string): Error {
   return Object.assign(new Error(message), { name: 'PermissionError', code: 'resource_limit' });
 }
