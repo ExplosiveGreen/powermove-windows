@@ -21,6 +21,7 @@ import {
   parseAgentExtensionChanges,
   type CodexRunOptions
 } from './runner';
+import { PROJECT_NETWORK_CONFIG } from './adapter';
 import { isolatedCodexHome } from './isolation';
 import { agentWorkspaceRoot, sessionPathFor } from './workspace';
 
@@ -284,6 +285,23 @@ describe('CodexRunner lifecycle', () => {
     expect(result.ok).toBe(true);
     expect(launchedHome).toBe(isolatedCodexHome(userData));
   });
+
+  it.each([['project', true], ['editor', false]] as const)(
+    'passes shell network to autonomous %s access: %s',
+    async (access, network) => {
+      const userData = await temporaryDirectory(`runner-network-${access}`);
+      let launchedArgs: readonly string[] = [];
+      const options = fakeOptions(userData, {});
+      options.spawnProcess = (command, args, spawnOptions) => {
+        launchedArgs = args;
+        return spawn(command, args, spawnOptions);
+      };
+      const result = await new CodexRunner().run(request({ id: `runner-network-${access}-1234`, access }), options);
+      expect(result.ok).toBe(true);
+      expect(launchedArgs.includes(PROJECT_NETWORK_CONFIG)).toBe(network);
+      expect(launchedArgs).toContain('--approve-for-me');
+    }
+  );
 
   it('forwards structured traces from editor-mode stdout', async () => {
     const trace: unknown[] = [];

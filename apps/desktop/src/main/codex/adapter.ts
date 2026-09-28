@@ -46,6 +46,9 @@ export interface AutonomousArgvOptions extends CommonArgvOptions {
   sessionId: string | null;
   instructions: string;
   nativeTools?: NativeMcpServerConfig;
+  /** Outbound network for sandboxed shell commands. Only the Project access
+   * choice grants it; Edit project runs keep project authority without it. */
+  shellNetwork?: boolean;
 }
 
 function appendModelOptions(
@@ -106,9 +109,10 @@ export function buildAutonomousArgv(options: AutonomousArgvOptions): string[] {
     // codex ≥ 0.147 rejects an explicit --sandbox alongside --approve-for-me;
     // --approve-for-me itself routes approvals through the workspace-write
     // sandbox (the Swift shell's flag pair predates that change).
-    // Shell commands get outbound network so research-and-download tasks can
-    // finish; writes stay confined to the workspace and --add-dir roots.
-    argv.push('--approve-for-me', '--config', PROJECT_NETWORK_CONFIG);
+    argv.push('--approve-for-me');
+    // Research-and-download tasks need shell network; writes stay confined to
+    // the workspace and --add-dir roots either way.
+    if (options.shellNetwork) argv.push('--config', PROJECT_NETWORK_CONFIG);
   }
   argv.push('--add-dir', options.extensionsDir);
 
