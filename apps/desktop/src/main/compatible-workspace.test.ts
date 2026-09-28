@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import { mkdtemp, readFile, readdir, realpath, rm, symlink, access, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, realpath, rm, stat, symlink, access, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { COMPATIBLE_WORKSPACE_TOOLS, CompatibleWorkspace, runWorkspaceCommand } from './compatible-workspace';
@@ -25,6 +25,19 @@ it('creates, reads and lists files and rejects path and symbolic-link escapes', 
   await expect(ws.call('write_file', { path: '../escaped.txt', text: 'no' }, signal())).rejects.toThrow('outside');
   await symlink(path.dirname(ws.layout.root), path.join(ws.layout.root, 'escape'));
   await expect(ws.call('write_file', { path: 'escape/escaped.txt', text: 'no' }, signal())).rejects.toThrow('symbolic link');
+});
+
+it.runIf(process.platform === 'darwin')('writes files and compiles where a planted dangling link cannot lead outside', async () => {
+  const ws = await workspace();
+  const outside = await mkdtemp(path.join(os.tmpdir(), 'pm-planted-')); directories.push(outside);
+  await symlink(path.join(outside, 'created.txt'), path.join(ws.layout.root, 'dangling.txt'));
+  await expect(ws.call('write_file', { path: 'dangling.txt', text: 'escaped' }, signal())).rejects.toThrow();
+  await symlink(outside, path.join(ws.layout.runDirectory, '.compiled'));
+  const dir = path.join(ws.layout.stagingDirectory, 'linked-out');
+  await ws.call('write_file', { path: path.join(dir, 'manifest.json'), text: JSON.stringify({ id: 'linked-out', name: 'Linked', version: '1.0.0', apiVersion: 1, contributes: ['effects'] }) }, signal());
+  await ws.call('write_file', { path: path.join(dir, 'index.ts'), text: 'export default function activate() {}' }, signal());
+  expect(JSON.parse(((await ws.call('compile_extension', { id: 'linked-out' }, signal()))[0] as any).text)).toMatchObject({ ok: true });
+  expect(await readdir(outside)).toEqual([]);
 });
 
 it('reports real compile errors before publishing and exports created artifacts', async () => {
@@ -83,6 +96,23 @@ it.runIf(process.platform === 'darwin')('keeps Project temp files, heredocs and 
   expect((await runWorkspaceCommand(ws.layout.root, 'project', 'mktemp /private/tmp/pm-escape.XXXXXX', 5000, signal())).exitCode).not.toBe(0);
 });
 
+it.runIf(process.platform === 'darwin')('never writes tool shims or scratch folders through links a command planted', async () => {
+  const ws = await workspace();
+  const outside = await mkdtemp(path.join(os.tmpdir(), 'pm-planted-')); directories.push(outside);
+  const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+  const target = path.join(outside, 'zshrc');
+  await writeFile(target, 'keep', { mode: 0o600 });
+  const plant = (script: string) => runWorkspaceCommand(ws.layout.root, 'project', script, 5000, signal());
+  expect((await plant(`mkdir -p .powermove/bin && ln -sf ${quote(target)} .powermove/bin/mktemp`)).exitCode).toBe(0);
+  expect((await plant('mktemp')).exitCode).toBe(0);
+  expect(await readFile(target, 'utf8')).toBe('keep');
+  expect((await stat(target)).mode & 0o777).toBe(0o600);
+  // A linked bin/ or scratch folder must not let main create files or folders elsewhere.
+  expect((await plant(`rm -rf .powermove/bin .powermove/tmp && ln -s ${quote(outside)} .powermove/bin && ln -s ${quote(path.join(outside, 'scratch'))} .powermove/tmp`)).exitCode).toBe(0);
+  await plant('true');
+  expect(await readdir(outside)).toEqual(['zshrc']);
+});
+
 it.runIf(process.platform === 'darwin')('gives commands the login PATH without the rest of the host environment', async () => {
   const ws = await workspace();
   process.env.PM_TEST_PROVIDER_TOKEN = 'must-not-leak';
@@ -91,7 +121,7 @@ it.runIf(process.platform === 'darwin')('gives commands the login PATH without t
     expect(result.output).not.toContain('must-not-leak');
     const PATH = /^PATH=(.*)$/m.exec(result.output)?.[1]?.split(':') ?? [];
     // ~/.zshenv may still prepend its own entries inside the shell.
-    const bin = path.join(await realpath(ws.layout.root), '.powermove', 'bin');
+    const bin = path.join(path.dirname(path.dirname(await realpath(ws.layout.root))), 'Agent Tools', 'bin');
     expect(PATH).toEqual(expect.arrayContaining([bin, '/usr/bin', '/bin']));
     expect(PATH.indexOf(bin)).toBeLessThan(PATH.indexOf('/usr/bin'));
     expect(PATH.every(entry => path.isAbsolute(entry))).toBe(true);
@@ -126,21 +156,46 @@ it.runIf(process.platform === 'darwin')('keeps outbound network in Project acces
   expect(Number(result.output)).toBeGreaterThan(0);
 }, 40_000);
 
-it.runIf(process.platform === 'darwin')('stops what a command leaves running and refuses new sessions', async () => {
+it.runIf(process.platform === 'darwin')('allows new sessions and still stops what a command leaves running in them', async () => {
   const ws = await workspace();
   const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
   const leftover = await runWorkspaceCommand(ws.layout.root, 'project', 'sleep 30 >/dev/null 2>&1 & printf %s $!', 5000, signal());
   await expect.poll(() => alive(Number(leftover.output))).toBe(false);
   // Piped, so perl is not already a session leader (which would refuse anyway).
-  const setsid = await runWorkspaceCommand(ws.layout.root, 'project', `perl -MPOSIX -e 'POSIX::setsid() < 0 and die "setsid: $!\\n"; print "escaped"' 2>&1 | cat`, 5000, signal());
-  expect(setsid.output).toBe('setsid: Operation not permitted\n');
-  // posix_spawn can still start a new session; its live parent leads to it.
+  const setsid = await runWorkspaceCommand(ws.layout.root, 'project', `perl -MPOSIX -e 'POSIX::setsid() < 0 and die "setsid: $!\\n"; print "new session"' 2>&1 | cat`, 5000, signal());
+  expect(setsid.output).toBe('new session');
+  // As Python's start_new_session does: the child starts a session, its parent exits.
+  const session = `perl -MPOSIX -e 'if (fork) { select(undef, undef, undef, 0.05) until -s "session.pid"; exit } POSIX::setsid() < 0 and die; open my $f, ">", "session.pid"; print $f $$; close $f; sleep 30'`;
+  expect((await runWorkspaceCommand(ws.layout.root, 'project', session, 5000, signal())).exitCode).toBe(0);
+  const leader = Number(await readFile(path.join(ws.layout.root, 'session.pid'), 'utf8'));
+  expect(leader).toBeGreaterThan(1);
+  await expect.poll(() => alive(leader)).toBe(false);
+  // A posix_spawn new session with a live parent is found through that parent.
   const script = `const c = require('node:child_process').spawn('/bin/sleep', ['30'], { detached: true, stdio: 'ignore' }); console.log(c.pid); setInterval(() => {}, 1000);`;
   const node = JSON.stringify(process.execPath);
   const timedOut = await runWorkspaceCommand(ws.layout.root, 'project', `${node} -e ${JSON.stringify(script)}`, 1500, signal()).catch((error: Error) => error.message);
   const escaped = Number(/(\d+)/.exec(String(timedOut))?.[1]);
   expect(escaped).toBeGreaterThan(1);
   await expect.poll(() => alive(escaped)).toBe(false);
+});
+
+it.runIf(process.platform === 'darwin')('stops detached children after their parent exits, at once or after they moved away', async () => {
+  const ws = await workspace();
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+  const node = (script: string) => `${quote(process.execPath)} -e ${quote(script)}`;
+  // The parent exits immediately, so no parent link leads to the child.
+  const late = `require('node:child_process').spawn('/bin/sh', ['-c', 'echo $$ > late.pid; sleep 1; echo late > late.txt'], { detached: true, stdio: 'ignore' }).unref()`;
+  expect((await runWorkspaceCommand(ws.layout.root, 'project', node(late), 5000, signal())).exitCode).toBe(0);
+  // This one leaves the workspace folder while its parent still lives.
+  const moved = `const c = require('node:child_process').spawn('/bin/sleep', ['30'], { detached: true, stdio: 'ignore', cwd: '/' }); c.unref(); console.log(c.pid); setTimeout(() => {}, 800)`;
+  const escaped = Number((await runWorkspaceCommand(ws.layout.root, 'project', node(moved), 5000, signal())).output);
+  expect(escaped).toBeGreaterThan(1);
+  await expect.poll(() => alive(escaped)).toBe(false);
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  await expect(access(path.join(ws.layout.root, 'late.txt'))).rejects.toThrow();
+  const latePid = Number(await readFile(path.join(ws.layout.root, 'late.pid'), 'utf8').catch(() => '0'));
+  if (latePid) expect(alive(latePid)).toBe(false);
 });
 
 it('allows up to ten minutes per command and keeps the thirty second default', async () => {

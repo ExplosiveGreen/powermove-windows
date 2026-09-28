@@ -1,14 +1,16 @@
 import { spawn } from 'node:child_process';
-import { chmod, mkdir, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { AgentToolContent, CodexRunResult } from '../shared/ipc';
 import { EXTENSION_ID, parseManifest } from '../shared/extensions';
 import { compileExtension } from './extensions/compiler';
 import { collectArtifacts, mimeTypeForPath } from './codex/artifacts';
-import { publishExtensionChanges } from './codex/change-history';
+import { publishExtensionChanges, withStageSnapshot } from './codex/change-history';
 import { loginShellPath } from './login-shell-path';
-import { killProcessFamily } from './process-family';
+import { killStrays, ProcessFamily } from './process-family';
 import { agentResultSchema } from './codex/instructions';
 import type { AgentWorkspace } from './codex/workspace';
 import type { PowermoveAgentToolSpec } from './agent-tools/spec';
@@ -30,11 +32,12 @@ export const COMPATIBLE_WORKSPACE_TOOLS: readonly PowermoveAgentToolSpec[] = [
 export class CompatibleWorkspace {
   private readonly commands = new Set<WorkspaceCommand>();
   private readonly jobs = new Map<string, WorkspaceCommand>();
+  private readonly startedAt = Date.now();
 
   constructor(readonly layout: AgentWorkspace, readonly access: 'project' | 'computer', readonly context: 'app' | 'project' = 'project') {}
 
-  private async start(command: string, timeoutMs: number, signal: AbortSignal, keepTail: boolean): Promise<WorkspaceCommand> {
-    const started = await startWorkspaceCommand(this.layout.root, this.access, command, { timeoutMs, signal, keepTail });
+  private async start(command: string, timeoutMs: number, signal: AbortSignal, keepTail: boolean, input?: string): Promise<WorkspaceCommand> {
+    const started = await startWorkspaceCommand(this.layout.root, this.access, command, { timeoutMs, signal, keepTail, input });
     this.commands.add(started);
     void started.done.finally(() => this.commands.delete(started)).catch(() => undefined);
     return started;
@@ -42,11 +45,12 @@ export class CompatibleWorkspace {
 
   /**
    * Stop every command and background job of this run, with everything they
-   * started. Runs before complete_task validates, so nothing can change the
-   * staged files between the compile check and publishing, and at run end.
+   * started, then anything that escaped a finished command. Runs before
+   * complete_task validates and at run end.
    */
   async stopCommands(): Promise<void> {
     await Promise.all([...this.commands].map(command => command.stop()));
+    await killStrays(await realpath(this.layout.root), this.startedAt);
   }
 
   /** Resolve existing ancestors too, so symlinks cannot redirect file writes. */
@@ -97,8 +101,17 @@ export class CompatibleWorkspace {
     if (name === 'write_file') {
       if (typeof args.text !== 'string' || args.text.length > 1000000) throw new Error('Provide text no larger than 1,000,000 characters.');
       const file = await this.resolve(args.path);
-      await mkdir(path.dirname(file), { recursive: true });
-      await writeFile(file, args.text, 'utf8');
+      if (this.access === 'project' && process.platform === 'darwin') {
+        // The sandbox writes it: a link planted after, or dangling past, the
+        // check above still cannot lead outside the workspace.
+        const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+        const written = await settleCommand(await this.start(`/bin/mkdir -p -- ${quote(path.dirname(file))} && /bin/cat >| ${quote(file)}`,
+          30000, signal, false, args.text), signal);
+        if (written.exitCode !== 0) throw new Error(`Could not write ${file}: ${written.output.trim()}`);
+      } else {
+        await mkdir(path.dirname(file), { recursive: true });
+        await writeFile(file, args.text, 'utf8');
+      }
       return text({ path: file, bytes: Buffer.byteLength(args.text) });
     }
     if (name === 'run_command') {
@@ -133,13 +146,18 @@ export class CompatibleWorkspace {
     throw new Error(`Unknown workspace tool: ${name}`);
   }
 
-  private async compile(id: unknown) {
+  private async compile(id: unknown, stagingDirectory = this.layout.stagingDirectory) {
     if (typeof id !== 'string' || !EXTENSION_ID.test(id)) throw new Error('Provide a valid extension id.');
-    const dir = path.join(this.layout.stagingDirectory, id);
+    const dir = path.join(stagingDirectory, id);
     const manifest = parseManifest(JSON.parse(await readFile(path.join(dir, 'manifest.json'), 'utf8')));
     if (!manifest.ok) throw new Error(manifest.error);
     if (manifest.manifest.id !== id) throw new Error('The manifest id must match its folder.');
-    return compileExtension({ dir, entry: manifest.manifest.entry || 'index.ts', outDir: path.join(this.layout.runDirectory, '.compiled') });
+    // Only the result matters; the bundle goes where commands cannot plant links.
+    const outDir = await mkdtemp(path.join(os.tmpdir(), 'powermove-compile-'));
+    try {
+      const compiled = await compileExtension({ dir, entry: manifest.manifest.entry || 'index.ts', outDir });
+      return compiled.ok ? { ok: true as const, hash: compiled.hash } : compiled;
+    } finally { await rm(outDir, { recursive: true, force: true }); }
   }
 
   async finish(value: Record<string, unknown>, signal: AbortSignal): Promise<CodexRunResult> {
@@ -159,17 +177,20 @@ export class CompatibleWorkspace {
         || !['created', 'updated', 'removed'].includes(item.action)) throw new Error('Invalid extension change.');
       return { id: item.id, action: item.action as 'created' | 'updated' | 'removed', summary: typeof item.summary === 'string' ? item.summary : '' };
     });
-    for (const change of extensions) {
+    // One private copy is compiled and published; later stage writes cannot ship.
+    return withStageSnapshot(this.layout, async snapshot => {
+      for (const change of extensions) {
+        signal.throwIfAborted();
+        if (change.action === 'removed') continue;
+        const compiled = await this.compile(change.id, snapshot.stagingDirectory);
+        if (!compiled.ok) throw new Error(`${change.id} failed compilation: ${compiled.error}`);
+      }
+      const artifacts = await collectArtifacts(this.layout.runDirectory, this.layout.runId, value.artifacts as unknown[]);
       signal.throwIfAborted();
-      if (change.action === 'removed') continue;
-      const compiled = await this.compile(change.id);
-      if (!compiled.ok) throw new Error(`${change.id} failed compilation: ${compiled.error}`);
-    }
-    const artifacts = await collectArtifacts(this.layout.runDirectory, this.layout.runId, value.artifacts);
-    signal.throwIfAborted();
-    const changeSet = await publishExtensionChanges(this.layout, extensions);
-    return { ok: true, access: this.access, text: JSON.stringify({ ...value, extensions, artifacts, projectId: this.layout.projectId }), extensions,
-      ...(changeSet ? { extensionChangeSetId: changeSet.id } : {}) };
+      const changeSet = await publishExtensionChanges(snapshot, extensions);
+      return { ok: true as const, access: this.access, text: JSON.stringify({ ...value, extensions, artifacts, projectId: this.layout.projectId }), extensions,
+        ...(changeSet ? { extensionChangeSetId: changeSet.id } : {}) };
+    });
   }
 }
 
@@ -221,20 +242,41 @@ exec /usr/bin/mktemp "\${flags[@]}" -- "\${resolved[@]}"
 const PROJECT_CACHES = [['BUN_INSTALL_CACHE_DIR', 'bun'], ['npm_config_cache', 'npm'], ['XDG_CACHE_HOME', 'xdg'],
   ['PIP_CACHE_DIR', 'pip'], ['CLANG_MODULE_CACHE_PATH', 'clang']] as const;
 
-/** Scratch and tool locations inside the app-owned workspace. */
+const shimWrites = new Map<string, Promise<string>>();
+
+/**
+ * Tool shims live beside Agent Workspaces, never inside one: Project commands
+ * cannot rewrite them, and main never writes where commands can, since a
+ * planted link would redirect the write. Written once per launch; the rename
+ * replaces whatever is at the name instead of following it.
+ */
+function toolShims(root: string): Promise<string> {
+  const bin = path.join(path.dirname(path.dirname(root)), 'Agent Tools', 'bin');
+  let written = shimWrites.get(bin);
+  if (!written) {
+    written = (async () => {
+      await mkdir(bin, { recursive: true });
+      const temporary = path.join(bin, `.mktemp-${randomUUID()}`);
+      try {
+        const file = await open(temporary, 'wx', 0o755);
+        try { await file.writeFile(MKTEMP_SHIM); await file.chmod(0o755); } finally { await file.close(); }
+        await rename(temporary, path.join(bin, 'mktemp'));
+      } finally { await rm(temporary, { force: true }); }
+      return bin;
+    })();
+    shimWrites.set(bin, written);
+    written.catch(() => shimWrites.delete(bin));
+  }
+  return written;
+}
+
+/** Scratch inside the workspace and tool shims beside it. */
 async function commandEnvironment(root: string, access: 'project' | 'computer'): Promise<NodeJS.ProcessEnv> {
   const scratch = path.join(root, '.powermove', 'tmp');
-  const bin = path.join(root, '.powermove', 'bin');
-  await mkdir(scratch, { recursive: true });
-  const shims = process.platform === 'darwin';
-  if (shims) {
-    await mkdir(bin, { recursive: true });
-    await writeFile(path.join(bin, 'mktemp'), MKTEMP_SHIM, { mode: 0o755 });
-    await chmod(path.join(bin, 'mktemp'), 0o755);
-  }
+  const bin = process.platform === 'darwin' ? await toolShims(root) : null;
   const PATH = await loginShellPath();
   // Keep account keys and provider configuration out of subprocess environments.
-  const env: NodeJS.ProcessEnv = { PATH: shims ? `${bin}:${PATH}` : PATH, HOME: process.env.HOME, LANG: 'en_US.UTF-8',
+  const env: NodeJS.ProcessEnv = { PATH: bin ? `${bin}:${PATH}` : PATH, HOME: process.env.HOME, LANG: 'en_US.UTF-8',
     TMPDIR: scratch, TMP: scratch, TEMP: scratch, TMPPREFIX: path.join(scratch, 'zsh') };
   if (access === 'project') for (const [name, tool] of PROJECT_CACHES) env[name] = path.join(root, '.powermove', 'cache', tool);
   return env;
@@ -252,26 +294,34 @@ export interface WorkspaceCommand {
 }
 
 export async function startWorkspaceCommand(root: string, access: 'project' | 'computer', command: string,
-  options: { timeoutMs: number; signal: AbortSignal; keepTail?: boolean }): Promise<WorkspaceCommand> {
+  options: { timeoutMs: number; signal: AbortSignal; keepTail?: boolean; input?: string }): Promise<WorkspaceCommand> {
   const { timeoutMs, signal } = options;
   signal.throwIfAborted();
-  const env = await commandEnvironment(await realpath(root), access);
+  const real = await realpath(root);
+  const env = await commandEnvironment(real, access);
   // Project access keeps outbound network for research and downloads (the
   // footage chip depends on it); only the filesystem is confined.
   const profile = `(version 1)(allow default)(allow network-outbound)(deny appleevent-send)`
-    // Stay in the process group the host kills; posix_spawn escapes are
-    // found through their parents by killProcessFamily.
-    + '(deny syscall-unix (syscall-number SYS_setsid SYS_setpgid))'
     + `(deny file-write*)(allow file-write* (subpath ${JSON.stringify(await realpath(root))}) (literal "/dev/null") (literal "/dev/tty")`
     // Inherited stdio only; a broad /dev subpath would expose devices.
     + ' (literal "/dev/stdout") (literal "/dev/stderr") (regex #"^/dev/fd/[0-9]+$"))';
   if (access === 'project' && process.platform !== 'darwin') throw new Error('Project command sandbox is only available on macOS.');
-  const child = spawn(access === 'project' ? '/usr/bin/sandbox-exec' : '/bin/zsh',
-    access === 'project' ? ['-p', profile, '/bin/zsh', '-c', command] : ['-c', command],
-    { cwd: root, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const startedAt = Date.now();
+  // The command creates its own scratch folder, so the sandbox, not main,
+  // decides where a planted link may lead.
+  const shell = ['/bin/sh', '-c', 'mkdir -p -- "$TMPDIR" 2>/dev/null; exec /bin/zsh -c "$1"', 'zsh', command];
+  const child = spawn(access === 'project' ? '/usr/bin/sandbox-exec' : shell[0]!,
+    access === 'project' ? ['-p', profile, ...shell] : shell.slice(1),
+    { cwd: root, env, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  // Closed at once, so stdin reads end as they did from /dev/null.
+  child.stdin.on('error', () => undefined); child.stdin.end(options.input);
   let output = '', truncated = false, running = true, exitCode: number | null = null;
   let ending: CommandEnding | null = null, exited = false;
-  const sweep = () => child.pid ? killProcessFamily(child.pid) : Promise.resolve();
+  // Descendants are recorded while it runs, so one that left the group and
+  // lost its parent is still killed with the command.
+  const family = new ProcessFamily(child.pid ?? null, { cwd: real, since: startedAt });
+  if (child.pid) family.watch();
+  const sweep = () => child.pid ? family.kill() : Promise.resolve();
   // A command that already exited on its own is not reported as stopped.
   const end = (reason: CommandEnding) => { if (!exited) ending ??= reason; return sweep(); };
   const onTimeout = () => void end('timeout');
@@ -293,7 +343,7 @@ export async function startWorkspaceCommand(root: string, access: 'project' | 'c
   child.stdout.on('data', append); child.stderr.on('data', append);
   const done = new Promise<WorkspaceCommandResult & { ending: CommandEnding | null }>((resolve, reject) => {
     const cleanup = () => { clearTimeout(timer); signal.removeEventListener('abort', onAbort); running = false; };
-    child.on('error', error => { cleanup(); reject(error); });
+    child.on('error', error => { cleanup(); void sweep(); reject(error); });
     // Nothing a command starts outlives it. A process that escaped the kill
     // may still hold the output pipes, so stop waiting on them shortly after.
     child.on('exit', () => {

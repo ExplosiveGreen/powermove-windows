@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -7,8 +7,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   prepareExtensionStage,
   publishExtensionChanges,
+  recoverAllInterruptedExtensionTransactions,
   recoverInterruptedExtensionTransactions,
-  restoreExtensionChangeSet
+  restoreExtensionChangeSet,
+  withStageSnapshot
 } from './change-history';
 
 const temporaryDirectories: string[] = [];
@@ -181,4 +183,34 @@ it('does not delete untouched later extensions when restoring a snapshot fails',
   await expect(restoreExtensionChangeSet({ liveDirectory: live, historyRoot: prepared.historyRoot, changeSetId: 'run-1' }))
     .rejects.toThrow(/symbolic/i);
   for (const id of ['first', 'later']) expect(await readFile(path.join(live, id, 'index.ts'), 'utf8')).toBe('after');
+});
+
+it('publishes the private copy it checked even when the stage changes afterwards', async () => {
+  const root = await temporaryDirectory();
+  const live = path.join(root, 'extensions');
+  await extension(live, 'checked', 'before');
+  const prepared = await stage(root);
+  await writeFile(path.join(prepared.stagingDirectory, 'checked', 'index.ts'), 'checked');
+  // Outside the extension folders: not copied, not refused.
+  await symlink('/etc', path.join(prepared.stagingDirectory, 'stray-link'));
+  const record = await withStageSnapshot(prepared, async (snapshot) => {
+    expect(path.relative(prepared.historyRoot, snapshot.stagingDirectory).startsWith('..')).toBe(false);
+    expect(await readFile(path.join(snapshot.stagingDirectory, 'checked', 'index.ts'), 'utf8')).toBe('checked');
+    // A process that outlived its command rewrites the stage after the check.
+    await writeFile(path.join(prepared.stagingDirectory, 'checked', 'index.ts'), 'late');
+    await extension(prepared.stagingDirectory, 'smuggled', 'late');
+    return publishExtensionChanges(snapshot, [{ id: 'checked', action: 'updated' }]);
+  });
+  expect(record?.changes).toEqual([{ id: 'checked', action: 'updated' }]);
+  expect(await readFile(path.join(live, 'checked', 'index.ts'), 'utf8')).toBe('checked');
+  await expect(stat(path.join(live, 'smuggled'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect((await readdir(prepared.historyRoot)).filter((name) => name.startsWith('.snapshot-'))).toEqual([]);
+});
+
+it('clears snapshots a crash left behind at boot', async () => {
+  const userData = await temporaryDirectory();
+  const leftover = path.join(userData, 'Agent Change History', 'project-1', '.snapshot-run-1-crashed');
+  await mkdir(path.join(leftover, 'stage'), { recursive: true });
+  await recoverAllInterruptedExtensionTransactions(userData, path.join(userData, 'extensions'));
+  await expect(stat(leftover)).rejects.toMatchObject({ code: 'ENOENT' });
 });

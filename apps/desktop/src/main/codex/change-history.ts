@@ -9,6 +9,7 @@ import { AgentResultValidationError } from './result-repair';
 const MAX_FILES = 4_000;
 const MAX_BYTES = 32 * 1024 * 1024;
 const RECORD_FILE = 'change-set.json';
+const SNAPSHOT_PREFIX = '.snapshot-';
 
 export interface ExtensionStage {
   liveDirectory: string;
@@ -50,6 +51,31 @@ export async function prepareExtensionStage(options: {
     baselineHashes,
     baselineRootHash: hashMap(baselineHashes)
   };
+}
+
+/**
+ * Run `use` on a private copy of the stage's extensions, taken once in the
+ * app-owned history folder that agent processes cannot write. Validate and
+ * publish the copy: a process that outlived its command can still rewrite
+ * the stage, but not what was checked and ships.
+ */
+export async function withStageSnapshot<T>(
+  stage: ExtensionStage,
+  use: (snapshot: ExtensionStage & { compiledDirectory: string }) => Promise<T>
+): Promise<T> {
+  const directory = path.join(stage.historyRoot, `${SNAPSHOT_PREFIX}${stage.runId}-${randomUUID()}`);
+  const stagingDirectory = path.join(directory, 'stage');
+  try {
+    await fs.mkdir(stagingDirectory, { recursive: true });
+    // Only what publishing reads: extension folders, each within its own copy limits.
+    for (const entry of await exists(stage.stagingDirectory) ? await fs.readdir(stage.stagingDirectory, { withFileTypes: true }) : []) {
+      if (!entry.isDirectory() || !EXTENSION_ID.test(entry.name)) continue;
+      await copyRegularTree(path.join(stage.stagingDirectory, entry.name), path.join(stagingDirectory, entry.name));
+    }
+    return await use({ ...stage, stagingDirectory, compiledDirectory: path.join(directory, 'compiled') });
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
 }
 
 export async function publishExtensionChanges(
@@ -195,7 +221,13 @@ export async function recoverAllInterruptedExtensionTransactions(userData: strin
   const root = path.join(userData, 'Agent Change History');
   if (!await exists(root)) return;
   for (const entry of await fs.readdir(root, { withFileTypes: true })) {
-    if (entry.isDirectory()) await recoverInterruptedExtensionTransactions(path.join(root, entry.name), liveDirectory);
+    if (!entry.isDirectory()) continue;
+    const historyRoot = path.join(root, entry.name);
+    await recoverInterruptedExtensionTransactions(historyRoot, liveDirectory);
+    // Only at boot: a run on this project may be using its snapshot now.
+    for (const leftover of await fs.readdir(historyRoot)) {
+      if (leftover.startsWith(SNAPSHOT_PREFIX)) await fs.rm(path.join(historyRoot, leftover), { recursive: true, force: true });
+    }
   }
 }
 
@@ -299,7 +331,8 @@ async function copyRegularTree(source: string, destination: string): Promise<voi
         continue;
       }
       if (!entry.isFile()) throw new Error(`Extension staging does not allow special files: ${entry.name}`);
-      const data = await fs.readFile(input);
+      // A file swapped for a link since the listing is refused, not followed.
+      const data = await fs.readFile(input, { flag: fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW });
       files += 1;
       bytes += data.byteLength;
       if (files > MAX_FILES || bytes > MAX_BYTES) throw new Error('Extension staging exceeds the safe copy limits.');
