@@ -1,8 +1,25 @@
-import { mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+// Runs once, around main's listing of the folder it names: where a racing
+// agent process would swap that folder for a link.
+type Swap = { directory: string; before: () => Promise<void>; after?: () => Promise<void> };
+const listing = vi.hoisted(() => ({ swap: null as null | Swap }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const readdir = (async (directory: string, ...rest: unknown[]) => {
+    const swap = listing.swap;
+    const swapping = swap && path.resolve(String(directory)) === swap.directory;
+    if (swapping) { listing.swap = null; await swap.before(); }
+    const entries = await (actual.readdir as (...args: unknown[]) => Promise<unknown>)(directory, ...rest);
+    if (swapping) await swap.after?.();
+    return entries;
+  }) as typeof actual.readdir;
+  return { ...actual, readdir, default: { ...actual, readdir } };
+});
 
 import {
   prepareExtensionStage,
@@ -204,6 +221,55 @@ it('publishes the private copy it checked even when the stage changes afterwards
   expect(record?.changes).toEqual([{ id: 'checked', action: 'updated' }]);
   expect(await readFile(path.join(live, 'checked', 'index.ts'), 'utf8')).toBe('checked');
   await expect(stat(path.join(live, 'smuggled'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect((await readdir(prepared.historyRoot)).filter((name) => name.startsWith('.snapshot-'))).toEqual([]);
+});
+
+it('snapshots only changed and reported extensions and publishes the rest as their baseline', async () => {
+  const root = await temporaryDirectory();
+  const live = path.join(root, 'extensions');
+  for (const id of ['kept', 'reported', 'edited', 'removed']) await extension(live, id, 'before');
+  const prepared = await stage(root);
+  await writeFile(path.join(prepared.stagingDirectory, 'edited', 'index.ts'), 'after');
+  await rm(path.join(prepared.stagingDirectory, 'removed'), { recursive: true });
+  await extension(prepared.stagingDirectory, 'created', 'new');
+  const record = await withStageSnapshot(prepared, async (snapshot) => {
+    expect((await readdir(snapshot.stagingDirectory)).sort()).toEqual(['created', 'edited', 'reported']);
+    expect([...snapshot.unchanged]).toEqual(['kept']);
+    return publishExtensionChanges(snapshot, [
+      { id: 'created', action: 'created' }, { id: 'edited', action: 'updated' }, { id: 'removed', action: 'removed' }
+    ]);
+  }, ['created', 'edited', 'removed', 'reported']);
+  expect(record?.changes.map((change) => change.id)).toEqual(['created', 'edited', 'removed']);
+  expect((await readdir(live)).sort()).toEqual(['created', 'edited', 'kept', 'reported']);
+  expect(await readFile(path.join(live, 'kept', 'index.ts'), 'utf8')).toBe('before');
+  expect(await readFile(path.join(live, 'edited', 'index.ts'), 'utf8')).toBe('after');
+  // A report naming an unchanged extension is checked against its copy and refused.
+  await expect(withStageSnapshot(await stage(root, 'run-2'), (snapshot) =>
+    publishExtensionChanges(snapshot, [{ id: 'kept', action: 'updated' }]), ['kept'])).rejects.toThrow('did not match');
+});
+
+it.each(['left as a link', 'swapped back'])('refuses to snapshot a folder swapped for a link to private files before its listing, %s', async (mode) => {
+  const root = await temporaryDirectory();
+  const live = path.join(root, 'extensions');
+  await extension(live, 'checked', 'before');
+  const prepared = await stage(root);
+  await mkdir(path.join(prepared.stagingDirectory, 'checked', 'assets'));
+  await writeFile(path.join(prepared.stagingDirectory, 'checked', 'assets', 'logo.txt'), 'logo');
+  const secrets = path.join(root, 'home', '.aws');
+  await mkdir(secrets, { recursive: true });
+  await writeFile(path.join(secrets, 'credentials'), 'aws_secret_access_key = private');
+  const assets = path.join(prepared.stagingDirectory, 'checked', 'assets');
+  listing.swap = {
+    directory: assets,
+    before: async () => { await rename(assets, `${assets}-real`); await symlink(secrets, assets); },
+    ...(mode === 'swapped back' ? { after: async () => { await rm(assets); await rename(`${assets}-real`, assets); } } : {})
+  };
+  let copied: string[] = [];
+  await expect(withStageSnapshot(prepared, async (snapshot) => {
+    copied = await readdir(path.join(snapshot.stagingDirectory, 'checked', 'assets'));
+  }, ['checked'])).rejects.toThrow(/changed while it was being copied|ENOENT/);
+  expect(listing.swap).toBeNull();
+  expect(copied).toEqual([]);
   expect((await readdir(prepared.historyRoot)).filter((name) => name.startsWith('.snapshot-'))).toEqual([]);
 });
 

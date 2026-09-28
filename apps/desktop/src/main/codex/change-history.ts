@@ -53,33 +53,45 @@ export async function prepareExtensionStage(options: {
   };
 }
 
+/** A private stage copy; `unchanged` folders matched their baseline and were not copied. */
+export type StageSnapshot = ExtensionStage & { compiledDirectory: string; unchanged: readonly string[] };
+
 /**
  * Run `use` on a private copy of the stage's extensions, taken once in the
  * app-owned history folder that agent processes cannot write. Validate and
  * publish the copy: a process that outlived its command can still rewrite
- * the stage, but not what was checked and ships.
+ * the stage, but not what was checked and ships. Only changed and `reported`
+ * folders are copied; the rest publish as their baseline.
  */
 export async function withStageSnapshot<T>(
   stage: ExtensionStage,
-  use: (snapshot: ExtensionStage & { compiledDirectory: string }) => Promise<T>
+  use: (snapshot: StageSnapshot) => Promise<T>,
+  reported: readonly string[] = []
 ): Promise<T> {
   const directory = path.join(stage.historyRoot, `${SNAPSHOT_PREFIX}${stage.runId}-${randomUUID()}`);
   const stagingDirectory = path.join(directory, 'stage');
+  const unchanged: string[] = [];
   try {
     await fs.mkdir(stagingDirectory, { recursive: true });
     // Only what publishing reads: extension folders, each within its own copy limits.
     for (const entry of await exists(stage.stagingDirectory) ? await fs.readdir(stage.stagingDirectory, { withFileTypes: true }) : []) {
       if (!entry.isDirectory() || !EXTENSION_ID.test(entry.name)) continue;
-      await copyRegularTree(path.join(stage.stagingDirectory, entry.name), path.join(stagingDirectory, entry.name));
+      const source = path.join(stage.stagingDirectory, entry.name);
+      const baseline = stage.baselineHashes[entry.name];
+      if (baseline !== undefined && !reported.includes(entry.name) && await directoryHash(source) === baseline) {
+        unchanged.push(entry.name);
+        continue;
+      }
+      await copyRegularTree(source, path.join(stagingDirectory, entry.name));
     }
-    return await use({ ...stage, stagingDirectory, compiledDirectory: path.join(directory, 'compiled') });
+    return await use({ ...stage, stagingDirectory, compiledDirectory: path.join(directory, 'compiled'), unchanged });
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
 }
 
 export async function publishExtensionChanges(
-  stage: ExtensionStage,
+  stage: ExtensionStage & { unchanged?: readonly string[] },
   declaredChanges: readonly AgentExtensionChange[]
 ): Promise<ExtensionChangeSetRecord | null> {
   const currentHashes = await extensionHashes(stage.liveDirectory);
@@ -88,6 +100,7 @@ export async function publishExtensionChanges(
   }
 
   const stagedHashes = await extensionHashes(stage.stagingDirectory);
+  for (const id of stage.unchanged ?? []) stagedHashes[id] = stage.baselineHashes[id]!;
   const actualIds = changedIds(stage.baselineHashes, stagedHashes);
   const declared = new Map(declaredChanges.map((change) => [change.id, change]));
   const declaredIds = [...declared.keys()].sort();
@@ -315,12 +328,27 @@ async function directoryHash(root: string): Promise<string> {
   return hash.digest('hex');
 }
 
+const sameFile = (a: { dev: number; ino: number }, b: { dev: number; ino: number }) => a.dev === b.dev && a.ino === b.ino;
+
+/**
+ * Copy folders and regular files only. Agent processes may still swap a
+ * folder for a link while it is read, so each folder must be the same one
+ * after its listing and still resolve beneath the source, and each file read
+ * must be the file now at its place there; otherwise the copy aborts.
+ */
 async function copyRegularTree(source: string, destination: string): Promise<void> {
+  if (!(await fs.lstat(source)).isDirectory()) throw new Error('Extension staging is not a folder.');
+  const root = await fs.realpath(source);
+  const changed = () => new Error('Extension staging changed while it was being copied. Nothing was copied from it.');
   await fs.mkdir(destination, { recursive: true });
   let files = 0;
   let bytes = 0;
   async function walk(from: string, to: string): Promise<void> {
+    const expected = path.join(root, path.relative(source, from));
+    const before = await fs.lstat(from);
     const entries = await fs.readdir(from, { withFileTypes: true });
+    const after = await fs.lstat(from);
+    if (!before.isDirectory() || !after.isDirectory() || !sameFile(before, after) || await fs.realpath(from) !== expected) throw changed();
     for (const entry of entries) {
       const input = path.join(from, entry.name);
       const output = path.join(to, entry.name);
@@ -332,7 +360,13 @@ async function copyRegularTree(source: string, destination: string): Promise<voi
       }
       if (!entry.isFile()) throw new Error(`Extension staging does not allow special files: ${entry.name}`);
       // A file swapped for a link since the listing is refused, not followed.
-      const data = await fs.readFile(input, { flag: fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW });
+      const handle = await fs.open(input, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      let data: Buffer;
+      try {
+        const opened = await handle.stat();
+        if (!opened.isFile() || !sameFile(opened, await fs.lstat(input)) || await fs.realpath(from) !== expected) throw changed();
+        data = await handle.readFile();
+      } finally { await handle.close(); }
       files += 1;
       bytes += data.byteLength;
       if (files > MAX_FILES || bytes > MAX_BYTES) throw new Error('Extension staging exceeds the safe copy limits.');

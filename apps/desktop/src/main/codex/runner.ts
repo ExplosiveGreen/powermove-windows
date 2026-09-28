@@ -513,7 +513,7 @@ export class CodexRunner {
           await validateStagedExtensions(snapshot, extensions ?? []);
           if (this.cancelled.has(req.id)) throw new Error('The Codex run was cancelled.');
           return publishExtensionChanges(snapshot, extensions ?? []);
-        });
+        }, (extensions ?? []).map(change => change.id));
         return { parsed, extensions, changeSet };
       }, async prompt => {
         repairingResult = true;

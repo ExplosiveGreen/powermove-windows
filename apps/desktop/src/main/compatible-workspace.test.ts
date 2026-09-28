@@ -236,6 +236,34 @@ it.runIf(process.platform === 'darwin')('stops detached children after their par
   if (latePid) expect(alive(latePid)).toBe(false);
 });
 
+it.runIf(process.platform === 'darwin')('stops a child that left the folder and lost its parent before any poll', async () => {
+  const ws = await workspace();
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+  const late = path.join(ws.layout.root, 'late.txt');
+  const script = `const c = require('node:child_process').spawn('/bin/sh', ['-c', ${JSON.stringify(`sleep 2; echo late > ${quote(late)}`)}], { detached: true, stdio: 'ignore', cwd: '/' }); console.log(c.pid); c.unref()`;
+  const escaped = Number((await runWorkspaceCommand(ws.layout.root, 'project', `${quote(process.execPath)} -e ${quote(script)}`, 5000, signal())).output);
+  expect(escaped).toBeGreaterThan(1);
+  await expect.poll(() => alive(escaped)).toBe(false);
+  await new Promise(resolve => setTimeout(resolve, 2500));
+  await expect(access(late)).rejects.toThrow();
+});
+
+it.runIf(process.platform === 'darwin')('a foreground command exiting leaves a running background job’s daemon alone', async () => {
+  const ws = await workspace();
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+  const daemon = `require('node:child_process').spawn('/bin/sh', ['-c', 'echo $$ > daemon.pid; exec sleep 30'], { detached: true, stdio: 'ignore' }).unref()`;
+  await ws.call('run_command', { command: `sleep 0.3; ${quote(process.execPath)} -e ${quote(daemon)}; exec sleep 30`, background: true }, signal());
+  await ws.call('run_command', { command: 'sleep 1.5' }, signal());
+  const pid = Number(await readFile(path.join(ws.layout.root, 'daemon.pid'), 'utf8'));
+  expect(pid).toBeGreaterThan(1);
+  await new Promise(resolve => setTimeout(resolve, 500));
+  expect(alive(pid)).toBe(true);
+  await ws.stopCommands();
+  await expect.poll(() => alive(pid)).toBe(false);
+});
+
 it('allows up to ten minutes per command and keeps the thirty second default', async () => {
   const ws = await workspace();
   await expect(ws.call('run_command', { command: 'true', timeoutMs: 600_001 }, signal())).rejects.toThrow('between 1 and 600000');

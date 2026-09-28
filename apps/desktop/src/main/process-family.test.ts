@@ -48,9 +48,27 @@ it.runIf(process.platform === 'darwin')('kills a new-session child whose parent 
   });
   const [inside, outside] = await Promise.all([orphan(cwd), orphan(elsewhere)]);
   await expect.poll(async () => (await import('node:child_process')).execFileSync('/bin/ps', ['-o', 'ppid=', '-p', String(inside)], { encoding: 'utf8' }).trim()).toBe('1');
-  await killStrays(cwd, since);
+  await killStrays({ cwd, since });
   await expect.poll(() => alive(inside)).toBe(false);
   expect(alive(outside)).toBe(true);
+});
+
+it.runIf(process.platform === 'darwin')('kills processes carrying its sandbox mark wherever they went, and only those', async () => {
+  const cwd = await folder();
+  const since = Date.now();
+  const marked = (mark: string) => new Promise<number>(resolve => {
+    const script = `const c = require('node:child_process').spawn('/bin/sleep', ['30'], { detached: true, stdio: 'ignore', cwd: '/' }); console.log(c.pid); c.unref();`;
+    const profile = `(version 1)(allow default)(deny mach-lookup (global-name ${JSON.stringify(mark)}))`;
+    const leader = spawn('/usr/bin/sandbox-exec', ['-p', profile, process.execPath, '-e', script], { cwd, detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    leader.stdout.once('data', chunk => { const pid = Number(String(chunk)); strays.push(pid); resolve(pid); });
+  });
+  const [mine, other] = await Promise.all([marked('com.powermove.command.mine'), marked('com.powermove.command.other')]);
+  const unmarked = spawn('/bin/sleep', ['30'], { detached: true, stdio: 'ignore', cwd: '/' });
+  strays.push(unmarked.pid!);
+  await killStrays({ cwd, since, marks: ['com.powermove.command.mine'] });
+  await expect.poll(() => alive(mine)).toBe(false);
+  expect(alive(other)).toBe(true);
+  expect(alive(unmarked.pid!)).toBe(true);
 });
 
 it.runIf(process.platform !== 'win32')('kills a group together with a child that started its own session', async () => {
