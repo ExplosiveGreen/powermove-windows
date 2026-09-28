@@ -3,6 +3,13 @@
   inset: 0;
   z-index: 70;
   pointer-events: none;
+}
+
+/* Only visible agent surfaces exclude native window dragging. The root spans
+   the viewport, and no-drag there blocks the titlebar even with pointer-events:none. */
+.agent-floating-bubble,
+.agent-floating-window,
+.agent-docked-menu {
   -webkit-app-region: no-drag;
 }
 
