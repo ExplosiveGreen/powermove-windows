@@ -8,6 +8,8 @@ import { themeScheme, themeTokens } from './theme-apply';
 import { mountSandboxView, type ViewHost, type ViewLink } from './sandbox-view';
 import { chordOfEvent, normalizeChord } from './keychord';
 import { bridge } from './bridge';
+import { sandboxBundleUrl, sandboxDocumentUrl, sandboxOrigin } from '../../../shared/sandbox-origin';
+import { watchSandbox } from './sandbox-watchdog';
 import { menuEntriesSchema, paletteEntriesSchema, parseHostEvent, parseInvoke, parseRegistration } from './sandbox-schemas';
 
 const MIRROR_EVENTS = new Set(['project:changed', 'selection', 'time', 'transport']);
@@ -161,12 +163,12 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   frame.hidden = true;
   frame.setAttribute('sandbox', 'allow-scripts');
   frame.setAttribute('aria-hidden', 'true');
-  // Inside Electron the document always comes from app:// (in development
-  // main proxies it from Vite); only the browser host (powermove serve)
-  // serves it from its own origin.
-  const base = location.protocol === 'app:' || navigator.userAgent.includes('Electron') ? 'app://powermove' : location.origin;
+  // Inside Electron the document comes from the extension's own app:// host,
+  // so it gets its own process (in development main proxies it from Vite);
+  // only the browser host (powermove serve) serves it from its own origin.
+  const base = sandboxOrigin(record.id, location.protocol === 'app:' || navigator.userAgent.includes('Electron') ? 'app://powermove' : location.origin);
   const perms = (manifest.permissions ?? []).join(',');
-  if (!test?.frame) frame.src = `${base}/host/ext-sandbox.html?id=${encodeURIComponent(record.id)}&perms=${encodeURIComponent(perms)}`;
+  if (!test?.frame) frame.src = sandboxDocumentUrl(base, record.id, perms);
   const registrations = new Map<string, Disposable>();
   const remoteHandles = new Set<number>();
   const claimHandles = (handles: number[]): void => {
@@ -340,7 +342,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   const snapshot = (): SandboxInit => ({
     id: record.id, apiVersion: manifest.apiVersion ?? 1, manifest, vars,
     theme: themeSnapshot(kernel), activeTheme: kernel.theme.activeId,
-    project: projectMirror(host.api), bundleUrl: record.bundleUrl ?? `${base}/ext/${encodeURIComponent(record.id)}/bundle.js`,
+    project: projectMirror(host.api), bundleUrl: sandboxBundleUrl(base, record.id, record.bundleUrl),
     catalog: {
       effects: plain(reg.effects.list()) as Array<Record<string, unknown>>,
       transitions: plain(reg.transitions.list()) as Array<Record<string, unknown>>,
@@ -357,7 +359,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     for (const link of links) { try { link.rpc.notify(method, value); } catch { /* view closing */ } }
   };
   const views: ViewHost = {
-    src: panelId => test?.onViewInit ? null : `${base}/host/ext-sandbox.html?id=${encodeURIComponent(record.id)}&view=${encodeURIComponent(panelId)}&perms=${encodeURIComponent(perms)}`,
+    src: panelId => test?.onViewInit ? null : sandboxDocumentUrl(base, record.id, perms, panelId),
     snapshot,
     theme: () => viewTheme(kernel),
     keys: () => keyTable(reg, record.id),
@@ -400,8 +402,10 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   }) : null;
   themeWatch?.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'data-theme'] });
   let disposed = false;
+  let watchdog: { dispose(): void } | null = null;
   const dispose = (): void => {
     if (disposed) return; disposed = true;
+    watchdog?.dispose();
     keysOff.dispose(); themeWatch?.disconnect();
     // Registrations first: panel views tell the runtime to close their ports.
     for (const item of registrations.values()) item.dispose(); registrations.clear();
@@ -441,6 +445,13 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
       await ready;
     } finally { clearTimeout(timeout); }
     host.setActivating(false);
+    /* A spinning or crashed runtime stops answering. Main kills its process
+       while the frames still exist to find it, then the kernel side goes. */
+    watchdog = watchSandbox({ ping: () => rpc.call('ping'), onUnresponsive: () => void (async () => {
+      try { await bridge()?.sandboxTerminate?.(record.id); } catch { /* disposing still frees the kernel side */ }
+      dispose();
+      deps.reportRuntimeError(record.id, Object.assign(new Error('stopped responding'), { code: 'sandbox_fatal' }));
+    })() });
     return { handle: host, dispose };
   } catch (error) { host.setActivating(false); dispose(); throw error; }
 }

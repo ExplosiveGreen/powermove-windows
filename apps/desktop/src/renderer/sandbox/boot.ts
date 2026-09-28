@@ -89,7 +89,8 @@ export async function bootRuntime(init: SandboxInit, port: MessagePort, load: Bu
     theme: (theme: SandboxInit['theme']) => apply(theme),
     mountPanel: (panelId: string, token: string, viewPort: MessagePort) => control?.mountPanel(panelId, token, viewPort),
     unmountPanel: (token: string) => control?.unmountPanel(token),
-    dispose: () => control?.dispose()
+    dispose: () => control?.dispose(),
+    ping: () => true
   }, 10_000, { maxMirrorBytes: 16 * 1024 * 1024 + 8192, maxHandles: 1000 });
   const liveApi = createSandboxAPI(live, init);
   control = sandboxControl(liveApi);
