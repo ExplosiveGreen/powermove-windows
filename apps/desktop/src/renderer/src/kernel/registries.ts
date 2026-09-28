@@ -53,7 +53,12 @@ export interface PaletteProviderEntry {
 export interface MenuEntry {
   ownerId: string;
   items: (ctx: Record<string, unknown>) => MenuContribution[] | Promise<MenuContribution[]>;
+  /** Only ever answers asynchronously (a sandboxed contributor), so `collectMenu` never asks it. */
+  async?: boolean;
 }
+
+/** Marks a contributor function whose answer always crosses a port; `menus.contribute` registers it `async`. */
+export const ASYNC_CONTRIBUTOR: unique symbol = Symbol('powermove.asyncContributor');
 
 /** How long an open menu waits for asynchronous contributions (sandboxed
     extensions answer over a port). Enforced here, so a slow or hostile
@@ -161,8 +166,8 @@ export interface Kernel {
   registerPaletteProvider(ownerId: string, provider: PaletteProvider): Disposable;
   paletteProviders(): PaletteProviderEntry[];
 
-  contributeMenu(ownerId: string, location: MenuLocation, items: MenuEntry['items']): Disposable;
-  /** The synchronous contributions for one open; asynchronous ones are left out. */
+  contributeMenu(ownerId: string, location: MenuLocation, items: MenuEntry['items'], options?: { async?: boolean }): Disposable;
+  /** The synchronous contributions for one open; asynchronous ones are left out, and `async` entries are not asked at all. */
   collectMenu(location: MenuLocation, ctx?: Record<string, unknown>): MenuContribution[];
   /**
    * Every contribution for one open, in registration order. Returns the list
@@ -203,9 +208,10 @@ export function createKernel(): Kernel {
   const paletteProviders: PaletteProviderEntry[] = [];
   const menus = new Map<MenuLocation, MenuEntry[]>();
   /* Each contribution asked once for this open; a throw leaves that one out. */
-  const menuAnswers = (location: MenuLocation, ctx: Record<string, unknown>): Array<{ ownerId: string; answer: unknown }> => {
+  const menuAnswers = (location: MenuLocation, ctx: Record<string, unknown>, syncOnly = false): Array<{ ownerId: string; answer: unknown }> => {
     const answers: Array<{ ownerId: string; answer: unknown }> = [];
     for (const entry of menus.get(location) ?? []) {
+      if (syncOnly && entry.async) continue;
       try {
         answers.push({ ownerId: entry.ownerId, answer: entry.items(ctx) });
       } catch (error) {
@@ -312,14 +318,14 @@ export function createKernel(): Kernel {
       return [...paletteProviders];
     },
 
-    contributeMenu(ownerId, location, items) {
+    contributeMenu(ownerId, location, items, options = {}) {
       if (typeof items !== 'function') throw new Error('menus: items must be a function');
       let list = menus.get(location);
       if (!list) {
         list = [];
         menus.set(location, list);
       }
-      const entry: MenuEntry = { ownerId, items };
+      const entry: MenuEntry = { ownerId, items, ...(options.async ? { async: true } : {}) };
       list.push(entry);
       return {
         dispose: () => {
@@ -331,8 +337,10 @@ export function createKernel(): Kernel {
       };
     },
 
+    /* Asking a sandboxed contributor here would only discard its reply, and
+       every ask replaces the handles an open menu's items still run through. */
     collectMenu(location, ctx = {}) {
-      return flatMenu(menuAnswers(location, ctx).map(({ answer }) => {
+      return flatMenu(menuAnswers(location, ctx, true).map(({ answer }) => {
         if (isThenable(answer)) Promise.resolve(answer).catch(() => {}); // left out here, and so are its failures
         return answer;
       }));

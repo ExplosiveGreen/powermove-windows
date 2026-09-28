@@ -3,7 +3,7 @@ import { createRpc, createRpcBudget, rpcTransfers, type Rpc } from '../../../sha
 import { panelInfo, type SandboxEvent, type SandboxInit, type SandboxKey, type SandboxSnapshot, type SandboxState, type SandboxViewInit } from '../../sandbox/shim-api';
 import type { Disposable, MenuContribution, Selection } from './api';
 import { createExtensionAPI, type ExtensionHandle, type HostDeps } from './host';
-import type { Kernel } from './registries';
+import { ASYNC_CONTRIBUTOR, type Kernel } from './registries';
 import { themeScheme, themeTokens } from './theme-apply';
 import { mountSandboxView, type ViewHost, type ViewLink } from './sandbox-view';
 import { chordOfEvent, normalizeChord } from './keychord';
@@ -327,13 +327,13 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
            call is the only one these items can come from, so a menu never
            shows (or runs) items built for another target. The kernel bounds
            the wait. */
-        case 'menus': item = host.api.menus.contribute(value.location as Parameters<typeof host.api.menus.contribute>[0], ctx => rpc.invokeHandle(Number(value.items), ctx)
+        case 'menus': item = host.api.menus.contribute(value.location as Parameters<typeof host.api.menus.contribute>[0], Object.assign((ctx: Record<string, unknown>) => rpc.invokeHandle(Number(value.items), ctx)
           .then(result => menuEntriesSchema.parse(result).map(entry => {
             if (typeof entry === 'string' || !('run' in entry) || !entry.run) return entry;
             const run = entry.run;
             claimHandles([run]);
             return { ...entry, run: () => rpc.invokeHandle(run) };
-          }) as MenuContribution[])); break;
+          }) as MenuContribution[]), { [ASYNC_CONTRIBUTOR]: true })); break;
         case 'events': {
           const doc = docOf.get(link);
           if (!doc) throw new Error('Sandbox document is not connected');

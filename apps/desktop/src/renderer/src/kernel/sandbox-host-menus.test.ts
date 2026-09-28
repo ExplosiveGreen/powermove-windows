@@ -158,6 +158,21 @@ it('keeps the handles of the newest menu open however the replies land', async (
   expect(ran).toEqual(['C', 'B']);
 });
 
+it('never asks a sandboxed contributor for the synchronous collectMenu, so an open menu keeps its items', async () => {
+  const ran: string[] = [];
+  let asked = 0;
+  const kernel = await sandboxed(api => {
+    api.menus.contribute('layer:context', (ctx: { layerId: string }) => { asked += 1; return [{ label: `Tag ${ctx.layerId}`, run: () => { ran.push(ctx.layerId); } }]; });
+  });
+  const open = await kernel.gatherMenu('layer:context', { layerId: 'A' });
+  kernel.contributeMenu('in-realm', 'layer:context', () => [{ label: 'Trusted' }]);
+  for (let index = 0; index < 3; index++) expect(kernel.collectMenu('layer:context', { layerId: 'B' }).map(label)).toEqual(['Trusted']);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  expect(asked).toBe(1);
+  await run(open, 'Tag A');
+  expect(ran).toEqual(['A']);
+});
+
 it('asks a sandboxed when() afresh on every check', async () => {
   const kernel = await sandboxed(api => {
     let enabled = true;
