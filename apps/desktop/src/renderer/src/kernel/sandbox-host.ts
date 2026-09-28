@@ -194,13 +194,15 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   const persistedStorage = (deps.pm as { store?: { get?: (key: string, fallback: unknown) => unknown } }).store?.get?.(`ext.${record.id}`, {});
   const storageValues = new Map<string, unknown>(persistedStorage && typeof persistedStorage === 'object' && !Array.isArray(persistedStorage)
     ? Object.entries(persistedStorage) : []);
+  /* assets.import and assets.importUrl share one quota: a download counts at
+     its size before the renderer reads it back. */
   const imports: Array<{ at: number; bytes: number }> = [];
-  const admitImport = (file: File): void => {
-    if (file.size > IMPORT_FILE_BYTES) denied('assets.import accepts files up to 512 MiB', 'resource_limit');
+  const admitImport = (bytes: number): void => {
+    if (bytes > IMPORT_FILE_BYTES) denied('assets.import accepts files up to 512 MiB', 'resource_limit');
     const now = Date.now();
     while (imports.length && now - imports[0]!.at >= 60_000) imports.shift();
-    if (imports.reduce((sum, entry) => sum + entry.bytes, file.size) > IMPORT_MINUTE_BYTES) denied('assets.import accepts up to 2 GiB a minute', 'resource_limit');
-    imports.push({ at: now, bytes: file.size });
+    if (imports.reduce((sum, entry) => sum + entry.bytes, bytes) > IMPORT_MINUTE_BYTES) denied('assets.import and assets.importUrl accept up to 2 GiB a minute', 'resource_limit');
+    imports.push({ at: now, bytes });
   };
   /* ui.copy: the kernel's manifest record grants it (never the document's
      URL), the host itself sees the calling view focused, and it writes once
@@ -217,7 +219,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     await write(text);
   };
   const openExternal = sandboxOpenExternal({ manifest: () => manifest, ui: host.api.ui });
-  const importUrl = sandboxImportUrl({ manifest: () => manifest, assets: host.api.assets });
+  const importUrl = sandboxImportUrl({ manifest: () => manifest, assets: host.api.assets, admit: admitImport });
   const invoke = (namespace: string, method: string, args: unknown, view: ViewLink | null = null): unknown => {
     if (!SAFE_INVOKE[namespace]?.has(method)) throw new Error(`Sandbox method unavailable: ${namespace}.${method}`);
     const parsed = parseInvoke(namespace, method, args);
@@ -243,7 +245,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     if (namespace === 'assets' && method !== 'get' && !permissions.includes('assets')) {
       const error = new Error(`assets.${method} requires assets permission`); error.name = 'PermissionError'; throw error;
     }
-    if (namespace === 'assets' && method === 'import') admitImport(parsed[0] as File);
+    if (namespace === 'assets' && method === 'import') admitImport((parsed[0] as File).size);
     if (namespace === 'ui' && method === 'copy') return copy(String(parsed[0]), view);
     if (namespace === 'storage') {
       const key = String(parsed[0]);

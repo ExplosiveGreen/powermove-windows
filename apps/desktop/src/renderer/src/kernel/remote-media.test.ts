@@ -38,6 +38,15 @@ describe('fetchRemoteMedia', () => {
     expect(media.release).toHaveBeenCalledWith('token-1');
   });
 
+  it('asks `admit` about the size before reading a byte back, and releases a refused download', async () => {
+    const media = remote(new Uint8Array(4096));
+    const admit = vi.fn((bytes: number) => { if (bytes > 1024) throw Object.assign(new Error('over quota'), { code: 'resource_limit' }); });
+    await expect(fetchRemoteMedia('https://cdn.example/a.png', async () => true, admit)).rejects.toMatchObject({ code: 'resource_limit' });
+    expect(admit).toHaveBeenCalledWith(4096);
+    expect(media.read).not.toHaveBeenCalled();
+    expect(media.release).toHaveBeenCalledWith('token-1');
+  });
+
   it('refuses a short read and a bad size from the bridge', async () => {
     const short = remote(new Uint8Array(10), { size: 20 });
     await expect(fetchRemoteMedia('https://cdn.example/a.png', async () => true)).rejects.toThrow('ended early');

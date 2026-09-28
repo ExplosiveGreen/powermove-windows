@@ -15,6 +15,7 @@ import { fakePM } from './__fixtures__/fake-pm';
 import type { HostDeps } from './host';
 import type { ExtensionPermission } from '../../../shared/extensions';
 import type { ExtensionRecord, ProjectAPI, PowermoveAPI } from './api';
+import type { ImportUrl } from './remote-media';
 
 const close: Array<() => void> = [];
 let installed: InstalledKernel | null = null;
@@ -118,7 +119,7 @@ describe('assets.importUrl', () => {
     const importUrl = vi.fn((_url: string) => new Promise<string>(resolve => { finish = resolve; }));
     (deps.assets as { importUrl?: unknown }).importUrl = importUrl;
     const first = api.assets.importUrl('https://cdn.example/photo.png');
-    await vi.waitFor(() => expect(importUrl).toHaveBeenCalledWith('https://cdn.example/photo.png'));
+    await vi.waitFor(() => expect(importUrl).toHaveBeenCalledWith('https://cdn.example/photo.png', expect.any(Function)));
     await expect(api.assets.importUrl('https://cdn.example/other.png')).rejects.toMatchObject({ code: 'resource_limit' });
     finish('asset-7');
     await expect(first).resolves.toBe('asset-7');
@@ -165,6 +166,12 @@ describe('assets.importUrl', () => {
       expect(PM.assets.add).toHaveBeenCalledWith(expect.objectContaining({ name: 'photo.png', type: 'image/png', size: png.byteLength }), expect.anything());
       expect(close).toHaveBeenCalled();
       expect(remoteMedia.release).toHaveBeenCalledWith('t');
+      // The sandbox host's quota check reaches the download before its bytes are read.
+      const admit = vi.fn(() => { throw new Error('over quota'); });
+      await expect((installed.api('trusted-ext').assets.importUrl as ImportUrl)('https://cdn.example/photo.png', admit)).rejects.toThrow('over quota');
+      expect(admit).toHaveBeenCalledWith(png.byteLength);
+      expect(remoteMedia.read).toHaveBeenCalledTimes(1);
+      expect(PM.assets.add).toHaveBeenCalledTimes(1);
     } finally { vi.unstubAllGlobals(); }
   });
 });

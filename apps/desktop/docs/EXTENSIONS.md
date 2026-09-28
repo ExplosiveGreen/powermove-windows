@@ -163,7 +163,10 @@ itself, so CORS does not apply, but:
 - the file may be at most 512 MiB, must be PNG, JPEG, GIF, WebP, AVIF, BMP,
   MP4, MOV, WebM, MP3, AAC, M4A, WAV, Ogg or FLAC by its contents (not its
   name or `Content-Type`), and must decode. The asset is named after the last
-  path segment with the extension of what the bytes are.
+  path segment with the extension of what the bytes are;
+- a download counts toward the same 2 GiB a minute as `assets.import`, and one
+  that would pass it rejects with `code: 'resource_limit'` before it is
+  imported.
 
 The desktop app provides `importUrl`; `powermove serve` does not.
 
@@ -216,7 +219,7 @@ flush. Within one flush, `time` and `selection` deliver only their latest value,
 repeated `project:changed` of the same `kind` arrive once, and other events keep
 their order. The synchronous reads return the state as of the latest delivery.
 
-Each extension is limited to 200 registrations, 2,000 live callback handles, 50 open panel views, 200 RPC messages/s, 1 MiB per RPC payload (a file passed to `assets.import` is not counted; imports are capped at 512 MiB per file and 2 GiB a minute), 256 KiB of storage with keys at most 128 characters, and 50 logs/s. These limits apply to messages from the extension; data the host sends, such as project snapshots, is not limited by them.
+Each extension is limited to 200 registrations, 2,000 live callback handles, 50 open panel views, 200 RPC messages/s, 1 MiB per RPC payload (a file passed to `assets.import` is not counted; imports, including `assets.importUrl` downloads, are capped at 512 MiB per file and 2 GiB a minute), 256 KiB of storage with keys at most 128 characters, and 50 logs/s. These limits apply to messages from the extension; data the host sends, such as project snapshots, is not limited by them.
 
 ### Trusted-only APIs and publishing
 

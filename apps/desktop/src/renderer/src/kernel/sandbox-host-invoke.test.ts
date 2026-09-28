@@ -8,6 +8,7 @@ import { installBridgeForTests, resetBridgeForTests } from './bridge';
 import { CLIPBOARD_TEXT_MAX_CHARS, type PowermoveBridge } from '../../../shared/ipc';
 import type { HostDeps } from './host';
 import type { ExtensionRecord, ProjectAPI } from './api';
+import type { ImportUrl } from './remote-media';
 
 const close: Array<() => void> = [];
 afterEach(() => { for (const fn of close.splice(0)) fn(); document.body.replaceChildren(); vi.unstubAllGlobals(); vi.restoreAllMocks(); resetBridgeForTests(); });
@@ -51,7 +52,7 @@ async function runtime(permissions: string[]) {
     for (let wait = 0; wait < 50 && !views.length; wait++) await new Promise(resolve => setTimeout(resolve, 5));
     return views.at(-1)!;
   };
-  return { client, imported, openView };
+  return { client, imported, openView, deps };
 }
 
 it('imports a file over the 1 MiB RPC limit, and meters everything else in the call', async () => {
@@ -99,6 +100,25 @@ it('caps one import at 512 MiB and an extension at 2 GiB a minute, before the ho
   now += 60_000;
   await client.call('invoke', 'assets', 'import', [fileOf(512)]);
   expect(imported).toHaveBeenCalledTimes(6);
+});
+
+it('counts assets.importUrl downloads against the same 2 GiB a minute, before they are read back', async () => {
+  vi.spyOn(Date, 'now').mockImplementation(() => 2_000_000);
+  const { client, imported, deps } = await runtime(['assets', 'network']);
+  const downloads: number[] = [];
+  let size = 0;
+  // The kernel's importUrl: main reports the size, `admit` may refuse it, then the file imports.
+  (deps.assets as { importUrl?: ImportUrl }).importUrl = async (_url, admit) => { admit?.(size); downloads.push(size); return (await imported(fileOf(0) as unknown as File)).id; };
+  for (let index = 0; index < 4; index++) await client.call('invoke', 'assets', 'import', [fileOf(500, `part-${index}.png`)]);
+  size = 49 * MiB;
+  await expect(client.call('invoke', 'assets', 'importUrl', ['https://cdn.example/big.png'])).rejects.toMatchObject({ code: 'resource_limit', message: expect.stringContaining('2 GiB') });
+  expect(downloads).toEqual([]);
+  size = 40 * MiB;
+  await client.call('invoke', 'assets', 'importUrl', ['https://cdn.example/fits.png']);
+  expect(downloads).toEqual([40 * MiB]);
+  // The download's bytes are in the window: 2040 MiB leaves room for 8, not 9.
+  await expect(client.call('invoke', 'assets', 'import', [fileOf(9)])).rejects.toMatchObject({ code: 'resource_limit' });
+  await client.call('invoke', 'assets', 'import', [fileOf(8)]);
 });
 
 /* ui.copy (report item 11): the manifest record's clipboard permission, a

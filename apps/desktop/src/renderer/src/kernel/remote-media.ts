@@ -38,8 +38,13 @@ export const decodesAsMedia: MediaDecoder = async (file, kind) => {
   }
 };
 
+/** Throws to refuse a download of `bytes` before any of it is read back (a sandbox's import quota). */
+export type AdmitDownload = (bytes: number) => void;
+/** `assets.importUrl` as the kernel implements it: the host passes `admit` for a sandboxed caller. */
+export type ImportUrl = (url: string, admit?: AdmitDownload) => Promise<string>;
+
 /** Downloads `value` through main and returns it as a File that decoded as media. */
-export async function fetchRemoteMedia(value: unknown, decode: MediaDecoder = decodesAsMedia): Promise<File> {
+export async function fetchRemoteMedia(value: unknown, decode: MediaDecoder = decodesAsMedia, admit?: AdmitDownload): Promise<File> {
   const url = parseExtensionUrl(value);
   if (!url) throw new TypeError('assets.importUrl accepts an https URL of at most 2 KB without credentials');
   const remote = bridge()?.remoteMedia;
@@ -51,6 +56,7 @@ export async function fetchRemoteMedia(value: unknown, decode: MediaDecoder = de
   }
   try {
     if (!Number.isSafeInteger(info.size) || info.size < 1 || info.size > MAX_BYTES) throw new Error('The download has an invalid size');
+    admit?.(info.size);
     const parts: Uint8Array[] = [];
     for (let offset = 0; offset < info.size;) {
       const chunk = await remote.read(info.token, offset, Math.min(CHUNK_BYTES, info.size - offset));
