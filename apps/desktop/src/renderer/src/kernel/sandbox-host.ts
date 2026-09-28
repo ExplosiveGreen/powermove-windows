@@ -62,6 +62,26 @@ export function cached<T>(rpc: Rpc, id: number, fallback: T, map: (value: unknow
   let pending = false;
   return (...args) => { if (!pending) { pending = true; void rpc.invokeHandle(id, ...args).then(value => { last = map(value); }).catch(() => {}).finally(() => { pending = false; }); } return last; };
 }
+/** How long a check waits for a sandboxed command's `when`. */
+export const WHEN_DEADLINE_MS = 100;
+/**
+ * A sandboxed `when`, asked afresh on every check. An answer within
+ * `deadlineMs` is the check's; past it the check takes the last answer
+ * (`true` before any), and the late one becomes the last when it lands.
+ */
+export function freshWhen(rpc: Rpc, id: number, deadlineMs = WHEN_DEADLINE_MS): () => Promise<boolean> {
+  let last = true, asked = 0, answered = 0;
+  return () => new Promise<boolean>((resolve, reject) => {
+    const check = ++asked;
+    let late = false;
+    const timer = setTimeout(() => { late = true; resolve(last); }, deadlineMs);
+    rpc.invokeHandle(id).then(value => {
+      // An older check answering after a newer one does not overwrite it.
+      if (check > answered) { answered = check; last = Boolean(value); }
+      clearTimeout(timer); resolve(Boolean(value));
+    }, error => { clearTimeout(timer); if (!late) reject(error); });
+  });
+}
 function themeSnapshot(kernel: Kernel): SandboxInit['theme'] {
   const definition = kernel.themes.get(kernel.theme.activeId);
   const scheme = themeScheme(definition, kernel.theme.scheme);
@@ -238,7 +258,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
         case 'theme': item = host.api.theme.register(sandboxTheme(value) as unknown as Parameters<typeof host.api.theme.register>[0]); break;
         case 'keybindings': item = host.api.keybindings.bind({ ...value, priority: 1000 } as unknown as Parameters<typeof host.api.keybindings.bind>[0]); break;
         case 'media-defaults': item = host.api.media.registerImportDefaults(value as unknown as Parameters<typeof host.api.media.registerImportDefaults>[0]); break;
-        case 'commands': item = host.api.commands.register({ ...value, id: String(value.id), label: String(value.label), run: (...args: unknown[]) => rpc.invokeHandle(Number(value.run), ...args), ...(value.when ? { when: cached(rpc, Number(value.when), true) } : {}) }); break;
+        case 'commands': item = host.api.commands.register({ ...value, id: String(value.id), label: String(value.label), run: (...args: unknown[]) => rpc.invokeHandle(Number(value.run), ...args), ...(value.when ? { when: freshWhen(rpc, Number(value.when)) } : {}) }); break;
         case 'status': item = host.api.status.register({ ...value, id: String(value.id), text: cached(rpc, Number(value.text), null), ...(value.onClick ? { onClick: () => void rpc.invokeHandle(Number(value.onClick)) } : {}) }); break;
         /* Asked for every query; the palette keeps a reply only while it still
            shows the query that reply answers. */

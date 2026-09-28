@@ -122,8 +122,9 @@ export interface CommandDefinition {
   /** Display hint only; bind keys with `keybindings.bind`. */
   kb?: string | null;
   run: (...args: unknown[]) => unknown;
-  /** Return false to hide from palette/menus (still runnable by id). */
-  when?: () => boolean;
+  /** Return false to hide from palette/menus (still runnable by id). Asked
+   *  on every check; a Promise (sandboxed extensions) lands when it settles. */
+  when?: () => boolean | Promise<boolean>;
 }
 
 export interface CommandsAPI {

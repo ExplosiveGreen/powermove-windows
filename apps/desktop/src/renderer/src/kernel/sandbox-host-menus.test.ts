@@ -5,7 +5,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { createRpc } from '../../../shared/sandbox-rpc';
 import { createSandboxAPI, sandboxControl, type SandboxEvent } from '../../sandbox/shim-api';
-import { createSandboxRuntime } from './sandbox-host';
+import { createSandboxRuntime, freshWhen, WHEN_DEADLINE_MS } from './sandbox-host';
 import { createKernel, MENU_DEADLINE_MS } from './registries';
 import type { HostDeps } from './host';
 import type { ExtensionRecord, MenuContribution, ProjectAPI } from './api';
@@ -104,4 +104,49 @@ it('answers a sandboxed palette provider for the query asked, the first one incl
   await second[0]!.run();
   await first[0]!.run();
   expect(ran).toEqual(['beta', 'alpha']);
+});
+
+it('asks a sandboxed when() afresh on every check', async () => {
+  const kernel = await sandboxed(api => {
+    let enabled = true;
+    api.commands.register({ id: 'menu-ext.go', label: 'Go', run: () => {}, when: () => enabled });
+    api.commands.register({ id: 'menu-ext.toggle', label: 'Toggle', run: () => { enabled = !enabled; } });
+  });
+  const when = kernel.commands.get('menu-ext.go')!.when!;
+  expect(await when()).toBe(true);
+  await kernel.commands.get('menu-ext.toggle')!.run();
+  expect(await when()).toBe(false);
+  await kernel.commands.get('menu-ext.toggle')!.run();
+  expect(await when()).toBe(true);
+});
+
+it('falls back to the last when() answer only when the fresh one is late', async () => {
+  vi.useFakeTimers();
+  const replies: Array<(value: unknown) => void> = [];
+  const rpc = { invokeHandle: vi.fn(() => new Promise(resolve => replies.push(resolve))) } as unknown as ReturnType<typeof createRpc>;
+  const when = freshWhen(rpc, 3);
+  const seen: boolean[] = [];
+
+  void when().then(value => seen.push(value));
+  await vi.advanceTimersByTimeAsync(WHEN_DEADLINE_MS);
+  expect(seen).toEqual([true]); // late, and nothing answered yet
+  replies[0]!(false); // the late answer still becomes the last one
+  await vi.advanceTimersByTimeAsync(0);
+
+  void when().then(value => seen.push(value));
+  replies[1]!(true); // in time: the fresh answer, not the last
+  await vi.advanceTimersByTimeAsync(0);
+  expect(seen).toEqual([true, true]);
+
+  void when().then(value => seen.push(value)); // a slow check, answered after a newer one
+  void when().then(value => seen.push(value));
+  replies[3]!(false);
+  await vi.advanceTimersByTimeAsync(0);
+  replies[2]!(true);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(seen).toEqual([true, true, false, true]);
+  void when().then(value => seen.push(value));
+  await vi.advanceTimersByTimeAsync(WHEN_DEADLINE_MS);
+  expect(seen.at(-1)).toBe(false); // the newer check's answer stands as the last one
+  expect(rpc.invokeHandle).toHaveBeenCalledTimes(5);
 });
