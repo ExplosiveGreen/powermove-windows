@@ -328,6 +328,11 @@ const bridge: PowermoveBridge = {
   },
   openExternal: (url) => ipcRenderer.invoke(IPC.openExternal, url) as Promise<void>,
   extensionOpenExternal: (url) => ipcRenderer.invoke(IPC.extensionOpenExternal, url) as Promise<void>,
+  remoteMedia: {
+    fetch: (url) => ipcRenderer.invoke(IPC.remoteMediaFetch, url),
+    read: (token, offset, length) => ipcRenderer.invoke(IPC.remoteMediaRead, { token, offset, length }),
+    release: (token) => ipcRenderer.invoke(IPC.remoteMediaRelease, token)
+  },
   nativeEdit: (action: NativeEditAction) => ipcRenderer.send(IPC.nativeEdit, action),
   updates: {
     status: () => ipcRenderer.invoke(IPC.updateStatus) as Promise<AppUpdateState>,
