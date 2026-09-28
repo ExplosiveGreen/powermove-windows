@@ -308,8 +308,9 @@ export async function startWorkspaceCommand(root: string, access: 'project' | 'c
   const shell = ['/bin/sh', '-c', 'mkdir -p -- "$TMPDIR" 2>/dev/null; exec /bin/zsh -c "$1"', 'zsh', command];
   const child = spawn(access === 'project' ? '/usr/bin/sandbox-exec' : shell[0]!,
     access === 'project' ? ['-p', profile, ...shell] : shell.slice(1),
-    { cwd: root, env, detached: true, stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
-  if (child.stdin) { child.stdin.on('error', () => undefined); child.stdin.end(options.input); }
+    { cwd: root, env, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  // Closed at once, so stdin reads end as they did from /dev/null.
+  child.stdin.on('error', () => undefined); child.stdin.end(options.input);
   let output = '', truncated = false, running = true, exitCode: number | null = null;
   let ending: CommandEnding | null = null, exited = false;
   const sweep = () => child.pid ? killProcessFamily(child.pid) : Promise.resolve();
