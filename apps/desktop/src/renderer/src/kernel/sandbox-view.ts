@@ -21,6 +21,7 @@
 import { createRpc, type Rpc, type RpcBudget } from '../../../shared/sandbox-rpc';
 import type { SandboxInit, SandboxKey, SandboxKeyEvent, SandboxPanelInfo, SandboxViewInit } from '../../sandbox/shim-api';
 import type { Disposable } from './api';
+import { importedFile } from './sandbox-schemas';
 
 export interface ViewLink {
   rpc: Rpc;
@@ -123,7 +124,7 @@ export function mountSandboxView(host: ViewHost, panel: SandboxPanelInfo, body: 
         if (host.state) host.state(panel.id, 'error', message);
         else host.report(new Error(`Panel "${panel.id}": ${message}`));
       }
-    }, 10_000, { budget: host.budget, onSustainedLimit: host.budgetExceeded, onRemoteHandleRelease: host.releaseRemoteHandle });
+    }, 10_000, { budget: host.budget, unmetered: importedFile, onSustainedLimit: host.budgetExceeded, onRemoteHandleRelease: host.releaseRemoteHandle });
     host.links.add(link);
     live = { link, token };
     host.connectRuntime(panel.id, token, brokered.port2);

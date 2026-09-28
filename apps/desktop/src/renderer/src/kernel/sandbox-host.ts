@@ -11,7 +11,7 @@ import { bridge } from './bridge';
 import { plain, projectSnapshots, sandboxStats } from './project-snapshots';
 import { sandboxBundleUrl, sandboxDocumentUrl, sandboxOrigin } from '../../../shared/sandbox-origin';
 import { watchSandbox } from './sandbox-watchdog';
-import { menuEntriesSchema, paletteEntriesSchema, parseHostEvent, parseInvoke, parseRegistration } from './sandbox-schemas';
+import { importedFile, menuEntriesSchema, paletteEntriesSchema, parseHostEvent, parseInvoke, parseRegistration } from './sandbox-schemas';
 
 /** Kernel events that can change a document's SandboxState. */
 const STATE_EVENTS = ['project:changed', 'selection', 'time', 'transport'] as const;
@@ -27,6 +27,10 @@ const SAFE_INVOKE: Record<string, Set<string>> = {
 };
 const HOST_EVENTS = new Set(['project:changed', 'selection', 'time', 'transport', 'theme', 'extensions:changed']);
 const ownId = (extension: string, id: string): boolean => id.startsWith(`${extension}.`);
+/* assets.import files skip the RPC byte limit (importedFile); these caps
+   hold instead, checked on `file.size` before the host reads a byte. */
+const IMPORT_FILE_BYTES = 512 * 1024 * 1024;
+const IMPORT_MINUTE_BYTES = 2 * 1024 * 1024 * 1024;
 const LEGACY_EDIT_COMMANDS = new Set(['delete', 'duplicate', 'split', 'selectAll', 'deselect', 'groupLayers', 'ungroupLayers', 'nudgeSelection', 'nudgeKeyframes']);
 function denied(message: string, code = 'permission_denied'): never {
   const error = new Error(message) as Error & { code: string };
@@ -164,6 +168,14 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   const persistedStorage = (deps.pm as { store?: { get?: (key: string, fallback: unknown) => unknown } }).store?.get?.(`ext.${record.id}`, {});
   const storageValues = new Map<string, unknown>(persistedStorage && typeof persistedStorage === 'object' && !Array.isArray(persistedStorage)
     ? Object.entries(persistedStorage) : []);
+  const imports: Array<{ at: number; bytes: number }> = [];
+  const admitImport = (file: File): void => {
+    if (file.size > IMPORT_FILE_BYTES) denied('assets.import accepts files up to 512 MiB', 'resource_limit');
+    const now = Date.now();
+    while (imports.length && now - imports[0]!.at >= 60_000) imports.shift();
+    if (imports.reduce((sum, entry) => sum + entry.bytes, file.size) > IMPORT_MINUTE_BYTES) denied('assets.import accepts up to 2 GiB a minute', 'resource_limit');
+    imports.push({ at: now, bytes: file.size });
+  };
   const invoke = (namespace: string, method: string, args: unknown): unknown => {
     if (!SAFE_INVOKE[namespace]?.has(method)) throw new Error(`Sandbox method unavailable: ${namespace}.${method}`);
     const parsed = parseInvoke(namespace, method, args);
@@ -187,6 +199,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     if (namespace === 'assets' && method !== 'get' && !permissions.includes('assets')) {
       const error = new Error(`assets.${method} requires assets permission`); error.name = 'PermissionError'; throw error;
     }
+    if (namespace === 'assets' && method === 'import') admitImport(parsed[0] as File);
     if (namespace === 'storage') {
       const key = String(parsed[0]);
       if (key.length > 128) denied('storage key exceeds 128 characters', 'resource_limit');
@@ -319,7 +332,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     ...shared(runtimeLink, true),
     activated: () => activated(),
     'activation-error': (error: { message: string }) => rejected(new Error(error.message))
-  }, 10_000, { budget, onSustainedLimit: () => stopForBudget(), onRemoteHandleRelease: id => remoteHandles.delete(id) });
+  }, 10_000, { budget, unmetered: importedFile, onSustainedLimit: () => stopForBudget(), onRemoteHandleRelease: id => remoteHandles.delete(id) });
   runtimeLink.rpc = rpc;
   /* Data plane (docs/sandbox-data-plane.md §3). Each document holds a small
      SandboxState; state-changing kernel events and subscribed occurrences

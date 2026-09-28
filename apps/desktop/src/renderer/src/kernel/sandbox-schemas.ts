@@ -50,6 +50,12 @@ export const invokeSchemas: Record<string, z.ZodType> = {
   'palette.open': anyArgs, 'media.getImportDefaults': z.tuple([]),
   'events.emit': z.tuple([id, data]), 'extensions.setUp': oneId
 };
+/** The File argument 0 of an `assets.import` call carries: the RPC byte limit skips it, and the handler caps it on `file.size` before a byte is read. */
+export function importedFile(method: unknown, args: unknown[]): File | undefined {
+  if (method !== 'invoke' || args[0] !== 'assets' || args[1] !== 'import' || !Array.isArray(args[2])) return undefined;
+  const file: unknown = args[2][0];
+  return typeof File !== 'undefined' && file instanceof File ? file : undefined;
+}
 export function parseInvoke(namespace: string, method: string, args: unknown): unknown[] {
   const schema = invokeSchemas[`${namespace}.${method}`];
   if (!schema) throw new Error(`Sandbox method unavailable: ${namespace}.${method}`);

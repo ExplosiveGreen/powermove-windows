@@ -165,7 +165,7 @@ flush. Within one flush, `time` and `selection` deliver only their latest value,
 repeated `project:changed` of the same `kind` arrive once, and other events keep
 their order. The synchronous reads return the state as of the latest delivery.
 
-Each extension is limited to 200 registrations, 2,000 live callback handles, 50 open panel views, 200 RPC messages/s, 1 MiB per RPC payload, 256 KiB of storage with keys at most 128 characters, and 50 logs/s. These limits apply to messages from the extension; data the host sends, such as project snapshots, is not limited by them.
+Each extension is limited to 200 registrations, 2,000 live callback handles, 50 open panel views, 200 RPC messages/s, 1 MiB per RPC payload (a file passed to `assets.import` is not counted; imports are capped at 512 MiB per file and 2 GiB a minute), 256 KiB of storage with keys at most 128 characters, and 50 logs/s. These limits apply to messages from the extension; data the host sends, such as project snapshots, is not limited by them.
 
 ### Trusted-only APIs and publishing
 
