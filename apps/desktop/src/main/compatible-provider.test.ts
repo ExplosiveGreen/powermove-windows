@@ -8,6 +8,7 @@ import { providerUrl } from '../shared/compatible-provider';
 import { restoreExtensionChangeSet } from './codex/change-history';
 import { prepareAgentWorkspace } from './codex/workspace';
 import { agentResultSchema } from './codex/instructions';
+import { AGENT_SHELL_NETWORK_INSTRUCTIONS } from './agent-network';
 const directories: string[] = [];
 afterEach(async () => { for (const dir of directories.splice(0)) await rm(dir, { recursive: true, force: true }); });
 const event = (delta: any, finish_reason: any = null) => `data: ${JSON.stringify({ choices: [{ delta, finish_reason }] })}\r\n\r\n`;
@@ -46,6 +47,9 @@ it('authors and publishes a real effect through API tools, collects artifacts an
   expect(await readFile(path.join(directory, 'extensions/gradient-tint/index.ts'), 'utf8')).toBe(source);
   expect(JSON.parse(result.text).artifacts).toEqual([]);
   expect(requests[0].messages[0].content).not.toContain('require Claude or ChatGPT');
+  // Project shells reach only the download allowlist; no open web research.
+  expect(requests[0].messages[0].content).toContain(AGENT_SHELL_NETWORK_INSTRUCTIONS);
+  expect(requests[0].messages[0].content).not.toContain('web research');
   expect(requests[1].messages.at(-1).content).toContain('PowermoveAPI');
   // The compile check reports its result; its bundle stays out of the workspace.
   expect(requests[4].messages.at(-1).content).toContain('\\"hash\\":');
