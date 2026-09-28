@@ -10,6 +10,7 @@ export const IPC = {
   ping: 'app:ping',
   inputKey: 'input:key',
   storeSandboxFocus: 'store:sandbox-focus',
+  sandboxTerminate: 'store:sandbox-terminate',
   fontFamilies: 'fonts:families',
 
   onboardingAnimationComplete: 'onboarding:animation-complete',
@@ -608,6 +609,8 @@ export type NativeMenuRequest = {
 export interface PowermoveBridge {
   onInputKey?(cb: (input: SandboxInputKey) => void): () => void;
   sandboxFocus?(focus: { focused: boolean; field: boolean; extensionId: string }): void;
+  /** Kills the OS processes that run only this extension's sandbox (never an editor's); resolves to how many. */
+  sandboxTerminate?(extensionId: string): Promise<number>;
   compatible?: {
     status(): Promise<import('./compatible-provider').CompatibleProviderConfig>;
     configure(input: import('./compatible-provider').CompatibleProviderInput): Promise<import('./compatible-provider').CompatibleProviderConfig>;
