@@ -267,8 +267,11 @@ export async function prepareAgentWorkspace(
        itself; below it, folders are checked to be real first. */
     await mkdir(root, { recursive: true });
     await mkdir(state, { recursive: true });
+    // Scratch a crash left behind; a discard running now keeps its fresh one.
     for (const entry of await readdir(state)) {
-      if (entry.startsWith(SCRATCH_PREFIX)) await rm(path.join(state, entry), { recursive: true, force: true });
+      if (!entry.startsWith(SCRATCH_PREFIX)) continue;
+      const scratch = path.join(state, entry);
+      if ((await lstat(scratch)).mtimeMs < Date.now() - 60_000) await rm(scratch, { recursive: true, force: true });
     }
     await writeAtomic(schemaPath, `${JSON.stringify(schema, null, 2)}\n`);
     const scratch = await scratchFolder(root);
