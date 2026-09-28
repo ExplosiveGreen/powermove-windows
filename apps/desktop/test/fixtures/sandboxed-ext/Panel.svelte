@@ -1,13 +1,25 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { fade } from 'svelte/transition';
   import type { PanelProps } from 'powermove';
 
   let { api }: PanelProps = $props();
-  let revision = $state(api!.project.revision());
   let note = $state('');
   let runs = $state(0);
-  const off = api!.events.on('project:changed', () => { revision = api!.project.revision(); });
-  onDestroy(() => off.dispose());
+  let faded = $state(false);
+  let root: HTMLElement;
+  // Reactive api reads: each re-runs when the kernel's value changes, no events.on.
+  const revision = $derived(api!.project.revision());
+  const time = $derived(api!.project.time().toFixed(2));
+  // undefined until this view's first snapshot lands, so the row fades in.
+  const layers = $derived(api!.project.latest()?.layers.length);
+
+  /* Playwright cannot read inside this out-of-process frame, so the panel
+     reports what it rendered after each update (e2e/extension-sandbox.spec.ts). */
+  $effect(() => {
+    void [revision, time, layers, faded];
+    const shown = Object.fromEntries([...root.querySelectorAll<HTMLElement>('[data-readout]')].map(el => [el.dataset.readout, el.textContent]));
+    api!.events.emit('readout', { ...shown, faded });
+  });
 
   async function run(): Promise<void> {
     const result = await api!.commands.run(`${api!.id}.command`);
@@ -15,11 +27,15 @@
   }
 </script>
 
-<section class="fixture">
-  <p class="row"><span>Project revision</span><b>{revision}</b></p>
+<section class="fixture" bind:this={root}>
+  <p class="row"><span>Project revision</span><b data-readout="revision">{revision}</b></p>
   <p class="row"><span>Runs</span><b>{runs}</b></p>
   <input class="field" placeholder="Note" bind:value={note} aria-label="Note" />
   <button class="button" type="button" onclick={run}>Run sandbox command</button>
+  <p class="row"><span>Time</span><b data-readout="time">{time}</b></p>
+  {#if layers !== undefined}
+    <p class="row" transition:fade={{ duration: 120 }} onintroend={() => { faded = true; }}><span>Layers</span><b data-readout="layers">{layers}</b></p>
+  {/if}
 </section>
 
 <style>
