@@ -252,10 +252,11 @@ async function planeRuntime(kernel: ReturnType<typeof createKernel>, deps: HostD
   const ticks: string[] = [];
   let api!: any;
   let init!: SandboxInit;
+  let rpc!: ReturnType<typeof createRpc>;
   const pending = createSandboxRuntime(kernel, record, deps, {}, { frame, onPostInit(port, message) {
     init = message;
     let control: ReturnType<typeof sandboxControl> | undefined;
-    const child = createRpc(port, { tick: (delta: unknown, events: SandboxEvent[]) => { ticks.push(JSON.stringify([delta, events])); control?.tick(delta as never, events); } }, 10_000, { trusted: true });
+    const child = rpc = createRpc(port, { tick: (delta: unknown, events: SandboxEvent[]) => { ticks.push(JSON.stringify([delta, events])); control?.tick(delta as never, events); } }, 10_000, { trusted: true });
     close.push(() => child.close());
     api = createSandboxAPI(child, message);
     control = sandboxControl(api);
@@ -265,7 +266,7 @@ async function planeRuntime(kernel: ReturnType<typeof createKernel>, deps: HostD
   frame.dispatchEvent(new Event('load'));
   const runtime = await pending;
   close.push(() => runtime.dispose());
-  return { runtime, api, ticks, init: () => init };
+  return { runtime, api, ticks, init: () => init, rpc };
 }
 const flushed = () => new Promise(resolve => setTimeout(resolve, 0));
 
@@ -350,4 +351,28 @@ it('sends small ticks during playback and builds one snapshot for three extensio
   // Unchanged generation: no message, the same frozen object.
   expect(await docs[0]!.api.project.get()).toBe(second[0]);
   expect(stats.snapshotBuilds - builds).toBe(1);
+});
+
+it('sends each document one full copy per generation, however often it asks', async () => {
+  const kernel = createKernel();
+  const live = { proj: { revision: 1, layers: [{ id: 'a' }] } as Record<string, any>, time: 0, playing: false };
+  const deps = planeDeps(live);
+  const reader = await planeRuntime(kernel, deps, 'reader-ext', ['project:read']);
+  const other = await planeRuntime(kernel, deps, 'other-ext', ['project:read']);
+  const project = await reader.api.project.get();
+  const generation = reader.init().state.generation;
+  // A patched shim asking straight on its port gets no second copy of the generation it holds.
+  const asked = await Promise.all(Array.from({ length: 20 }, () => reader.rpc.call('project-snapshot')));
+  expect(asked).toEqual(Array(20).fill({ generation, unchanged: true }));
+  expect(await reader.api.project.get()).toBe(project);
+  // Another document at the same generation still gets its own full copy, once.
+  expect(await other.rpc.call('project-snapshot')).toEqual({ generation, json: JSON.stringify({ revision: 1, layers: [{ id: 'a' }] }) });
+  expect(await other.rpc.call('project-snapshot')).toEqual({ generation, unchanged: true });
+  live.proj.layers[0].id = 'b';
+  kernel.events.emit('project:changed', { kind: 'values' });
+  await flushed();
+  const next = await reader.api.project.get();
+  expect(next).toEqual({ revision: 1, layers: [{ id: 'b' }] });
+  expect(await reader.rpc.call('project-snapshot')).toEqual({ generation: generation + 1, unchanged: true });
+  expect(await reader.api.project.get()).toBe(next);
 });

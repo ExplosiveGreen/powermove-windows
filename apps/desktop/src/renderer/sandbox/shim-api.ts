@@ -48,8 +48,8 @@ export const sandboxControl = (api: PowermoveAPI): SandboxControl => (api as unk
  */
 export interface SandboxState { time: number; playing: boolean; revision: number; generation: number; selection: Selection | null }
 export type SandboxEvent = [name: string, payload: unknown];
-/** Reply to `project-snapshot`. */
-export type SandboxSnapshot = { generation: number; json: string } | { generation: number; tooLarge: true };
+/** Reply to `project-snapshot`. `unchanged`: this document was already sent that generation, so its copy stands. */
+export type SandboxSnapshot = { generation: number; json: string } | { generation: number; tooLarge: true } | { generation: number; unchanged: true };
 export interface SandboxInit {
   id: string; apiVersion: number; manifest: PowermoveAPI['manifest']; vars: Record<string, string>;
   theme: { scheme: string; tokens: Record<string, string> }; state: SandboxState; bundleUrl: string;
@@ -284,7 +284,8 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
   let snapshot: { generation: number; value?: unknown; tooLarge?: true } | null = null;
   let inflight: Promise<void> | null = null;
   const fetchSnapshot = (): Promise<void> => inflight ??= (rpc.call('project-snapshot') as Promise<SandboxSnapshot>).then(reply => {
-    if (snapshot && reply.generation < snapshot.generation) return;
+    // `unchanged` names the generation already held here: the copy stands.
+    if ('unchanged' in reply || snapshot && reply.generation < snapshot.generation) return;
     snapshot = 'json' in reply ? { generation: reply.generation, value: deepFreeze(JSON.parse(reply.json)) } : { generation: reply.generation, tooLarge: true };
   }).finally(() => { inflight = null; });
   const readProject = async (): Promise<unknown> => {
