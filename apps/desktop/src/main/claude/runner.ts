@@ -254,7 +254,7 @@ export class ClaudeRunner {
           await validateStagedExtensions(snapshot, extensions ?? []);
           if (this.cancelled.has(req.id)) throw new Error('The Claude run was cancelled.');
           return publishExtensionChanges(snapshot, extensions ?? []);
-        });
+        }, (extensions ?? []).map(change => change.id));
         return { parsed, extensions, changeSet };
       }, async prompt => {
         repairingResult = true;

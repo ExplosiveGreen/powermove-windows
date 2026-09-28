@@ -224,6 +224,30 @@ it('publishes the private copy it checked even when the stage changes afterwards
   expect((await readdir(prepared.historyRoot)).filter((name) => name.startsWith('.snapshot-'))).toEqual([]);
 });
 
+it('snapshots only changed and reported extensions and publishes the rest as their baseline', async () => {
+  const root = await temporaryDirectory();
+  const live = path.join(root, 'extensions');
+  for (const id of ['kept', 'reported', 'edited', 'removed']) await extension(live, id, 'before');
+  const prepared = await stage(root);
+  await writeFile(path.join(prepared.stagingDirectory, 'edited', 'index.ts'), 'after');
+  await rm(path.join(prepared.stagingDirectory, 'removed'), { recursive: true });
+  await extension(prepared.stagingDirectory, 'created', 'new');
+  const record = await withStageSnapshot(prepared, async (snapshot) => {
+    expect((await readdir(snapshot.stagingDirectory)).sort()).toEqual(['created', 'edited', 'reported']);
+    expect([...snapshot.unchanged]).toEqual(['kept']);
+    return publishExtensionChanges(snapshot, [
+      { id: 'created', action: 'created' }, { id: 'edited', action: 'updated' }, { id: 'removed', action: 'removed' }
+    ]);
+  }, ['created', 'edited', 'removed', 'reported']);
+  expect(record?.changes.map((change) => change.id)).toEqual(['created', 'edited', 'removed']);
+  expect((await readdir(live)).sort()).toEqual(['created', 'edited', 'kept', 'reported']);
+  expect(await readFile(path.join(live, 'kept', 'index.ts'), 'utf8')).toBe('before');
+  expect(await readFile(path.join(live, 'edited', 'index.ts'), 'utf8')).toBe('after');
+  // A report naming an unchanged extension is checked against its copy and refused.
+  await expect(withStageSnapshot(await stage(root, 'run-2'), (snapshot) =>
+    publishExtensionChanges(snapshot, [{ id: 'kept', action: 'updated' }]), ['kept'])).rejects.toThrow('did not match');
+});
+
 it.each(['left as a link', 'swapped back'])('refuses to snapshot a folder swapped for a link to private files before its listing, %s', async (mode) => {
   const root = await temporaryDirectory();
   const live = path.join(root, 'extensions');
@@ -243,7 +267,7 @@ it.each(['left as a link', 'swapped back'])('refuses to snapshot a folder swappe
   let copied: string[] = [];
   await expect(withStageSnapshot(prepared, async (snapshot) => {
     copied = await readdir(path.join(snapshot.stagingDirectory, 'checked', 'assets'));
-  })).rejects.toThrow(/changed while it was being copied|ENOENT/);
+  }, ['checked'])).rejects.toThrow(/changed while it was being copied|ENOENT/);
   expect(listing.swap).toBeNull();
   expect(copied).toEqual([]);
   expect((await readdir(prepared.historyRoot)).filter((name) => name.startsWith('.snapshot-'))).toEqual([]);

@@ -192,7 +192,7 @@ export class CompatibleWorkspace {
       const changeSet = await publishExtensionChanges(snapshot, extensions);
       return { ok: true as const, access: this.access, text: JSON.stringify({ ...value, extensions, artifacts, projectId: this.layout.projectId }), extensions,
         ...(changeSet ? { extensionChangeSetId: changeSet.id } : {}) };
-    });
+    }, extensions.map(change => change.id));
   }
 }
 

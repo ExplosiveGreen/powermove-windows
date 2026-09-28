@@ -53,33 +53,45 @@ export async function prepareExtensionStage(options: {
   };
 }
 
+/** A private stage copy; `unchanged` folders matched their baseline and were not copied. */
+export type StageSnapshot = ExtensionStage & { compiledDirectory: string; unchanged: readonly string[] };
+
 /**
  * Run `use` on a private copy of the stage's extensions, taken once in the
  * app-owned history folder that agent processes cannot write. Validate and
  * publish the copy: a process that outlived its command can still rewrite
- * the stage, but not what was checked and ships.
+ * the stage, but not what was checked and ships. Only changed and `reported`
+ * folders are copied; the rest publish as their baseline.
  */
 export async function withStageSnapshot<T>(
   stage: ExtensionStage,
-  use: (snapshot: ExtensionStage & { compiledDirectory: string }) => Promise<T>
+  use: (snapshot: StageSnapshot) => Promise<T>,
+  reported: readonly string[] = []
 ): Promise<T> {
   const directory = path.join(stage.historyRoot, `${SNAPSHOT_PREFIX}${stage.runId}-${randomUUID()}`);
   const stagingDirectory = path.join(directory, 'stage');
+  const unchanged: string[] = [];
   try {
     await fs.mkdir(stagingDirectory, { recursive: true });
     // Only what publishing reads: extension folders, each within its own copy limits.
     for (const entry of await exists(stage.stagingDirectory) ? await fs.readdir(stage.stagingDirectory, { withFileTypes: true }) : []) {
       if (!entry.isDirectory() || !EXTENSION_ID.test(entry.name)) continue;
-      await copyRegularTree(path.join(stage.stagingDirectory, entry.name), path.join(stagingDirectory, entry.name));
+      const source = path.join(stage.stagingDirectory, entry.name);
+      const baseline = stage.baselineHashes[entry.name];
+      if (baseline !== undefined && !reported.includes(entry.name) && await directoryHash(source) === baseline) {
+        unchanged.push(entry.name);
+        continue;
+      }
+      await copyRegularTree(source, path.join(stagingDirectory, entry.name));
     }
-    return await use({ ...stage, stagingDirectory, compiledDirectory: path.join(directory, 'compiled') });
+    return await use({ ...stage, stagingDirectory, compiledDirectory: path.join(directory, 'compiled'), unchanged });
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
 }
 
 export async function publishExtensionChanges(
-  stage: ExtensionStage,
+  stage: ExtensionStage & { unchanged?: readonly string[] },
   declaredChanges: readonly AgentExtensionChange[]
 ): Promise<ExtensionChangeSetRecord | null> {
   const currentHashes = await extensionHashes(stage.liveDirectory);
@@ -88,6 +100,7 @@ export async function publishExtensionChanges(
   }
 
   const stagedHashes = await extensionHashes(stage.stagingDirectory);
+  for (const id of stage.unchanged ?? []) stagedHashes[id] = stage.baselineHashes[id]!;
   const actualIds = changedIds(stage.baselineHashes, stagedHashes);
   const declared = new Map(declaredChanges.map((change) => [change.id, change]));
   const declaredIds = [...declared.keys()].sort();
