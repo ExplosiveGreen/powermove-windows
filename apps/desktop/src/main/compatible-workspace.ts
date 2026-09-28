@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { AgentToolContent, CodexRunResult } from '../shared/ipc';
@@ -34,8 +35,8 @@ export class CompatibleWorkspace {
 
   constructor(readonly layout: AgentWorkspace, readonly access: 'project' | 'computer', readonly context: 'app' | 'project' = 'project') {}
 
-  private async start(command: string, timeoutMs: number, signal: AbortSignal, keepTail: boolean): Promise<WorkspaceCommand> {
-    const started = await startWorkspaceCommand(this.layout.root, this.access, command, { timeoutMs, signal, keepTail });
+  private async start(command: string, timeoutMs: number, signal: AbortSignal, keepTail: boolean, input?: string): Promise<WorkspaceCommand> {
+    const started = await startWorkspaceCommand(this.layout.root, this.access, command, { timeoutMs, signal, keepTail, input });
     this.commands.add(started);
     void started.done.finally(() => this.commands.delete(started)).catch(() => undefined);
     return started;
@@ -98,8 +99,17 @@ export class CompatibleWorkspace {
     if (name === 'write_file') {
       if (typeof args.text !== 'string' || args.text.length > 1000000) throw new Error('Provide text no larger than 1,000,000 characters.');
       const file = await this.resolve(args.path);
-      await mkdir(path.dirname(file), { recursive: true });
-      await writeFile(file, args.text, 'utf8');
+      if (this.access === 'project' && process.platform === 'darwin') {
+        // The sandbox writes it: a link planted after, or dangling past, the
+        // check above still cannot lead outside the workspace.
+        const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+        const written = await settleCommand(await this.start(`/bin/mkdir -p -- ${quote(path.dirname(file))} && /bin/cat >| ${quote(file)}`,
+          30000, signal, false, args.text), signal);
+        if (written.exitCode !== 0) throw new Error(`Could not write ${file}: ${written.output.trim()}`);
+      } else {
+        await mkdir(path.dirname(file), { recursive: true });
+        await writeFile(file, args.text, 'utf8');
+      }
       return text({ path: file, bytes: Buffer.byteLength(args.text) });
     }
     if (name === 'run_command') {
@@ -140,7 +150,12 @@ export class CompatibleWorkspace {
     const manifest = parseManifest(JSON.parse(await readFile(path.join(dir, 'manifest.json'), 'utf8')));
     if (!manifest.ok) throw new Error(manifest.error);
     if (manifest.manifest.id !== id) throw new Error('The manifest id must match its folder.');
-    return compileExtension({ dir, entry: manifest.manifest.entry || 'index.ts', outDir: path.join(this.layout.runDirectory, '.compiled') });
+    // Only the result matters; the bundle goes where commands cannot plant links.
+    const outDir = await mkdtemp(path.join(os.tmpdir(), 'powermove-compile-'));
+    try {
+      const compiled = await compileExtension({ dir, entry: manifest.manifest.entry || 'index.ts', outDir });
+      return compiled.ok ? { ok: true as const, hash: compiled.hash } : compiled;
+    } finally { await rm(outDir, { recursive: true, force: true }); }
   }
 
   async finish(value: Record<string, unknown>, signal: AbortSignal): Promise<CodexRunResult> {
@@ -274,7 +289,7 @@ export interface WorkspaceCommand {
 }
 
 export async function startWorkspaceCommand(root: string, access: 'project' | 'computer', command: string,
-  options: { timeoutMs: number; signal: AbortSignal; keepTail?: boolean }): Promise<WorkspaceCommand> {
+  options: { timeoutMs: number; signal: AbortSignal; keepTail?: boolean; input?: string }): Promise<WorkspaceCommand> {
   const { timeoutMs, signal } = options;
   signal.throwIfAborted();
   const env = await commandEnvironment(await realpath(root), access);
@@ -293,7 +308,8 @@ export async function startWorkspaceCommand(root: string, access: 'project' | 'c
   const shell = ['/bin/sh', '-c', 'mkdir -p -- "$TMPDIR" 2>/dev/null; exec /bin/zsh -c "$1"', 'zsh', command];
   const child = spawn(access === 'project' ? '/usr/bin/sandbox-exec' : shell[0]!,
     access === 'project' ? ['-p', profile, ...shell] : shell.slice(1),
-    { cwd: root, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    { cwd: root, env, detached: true, stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
+  if (child.stdin) { child.stdin.on('error', () => undefined); child.stdin.end(options.input); }
   let output = '', truncated = false, running = true, exitCode: number | null = null;
   let ending: CommandEnding | null = null, exited = false;
   const sweep = () => child.pid ? killProcessFamily(child.pid) : Promise.resolve();

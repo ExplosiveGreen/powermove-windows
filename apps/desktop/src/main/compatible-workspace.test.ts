@@ -27,6 +27,19 @@ it('creates, reads and lists files and rejects path and symbolic-link escapes', 
   await expect(ws.call('write_file', { path: 'escape/escaped.txt', text: 'no' }, signal())).rejects.toThrow('symbolic link');
 });
 
+it.runIf(process.platform === 'darwin')('writes files and compiles where a planted dangling link cannot lead outside', async () => {
+  const ws = await workspace();
+  const outside = await mkdtemp(path.join(os.tmpdir(), 'pm-planted-')); directories.push(outside);
+  await symlink(path.join(outside, 'created.txt'), path.join(ws.layout.root, 'dangling.txt'));
+  await expect(ws.call('write_file', { path: 'dangling.txt', text: 'escaped' }, signal())).rejects.toThrow();
+  await symlink(outside, path.join(ws.layout.runDirectory, '.compiled'));
+  const dir = path.join(ws.layout.stagingDirectory, 'linked-out');
+  await ws.call('write_file', { path: path.join(dir, 'manifest.json'), text: JSON.stringify({ id: 'linked-out', name: 'Linked', version: '1.0.0', apiVersion: 1, contributes: ['effects'] }) }, signal());
+  await ws.call('write_file', { path: path.join(dir, 'index.ts'), text: 'export default function activate() {}' }, signal());
+  expect(JSON.parse(((await ws.call('compile_extension', { id: 'linked-out' }, signal()))[0] as any).text)).toMatchObject({ ok: true });
+  expect(await readdir(outside)).toEqual([]);
+});
+
 it('reports real compile errors before publishing and exports created artifacts', async () => {
   const ws = await workspace();
   const dir = path.join(ws.layout.stagingDirectory, 'broken-effect');
