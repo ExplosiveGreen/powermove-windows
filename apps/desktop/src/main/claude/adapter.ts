@@ -10,6 +10,7 @@ import {
 } from '../agent-tools/spec';
 
 import type { UserMcpServers } from '../agent-tools/user-mcp';
+import { AGENT_SHELL_NETWORK_HOSTS } from '../agent-network';
 
 const PROJECT_TOOLS = 'Read,Glob,Grep,Write,Edit,Bash,WebSearch,WebFetch,Skill,Agent,Task';
 const EDITOR_TOOLS = 'Read,Glob,Grep,Skill,Agent,Task';
@@ -21,33 +22,14 @@ const STRICT_SANDBOX_SETTINGS = {
   failIfUnavailable: true
 } satisfies SandboxSettings;
 
-const STRICT_SANDBOX = JSON.stringify({ sandbox: STRICT_SANDBOX_SETTINGS });
+// dontAsk still auto-approves sandboxed Bash under autoAllowBashIfSandboxed,
+// so Edit runs turn that off and deny every shell and file-writing tool.
+const EDITOR_SANDBOX = JSON.stringify({ sandbox: { ...STRICT_SANDBOX_SETTINGS, autoAllowBashIfSandboxed: false } satisfies SandboxSettings });
+const EDITOR_DISALLOWED_TOOLS = 'Bash,Monitor,PowerShell,Write,Edit,NotebookEdit';
 
-/** Hosts sandboxed Bash may reach in project mode: read-only media, font and
- * package CDNs, so research-and-download work (the "Find useful footage" chip)
- * can finish. The sandbox proxy filters by host, not method, so a host that
- * accepts authenticated writes (github.com, registry.npmjs.org, archive.org)
- * would be a bulk upload channel for files the agent can read; none is listed.
- * WebSearch and WebFetch stay available for research on any site. */
-export const CLAUDE_PROJECT_NETWORK_HOSTS = [
-  'assets.mixkit.co',
-  'cdn.freesound.org',
-  'cdn.jsdelivr.net',
-  'cdn.pixabay.com',
-  'codeload.github.com',
-  'files.pythonhosted.org',
-  'fonts.googleapis.com',
-  'fonts.gstatic.com',
-  'images-assets.nasa.gov',
-  'images.pexels.com',
-  'images.unsplash.com',
-  'live.staticflickr.com',
-  'objects.githubusercontent.com',
-  'raw.githubusercontent.com',
-  'unpkg.com',
-  'upload.wikimedia.org',
-  'videos.pexels.com'
-] as const;
+/** Claude project Bash shares the one agent shell allowlist. WebSearch and
+ * WebFetch stay available for research on any site. */
+export const CLAUDE_PROJECT_NETWORK_HOSTS = AGENT_SHELL_NETWORK_HOSTS;
 
 // strictAllowlist denies every other host outright instead of prompting, and
 // stops a command's allowed_domains parameter from widening the list.
@@ -116,10 +98,11 @@ export function buildClaudeArgv(options: ClaudeArgvOptions): string[] {
   } else {
     argv.push(
       '--permission-mode', options.access === 'editor' ? 'dontAsk' : 'acceptEdits',
-      '--settings', options.access === 'editor' ? STRICT_SANDBOX : PROJECT_SANDBOX,
+      '--settings', options.access === 'editor' ? EDITOR_SANDBOX : PROJECT_SANDBOX,
       '--tools', 'default',
       '--allowedTools', withExternal(options.access === 'editor' ? editorTools : projectTools)
     );
+    if (options.access === 'editor') argv.push('--disallowedTools', EDITOR_DISALLOWED_TOOLS);
   }
 
   if (options.extensionsDir) argv.push('--add-dir', options.extensionsDir);
@@ -133,4 +116,4 @@ export function buildClaudeArgv(options: ClaudeArgvOptions): string[] {
 }
 
 export const CLAUDE_PROJECT_SANDBOX_SETTINGS = PROJECT_SANDBOX;
-export const CLAUDE_EDITOR_SANDBOX_SETTINGS = STRICT_SANDBOX;
+export const CLAUDE_EDITOR_SANDBOX_SETTINGS = EDITOR_SANDBOX;

@@ -8,7 +8,7 @@ vi.mock('../agent-tools/user-mcp', async importOriginal => ({
 
 import { spawn } from 'node:child_process';
 import { chmod, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import os, { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -21,7 +21,7 @@ import {
   parseAgentExtensionChanges,
   type CodexRunOptions
 } from './runner';
-import { PROJECT_NETWORK_CONFIG } from './adapter';
+import { PROJECT_PERMISSION_PROFILE } from './adapter';
 import { isolatedCodexHome } from './isolation';
 import { agentWorkspaceRoot, sessionPathFor } from './workspace';
 
@@ -287,7 +287,7 @@ describe('CodexRunner lifecycle', () => {
   });
 
   it.each([['project', true], ['editor', false]] as const)(
-    'passes shell network to autonomous %s access: %s',
+    'passes allowlisted shell network to autonomous %s access: %s, and denies credential reads either way',
     async (access, network) => {
       const userData = await temporaryDirectory(`runner-network-${access}`);
       let launchedArgs: readonly string[] = [];
@@ -298,8 +298,12 @@ describe('CodexRunner lifecycle', () => {
       };
       const result = await new CodexRunner().run(request({ id: `runner-network-${access}-1234`, access }), options);
       expect(result.ok).toBe(true);
-      expect(launchedArgs.includes(PROJECT_NETWORK_CONFIG)).toBe(network);
-      expect(launchedArgs).toContain('--approve-for-me');
+      expect(launchedArgs.includes('features.network_proxy=true')).toBe(network);
+      expect(launchedArgs).toContain(`default_permissions="${PROJECT_PERMISSION_PROFILE}"`);
+      expect(launchedArgs).not.toContain('--approve-for-me');
+      const filesystem = launchedArgs.find(arg => arg.startsWith(`permissions.${PROJECT_PERMISSION_PROFILE}.filesystem=`)) ?? '';
+      expect(filesystem).toContain(`${JSON.stringify(path.join(isolatedCodexHome(userData), 'auth.json'))}="deny"`);
+      expect(filesystem).toContain(`${JSON.stringify(path.join(os.homedir(), '.ssh'))}="deny"`);
     }
   );
 

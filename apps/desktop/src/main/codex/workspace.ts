@@ -48,6 +48,11 @@ export function agentWorkspaceRoot(userData: string, projectId: string): string 
   return path.join(userData, 'Agent Workspaces', safeAgentComponent(projectId));
 }
 
+/** The app data directory that holds a workspace from agentWorkspaceRoot. */
+export function agentWorkspaceUserData(root: string): string {
+  return path.dirname(path.dirname(path.resolve(root)));
+}
+
 export function sessionPathFor(
   root: string,
   authority: CodexAuthority,

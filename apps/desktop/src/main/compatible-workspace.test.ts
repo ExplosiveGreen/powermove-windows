@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import { mkdtemp, readFile, readdir, realpath, rm, stat, symlink, access, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, access, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { COMPATIBLE_WORKSPACE_TOOLS, CompatibleWorkspace, runWorkspaceCommand } from './compatible-workspace';
@@ -128,7 +128,7 @@ it.runIf(process.platform === 'darwin')('gives commands the login PATH without t
   } finally { delete process.env.PM_TEST_PROVIDER_TOKEN; }
 });
 
-it.runIf(process.platform === 'darwin')('caches bun and npm installs in the workspace while HOME stays unwritable', async ({ skip }) => {
+it.runIf(process.platform === 'darwin')('points bun and npm caches into the workspace while HOME stays unwritable', async () => {
   const ws = await workspace();
   const root = await realpath(ws.layout.root);
   const probe = path.join(os.homedir(), `.powermove-sandbox-probe-${process.pid}`);
@@ -138,23 +138,46 @@ it.runIf(process.platform === 'darwin')('caches bun and npm installs in the work
   const cache = (tool: string) => path.join(root, '.powermove', 'cache', tool);
   const env = await runWorkspaceCommand(ws.layout.root, 'project', 'printf "%s|%s|%s|%s" "$BUN_INSTALL_CACHE_DIR" "$npm_config_cache" "$XDG_CACHE_HOME" "$PIP_CACHE_DIR"', 5000, signal());
   expect(env.output).toBe([cache('bun'), cache('npm'), cache('xdg'), cache('pip')].join('|'));
-  const tools = await runWorkspaceCommand(ws.layout.root, 'project', 'command -v bun >/dev/null && command -v npm >/dev/null', 5000, signal());
-  if (tools.exitCode !== 0) skip('bun and npm are not installed');
-  await writeFile(path.join(root, 'package.json'), '{"name":"cache-proof","private":true}');
-  const bun = await runWorkspaceCommand(ws.layout.root, 'project', 'bun add is-number@7.0.0', 120_000, signal());
-  expect(bun.exitCode, bun.output).toBe(0);
-  expect((await readdir(cache('bun'))).some(name => name.startsWith('is-number'))).toBe(true);
-  const npm = await runWorkspaceCommand(ws.layout.root, 'project', 'npm install --no-audit --no-fund --no-save is-odd@3.0.1', 120_000, signal());
-  expect(npm.exitCode, npm.output).toBe(0);
-  expect(await readdir(cache('npm'))).toContain('_cacache');
-}, 300_000);
+});
 
-it.runIf(process.platform === 'darwin')('keeps outbound network in Project access for research and downloads', async () => {
+it.runIf(process.platform === 'darwin')('downloads in Project access only from the shared allowlist, through the proxy', async () => {
   const ws = await workspace();
-  const result = await runWorkspaceCommand(ws.layout.root, 'project', 'curl -sI --max-time 20 https://images.pexels.com -o /dev/null -w "%{http_code}"', 30_000, signal());
-  expect(result.exitCode, result.output).toBe(0);
-  expect(Number(result.output)).toBeGreaterThan(0);
-}, 40_000);
+  const status = (url: string, flags = '') => runWorkspaceCommand(ws.layout.root, 'project',
+    `curl -sS ${flags} --max-time 20 -o /dev/null -w "%{http_code}" ${url}`, 30_000, signal());
+  const allowed = await status('-I https://images.pexels.com');
+  expect(allowed.exitCode, allowed.output).toBe(0);
+  expect(Number(allowed.output)).toBeGreaterThan(0);
+  // The proxy refuses other hosts, including write-capable package registries.
+  for (const url of ['https://example.com', 'https://registry.npmjs.org/is-number']) {
+    const refused = await status(url);
+    expect(refused.exitCode, refused.output).not.toBe(0);
+    expect(refused.output).toContain('403');
+  }
+  // Bypassing the proxy reaches nothing: no direct sockets, no DNS.
+  for (const url of ['https://images.pexels.com', 'https://1.1.1.1']) {
+    expect((await status(url, '--noproxy "*"')).exitCode).not.toBe(0);
+  }
+}, 60_000);
+
+it.runIf(process.platform === 'darwin')('keeps account keys and provider logins unreadable in Project access', async () => {
+  const ws = await workspace();
+  const home = await mkdtemp(path.join(os.tmpdir(), 'pm-api-home-')); directories.push(home);
+  const userData = path.dirname(path.dirname(ws.layout.root));
+  const secrets = [path.join(home, '.ssh', 'id_ed25519'), path.join(home, '.codex', 'auth.json'),
+    path.join(userData, 'codex-runtime', 'auth.json'), path.join(userData, 'claude-runtime', '.credentials.json')];
+  for (const file of secrets) { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, 'secret'); }
+  const previous = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    for (const file of secrets) {
+      const read = await runWorkspaceCommand(ws.layout.root, 'project', `cat ${JSON.stringify(file)}`, 5000, signal());
+      expect(read.output, file).not.toContain('secret');
+      expect(read.output).toContain('not permitted');
+    }
+    const own = await runWorkspaceCommand(ws.layout.root, 'project', 'printf mine > mine.txt && cat mine.txt', 5000, signal());
+    expect(own.output).toBe('mine');
+  } finally { process.env.HOME = previous; }
+});
 
 it.runIf(process.platform === 'darwin')('allows new sessions and still stops what a command leaves running in them', async () => {
   const ws = await workspace();

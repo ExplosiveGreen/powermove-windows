@@ -44,6 +44,21 @@ async function readConfig(file: string, toml: boolean): Promise<Record<string, u
   } catch { throw new Error(`Invalid agent resource configuration: ${file}`); }
 }
 
+// Claude Code merges user settings into every run: sandbox domains and
+// filesystem switches, permission allow rules and extra directories would
+// widen Powermove's isolation, and auth helpers would replace its login.
+const CLAUDE_ISOLATION_KEYS = ['sandbox', 'apiKeyHelper', 'proxyAuthHelper', 'awsCredentialExport', 'awsAuthRefresh',
+  'gcpAuthRefresh', 'skipWebFetchPreflight'] as const;
+
+/** The user's Claude settings without anything that loosens isolation. Deny
+ * rules only narrow a run, so they are kept. */
+export function claudeRuntimeSettings(settings: Record<string, unknown>): Record<string, unknown> {
+  const { permissions, ...rest } = settings;
+  for (const key of CLAUDE_ISOLATION_KEYS) delete rest[key];
+  const deny = permissions && typeof permissions === 'object' ? (permissions as { deny?: unknown }).deny : undefined;
+  return Array.isArray(deny) && deny.length ? { ...rest, permissions: { deny } } : rest;
+}
+
 /** Share skills, plugins, hooks and instructions, while keeping authentication,
  * session history and login files inside Powermove. */
 async function syncUserResources(
@@ -61,7 +76,7 @@ async function syncUserResources(
   if (provider === 'claude') {
     // Copy settings rather than linking: provider settings updates must not
     // rewrite the user's terminal configuration. Credentials are separate.
-    const settings = await readConfig(path.join(sourceHome, 'settings.json'), false);
+    const settings = claudeRuntimeSettings(await readConfig(path.join(sourceHome, 'settings.json'), false));
     await writeConfig(path.join(runtimeHome, 'settings.json'), `${JSON.stringify(settings, null, 2)}\n`);
     return;
   }
