@@ -119,6 +119,13 @@ it.runIf(process.platform === 'darwin')('caches bun and npm installs in the work
   expect(await readdir(cache('npm'))).toContain('_cacache');
 }, 300_000);
 
+it.runIf(process.platform === 'darwin')('keeps outbound network in Project access for research and downloads', async () => {
+  const ws = await workspace();
+  const result = await runWorkspaceCommand(ws.layout.root, 'project', 'curl -sI --max-time 20 https://images.pexels.com -o /dev/null -w "%{http_code}"', 30_000, signal());
+  expect(result.exitCode, result.output).toBe(0);
+  expect(Number(result.output)).toBeGreaterThan(0);
+}, 40_000);
+
 it.runIf(process.platform === 'darwin')('lets Project commands write to their inherited stdio but not other devices', async () => {
   const ws = await workspace();
   const result = await runWorkspaceCommand(ws.layout.root, 'project', 'printf out > /dev/stdout && printf fd > /dev/fd/1 && printf err > /dev/stderr', 5000, signal());

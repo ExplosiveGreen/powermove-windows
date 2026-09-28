@@ -193,7 +193,9 @@ async function commandEnvironment(root: string, access: 'project' | 'computer'):
 export async function runWorkspaceCommand(root: string, access: 'project' | 'computer', command: string, timeoutMs: number, signal: AbortSignal): Promise<{ output: string; exitCode: number | null; truncated: boolean }> {
   signal.throwIfAborted();
   const env = await commandEnvironment(await realpath(root), access);
-  const profile = `(version 1)(allow default)(deny appleevent-send)(deny file-write*)(allow file-write* (subpath ${JSON.stringify(await realpath(root))}) (literal "/dev/null") (literal "/dev/tty")`
+  // Project access keeps outbound network for research and downloads (the
+  // footage chip depends on it); only the filesystem is confined.
+  const profile = `(version 1)(allow default)(allow network-outbound)(deny appleevent-send)(deny file-write*)(allow file-write* (subpath ${JSON.stringify(await realpath(root))}) (literal "/dev/null") (literal "/dev/tty")`
     // Inherited stdio only; a broad /dev subpath would expose devices.
     + ' (literal "/dev/stdout") (literal "/dev/stderr") (regex #"^/dev/fd/[0-9]+$"))';
   if (access === 'project' && process.platform !== 'darwin') throw new Error('Project command sandbox is only available on macOS.');
