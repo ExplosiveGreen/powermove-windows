@@ -379,7 +379,7 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
       const disposable = { dispose() { registrationHandle.dispose(); for (const item of [...previous, ...current]) rpc.release(item); previous = []; current = []; } };
       disposers.push(disposable.dispose);
       return disposable;
-    }, collect: () => [] },
+    }, collect: () => [], gather: async () => [] },
     panels: { register(def: Record<string, any>) {
       if (!def || typeof def.id !== 'string' || !def.id) throw new Error('panels.register requires an id');
       if (!def.component && typeof def.build !== 'function') throw new Error(`panel "${def.id}" needs component or build`);

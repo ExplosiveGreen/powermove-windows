@@ -438,12 +438,13 @@ export function createExtensionAPI(
   };
 
   const menus: MenusAPI = {
-    contribute(location: MenuLocation, items: (ctx: Record<string, unknown>) => MenuContribution[]) {
+    contribute(location: MenuLocation, items: (ctx: Record<string, unknown>) => MenuContribution[] | Promise<MenuContribution[]>) {
       if (typeof items !== 'function') throw new Error(`[ext:${id}] menus.contribute requires a function`);
-      const guarded = guard(polled((ctx: Record<string, unknown>): MenuContribution[] => items(ctx) ?? []), `menu ${location}`, [] as MenuContribution[]);
+      const guarded = guard(polled((ctx: Record<string, unknown>) => items(ctx) ?? []), `menu ${location}`, [] as MenuContribution[]);
       return collect(kernel.contributeMenu(id, location, guarded));
     },
-    collect: (location, ctx) => kernel.collectMenu(location, ctx)
+    collect: (location, ctx) => kernel.collectMenu(location, ctx),
+    gather: async (location, ctx) => kernel.gatherMenu(location, ctx)
   };
 
   const status: StatusAPI = {

@@ -30,11 +30,24 @@ export class MenuController {
   private outside: ((event: PointerEvent) => void) | null = null;
   private outsideTimer = 0;
   private trigger: HTMLElement | null = null;
+  /* Bumped by every open and close: a menu whose items are still arriving
+     opens only if nothing opened or closed menus since it was asked for. */
+  private generation = 0;
 
   constructor(private readonly PM: OverlayPM) {}
 
-  open(anchor: HTMLElement, items: MenuItem[], options: MenuOptions = {}): HTMLElement {
+  /** `items` may be a Promise (contributions that answer asynchronously); the
+      menu then opens when it settles with any, unless another open or a close
+      came first. */
+  open(anchor: HTMLElement, items: MenuItem[] | PromiseLike<MenuItem[]>, options: MenuOptions = {}): HTMLElement {
     this.close(false);
+    if (!Array.isArray(items)) {
+      const asked = this.generation;
+      void Promise.resolve(items).then((ready) => {
+        if (asked === this.generation && ready.length) this.open(anchor, ready, options);
+      }, () => undefined);
+      return document.createElement('div');
+    }
     this.removeForeignMenus();
     this.trigger = focusTarget(anchor);
     const rect = anchor.getBoundingClientRect();
@@ -95,6 +108,7 @@ export class MenuController {
   }
 
   close(restoreFocus = false): void {
+    this.generation += 1;
     window.clearTimeout(this.outsideTimer);
     if (this.outside) document.removeEventListener('pointerdown', this.outside, true);
     const registeredOutside = this.PM._menuOutside as ((event: PointerEvent) => void) | null | undefined;

@@ -487,7 +487,7 @@ function makeUI(
     controls: boundControls(controlAPI),
     toast: (text, opts) => PM?.toast?.(text, opts?.sticky ? 8000 : 2200, opts ?? {}),
     confirm: (title, body) => confirmPrompt(PM, { message: title, ...(body ? { detail: body } : {}) }),
-    menu: (anchor, items: MenuContribution[]) => {
+    menu: (anchor, items: MenuContribution[] | Promise<MenuContribution[]>) => {
       if (anchor && typeof (anchor as HTMLElement).getBoundingClientRect === 'function') PM?.menu?.(anchor, items);
       else {
         const point = anchor as { x: number; y: number };

@@ -273,6 +273,42 @@ describe('installSvelteOverlays', () => {
     expect(document.querySelector('.drop')).not.toBeNull();
   });
 
+  it('opens a menu whose items arrive later, unless another menu or a close came first', async () => {
+    const trigger = document.querySelector<HTMLButtonElement>('#trigger')!;
+    const later = (label: string) => {
+      let answer!: (items: unknown[]) => void;
+      return { items: new Promise<unknown[]>(resolve => { answer = resolve; }), answer: () => answer([{ label }]) };
+    };
+    const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+
+    const first = later('First target');
+    PM.menu(trigger, first.items);
+    expect(document.querySelector('.drop')).toBeNull();
+    first.answer();
+    await settle();
+    expect(document.querySelector('.drop')?.textContent).toContain('First target');
+
+    // Asked for A, then B opened before A answered: A never shows.
+    const stale = later('Stale target');
+    PM.menu(trigger, stale.items);
+    PM.menu(trigger, [{ label: 'Current target' }]);
+    stale.answer();
+    await settle();
+    expect(document.querySelectorAll('.drop')).toHaveLength(1);
+    expect(document.querySelector('.drop')?.textContent).toContain('Current target');
+
+    const dismissed = later('Dismissed');
+    PM.menu(trigger, dismissed.items);
+    PM.closeMenus();
+    dismissed.answer();
+    await settle();
+    expect(document.querySelector('.drop')).toBeNull();
+
+    PM.menu(trigger, Promise.resolve([]));
+    await settle();
+    expect(document.querySelector('.drop')).toBeNull();
+  });
+
   it('closes a menu on an outside pointer and restores its trigger', () => {
     vi.useFakeTimers();
     const trigger = document.querySelector<HTMLButtonElement>('#trigger')!;
