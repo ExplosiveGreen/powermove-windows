@@ -10,8 +10,14 @@
 export const EXTENSION_API_VERSION = 3 as const;
 export const EXTENSION_API_VERSION_VARS = 2 as const;
 /** `full-access` = uses trusted-only namespaces and runs in-realm; the Store requires an explicit trust dialog to install it. */
-export const EXTENSION_PERMISSIONS = ['network', 'clipboard', 'assets', 'project:write', 'full-access'] as const;
+export const EXTENSION_PERMISSIONS = ['network', 'clipboard', 'assets', 'project:read', 'project:write', 'full-access'] as const;
 export type ExtensionPermission = (typeof EXTENSION_PERMISSIONS)[number];
+
+/** Whether `declared` covers `permission`. `project:write` implies `project:read`: an editor has to see what it edits. */
+export function grantsPermission(declared: readonly string[] | undefined, permission: ExtensionPermission): boolean {
+  if (!declared) return false;
+  return declared.includes(permission) || (permission === 'project:read' && declared.includes('project:write'));
+}
 
 export const EXTENSION_ID = /^[a-z0-9][a-z0-9-]{1,63}$/;
 export const EXTENSION_VERSION = /^\d{1,6}\.\d{1,6}\.\d{1,6}$/;

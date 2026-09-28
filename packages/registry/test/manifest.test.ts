@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { EXTENSION_API_VERSION, MANIFEST_LIMITS, parseForkedFrom, parseManifest } from '../src/manifest';
+import { EXTENSION_API_VERSION, MANIFEST_LIMITS, grantsPermission, parseForkedFrom, parseManifest } from '../src/manifest';
 const valid = { id: 'my-extension', name: 'My extension', version: '1.2.3', apiVersion: 1 };
 const bad = (change: Record<string, unknown>) => parseManifest({ ...valid, ...change });
 describe('manifest frozen errors', () => {
@@ -45,9 +45,16 @@ test('fork origin forms', () => {
   expect(bad({ forkedFrom: 'a-handle/store-id@1.2.3' }).ok).toBe(true);
   expect(bad({ forkedFrom: 'x'.repeat(161) })).toEqual({ ok: false, error: 'invalid "forkedFrom"' });
 });
+test('project:write implies project:read and nothing else', () => {
+  expect(grantsPermission(['project:read'], 'project:read')).toBe(true);
+  expect(grantsPermission(['project:write'], 'project:read')).toBe(true);
+  expect(grantsPermission(['project:read'], 'project:write')).toBe(false);
+  expect(grantsPermission(['full-access'], 'project:read')).toBe(false);
+  expect(grantsPermission(undefined, 'network')).toBe(false);
+});
 test('apiVersion 3 permissions parse and version gate', () => {
-  expect(bad({ apiVersion: 3, permissions: ['network', 'clipboard', 'assets', 'project:write', 'full-access'] })).toMatchObject({
-    ok: true, manifest: { apiVersion: 3, permissions: ['network', 'clipboard', 'assets', 'project:write', 'full-access'] }
+  expect(bad({ apiVersion: 3, permissions: ['network', 'clipboard', 'assets', 'project:read', 'project:write', 'full-access'] })).toMatchObject({
+    ok: true, manifest: { apiVersion: 3, permissions: ['network', 'clipboard', 'assets', 'project:read', 'project:write', 'full-access'] }
   });
   expect(bad({ apiVersion: 3, permissions: [] })).toMatchObject({ ok: true, manifest: { permissions: [] } });
   expect(bad({ apiVersion: 2, permissions: [] })).toEqual({ ok: false, error: '"permissions" requires apiVersion 3' });
