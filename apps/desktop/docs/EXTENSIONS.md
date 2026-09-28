@@ -97,7 +97,7 @@ new Store-bound extensions and list the access they need in `manifest.json`
 - `network` allows HTTPS and WebSocket requests and remote images and media.
 - `clipboard` allows writing to the clipboard.
 - `assets` allows picking, importing, and reading asset files.
-- `project:read` allows reading the project: `project.get`, `project.selection`, and the `project:changed` and `selection` events. `project.time`, `project.playing`, `project.revision`, the transport reads and the `time` and `transport` events need no permission.
+- `project:read` allows reading the project: `project.get`, `project.selection`, `project.snapshot` (a rendered frame), and the `project:changed` and `selection` events. `project.time`, `project.playing`, `project.revision`, the transport reads and the `time` and `transport` events need no permission.
 - `project:write` allows project mutation through `apply`, `undo`, `redo`, `select`, time and transport controls, and includes `project:read`. `commands.run` can call an extension's own commands and, with this permission, the named legacy editing commands. It cannot call another extension's commands or File, app, export, settings, or mods commands.
 - `full-access` allows trusted-only APIs. Store installs that request it stay off
   until the person installing them accepts Powermove's full-access dialog. They
@@ -165,7 +165,7 @@ The trusted-only namespaces are `api.render`, `api.host`, `api.services`,
 `api.ui.gesture`, `api.ui.mount`, `api.media.importFiles`,
 `api.media.assets`, `api.media.audio`, and `api.media.fonts`.
 Publishing scans direct uses of these names, network and clipboard APIs, and
-project reads (`api.project.get`, `api.project.selection`, and `on('project:changed')`
+project reads (`api.project.get`, `api.project.selection`, `api.project.snapshot`, and `on('project:changed')`
 or `on('selection')`), and blocks undeclared permissions. This text scan does not
 detect destructured aliases or dynamic property access. Local extensions made or
 forked on this Mac are trusted and keep working without permission declarations.

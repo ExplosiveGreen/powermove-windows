@@ -160,6 +160,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   const invoke = (namespace: string, method: string, args: unknown): unknown => {
     if (!SAFE_INVOKE[namespace]?.has(method)) throw new Error(`Sandbox method unavailable: ${namespace}.${method}`);
     const parsed = parseInvoke(namespace, method, args);
+    if (namespace === 'project' && method === 'snapshot' && !readable()) denied('project.snapshot requires project:read permission', 'project:read');
     if (!permissions.includes('project:write') && (namespace === 'project' && method !== 'snapshot' || namespace === 'transport'))
       denied(`${namespace}.${method} requires project:write permission`, 'project:write');
     if (namespace === 'commands') {

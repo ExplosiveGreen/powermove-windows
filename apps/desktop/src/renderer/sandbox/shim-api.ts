@@ -19,7 +19,7 @@ export class ProjectReadPermissionError extends Error {
   }
 }
 /** Members that read the project: gated on `project:read` (or `project:write`), reported under these names. */
-export const PROJECT_READ_MEMBERS: ReadonlySet<string> = new Set(['project.get', 'project.selection', "events.on('project:changed')", "events.on('selection')"]);
+export const PROJECT_READ_MEMBERS: ReadonlySet<string> = new Set(['project.get', 'project.selection', 'project.snapshot', "events.on('project:changed')", "events.on('selection')"]);
 /** Events that describe the project, so they need read access too. */
 export const PROJECT_READ_EVENTS: ReadonlySet<string> = new Set(['project:changed', 'selection']);
 export const canReadProject = (permissions: readonly string[] | undefined): boolean => !!permissions?.some(permission => permission === 'project:read' || permission === 'project:write');
@@ -226,6 +226,11 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
   const restricted = (name: string) => (..._args: unknown[]) => { report('permission', name); throw new PermissionError(name, 'project.apply or the pure matrix helpers'); };
   const send = (method: string, ...args: unknown[]): Promise<any> => {
     if (quiet && method === 'invoke' && !VIEW_READS.has(`${args[0]}.${args[1]}`)) return Promise.resolve(undefined);
+    // A rendered frame shows the project as much as its data does.
+    if (method === 'invoke' && args[0] === 'project' && args[1] === 'snapshot' && !readable) {
+      report('permission', 'project.snapshot');
+      return Promise.reject(new ProjectReadPermissionError('project.snapshot'));
+    }
     if (method === 'invoke' && !init.manifest.permissions?.includes('project:write')) {
       const [namespace, member, params] = args;
       const command = Array.isArray(params) ? params[0] : undefined;

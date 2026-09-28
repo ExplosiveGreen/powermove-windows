@@ -3,7 +3,7 @@ export interface ScanFinding { path: string; line: number; kind: ScanKind; hard:
 export interface ScanResult { blocked: ScanFinding[]; waived: ScanFinding[] }
 export interface CapabilityFinding { path: string; line: number; capability: 'network' | 'clipboard' | 'project:read' }
 /** Direct project reads: `api.project.get/selection` and subscriptions to the `project:changed` and `selection` events. */
-export const PROJECT_READ = /\bapi\s*\.\s*project\s*\.\s*(?:get|selection)\b|\bon\s*\(\s*(['"`])(?:project:changed|selection)\1/;
+export const PROJECT_READ = /\bapi\s*\.\s*project\s*\.\s*(?:get|selection|snapshot)\b|\bon\s*\(\s*(['"`])(?:project:changed|selection)\1/;
 export const WAIVER_COMMENT = /powermove-secret-ok:\s*(.{3,200})/;
 const textFile = /(?:\.(?:ts|js|mjs|svelte|json|md|txt|css|html|frag|vert|glsl|wgsl|yml|yaml|toml)|(?:^|\/)\.env[^/]*)$/i;
 const sourceFile = /\.(?:[cm]?[jt]sx?|svelte)$/i;
