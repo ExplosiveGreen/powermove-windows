@@ -1,13 +1,13 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, it } from 'vitest';
 import { createRpc } from '../../shared/sandbox-rpc';
-import { createSandboxAPI, ProjectReadPermissionError, sandboxControl, type SandboxInit, type SandboxSnapshot } from './shim-api';
+import { createSandboxAPI, ProjectWritePermissionError, sandboxControl, type SandboxInit, type SandboxSnapshot } from './shim-api';
 
 const close: Array<() => void> = [];
 afterEach(() => { for (const fn of close.splice(0)) fn(); });
 const settle = (ms = 5) => new Promise(resolve => setTimeout(resolve, ms));
 
-function harness(permissions: string[] = ['project:read'], apiVersion = 3, kernel: Record<string, (...args: any[]) => unknown> = {}) {
+function harness(permissions: string[] = [], apiVersion = 3, kernel: Record<string, (...args: any[]) => unknown> = {}) {
   const channel = new MessageChannel();
   const calls: Array<[string, ...unknown[]]> = [];
   const record = (name: string, fn: (...args: any[]) => unknown = () => undefined) => (...args: unknown[]) => { calls.push([name, ...args]); return fn(...args); };
@@ -83,7 +83,7 @@ it('pulls the project once per generation, shares one call in flight, and freeze
 
 it('asks again when the reply predates the generation the document already heard about', async () => {
   let replies = 0;
-  const { api, control, count } = harness(['project:read'], 3, {
+  const { api, control, count } = harness([], 3, {
     'project-snapshot': (): SandboxSnapshot => ({ generation: ++replies < 2 ? 1 : 3, json: JSON.stringify({ replies }) })
   });
   control.tick({ generation: 3 }, []);
@@ -93,7 +93,7 @@ it('asks again when the reply predates the generation the document already heard
 
 it('keeps its copy when the kernel answers that the generation is unchanged', async () => {
   let replies = 0;
-  const { api, control, count } = harness(['project:read'], 3, {
+  const { api, control, count } = harness([], 3, {
     'project-snapshot': (): SandboxSnapshot => ++replies === 1 ? { generation: 1, json: '{"layers":[1]}' } : { generation: 1, unchanged: true }
   });
   const first = await api.project.get();
@@ -102,36 +102,34 @@ it('keeps its copy when the kernel answers that the generation is unchanged', as
   await expect(api.project.get()).resolves.toBe(first);
   expect(count('project-snapshot')).toBe(4);
   // With nothing cached, `unchanged` is no project.
-  const empty = harness(['project:read'], 3, { 'project-snapshot': (): SandboxSnapshot => ({ generation: 1, unchanged: true }) });
+  const empty = harness([], 3, { 'project-snapshot': (): SandboxSnapshot => ({ generation: 1, unchanged: true }) });
   await expect(empty.api.project.get()).rejects.toThrow('could not read the project');
 });
 
 it('rejects project.get clearly when the snapshot is too large', async () => {
-  const { api } = harness(['project:read'], 3, { 'project-snapshot': (): SandboxSnapshot => ({ generation: 1, tooLarge: true }) });
+  const { api } = harness([], 3, { 'project-snapshot': (): SandboxSnapshot => ({ generation: 1, tooLarge: true }) });
   await expect(api.project.get()).rejects.toThrow('8 Mi character');
 });
 
-it('gates project reads on project:read and reports each member, leaving time and transport open', async () => {
-  const { api, calls } = harness([]);
-  await expect(api.project.get()).rejects.toBeInstanceOf(ProjectReadPermissionError);
-  await expect(api.project.get()).rejects.toMatchObject({ name: 'PermissionError', code: 'project:read', message: 'project.get requires project:read permission. Declare "project:read" in the manifest\'s permissions.' });
-  expect(() => api.project.selection()).toThrow('project:read');
-  expect(() => api.events.on('project:changed', () => {})).toThrow(ProjectReadPermissionError);
-  expect(() => api.events.on('selection', () => {})).toThrow('project:read');
-  expect(api.project.time()).toBe(1);
-  expect(api.project.revision()).toBe(5);
-  api.events.on('time', () => {});
-  api.events.on('transport', () => {});
+it('reads the project without any permission, while edits still need project:write', async () => {
+  const { api, control, calls } = harness([], 3, {
+    'project-snapshot': (): SandboxSnapshot => ({ generation: 1, json: '{"layers":[]}' }),
+    invoke: () => 'data:image/jpeg;base64,'
+  });
+  await expect(api.project.get()).resolves.toEqual({ layers: [] });
+  expect(api.project.selection().layers).toEqual(['a']);
+  const heard: unknown[] = [];
+  api.events.on('project:changed', (payload: unknown) => heard.push(payload));
+  api.events.on('selection', (payload: unknown) => heard.push(payload));
+  await expect(api.project.snapshot(0, 320)).resolves.toBe('data:image/jpeg;base64,');
+  await expect(api.project.apply([])).rejects.toBeInstanceOf(ProjectWritePermissionError);
+  control.tick({ selection: { layers: ['b'], keys: [], chan: null } }, [['project:changed', { kind: 'values' }], ['selection', { layers: ['b'] }]]);
+  expect(api.project.selection().layers).toEqual(['b']);
+  expect(heard).toEqual([{ kind: 'values' }, { layers: ['b'] }]);
   await settle();
-  expect(calls.filter(call => call[0] === 'sandbox-report').map(call => (call[1] as { member: string }).member))
-    .toEqual(['project.get', 'project.get', 'project.selection', "events.on('project:changed')", "events.on('selection')"]);
-  expect(calls.filter(call => call[0] === 'register')).toHaveLength(2);
-});
-
-it('drops a pushed selection without read access', () => {
-  const { control, api } = harness([]);
-  control.tick({ selection: { layers: ['secret'], keys: [], chan: null } }, []);
-  expect(() => api.project.selection()).toThrow('project:read');
+  expect(calls.filter(call => call[0] === 'register').map(call => call[3])).toEqual([{ event: 'project:changed' }, { event: 'selection' }]);
+  expect(calls.filter(call => call[0] === 'invoke')).toEqual([['invoke', 'project', 'snapshot', [0, 320]]]);
+  expect(calls.filter(call => call[0] === 'sandbox-report')).toEqual([]);
 });
 
 it('reports a synchronous read of an async result from apiVersion 2 code', async () => {
@@ -143,15 +141,13 @@ it('reports a synchronous read of an async result from apiVersion 2 code', async
   expect(calls.filter(call => call[0] === 'sandbox-report').map(call => call[1])).toEqual([{ kind: 'async', member: 'storage.get' }]);
 });
 
-it('keeps project reads from apiVersion 2 code, and says to set apiVersion 3 and declare project:read', async () => {
-  // A legacy manifest can't declare permissions; one that claims project:read anyway is not trusted with it.
-  const { api, calls } = harness(['project:read'], 2, { 'project-snapshot': (): SandboxSnapshot => ({ generation: 1, json: '{"layers":[]}' }) });
-  const hint = 'requires project:read permission. Set "apiVersion": 3 and declare "project:read" in the manifest\'s permissions.';
-  await expect(api.project.get()).rejects.toThrow(`project.get ${hint}`);
-  expect(() => api.project.selection()).toThrow(`project.selection ${hint}`);
-  expect(() => api.events.on('selection', () => {})).toThrow(`events.on('selection') ${hint}`);
-  await expect(api.project.snapshot()).rejects.toThrow(`project.snapshot ${hint}`);
+it('lets apiVersion 2 code read the project, and names project.get when it reads the Promise synchronously', async () => {
+  const { api, calls } = harness([], 2, { 'project-snapshot': (): SandboxSnapshot => ({ generation: 1, json: '{"layers":[]}' }) });
+  const project = api.project.get();
+  expect(project.layers).toBeUndefined();
+  await expect(project).resolves.toEqual({ layers: [] });
+  expect(api.project.selection().layers).toEqual(['a']);
+  expect(() => api.events.on('selection', () => {})).not.toThrow();
   await settle();
-  expect(calls.filter(call => call[0] === 'project-snapshot')).toEqual([]);
-  expect(calls.filter(call => call[0] === 'sandbox-report').map(call => (call[1] as { kind: string }).kind)).toEqual(['permission', 'permission', 'permission', 'permission']);
+  expect(calls.filter(call => call[0] === 'sandbox-report').map(call => call[1])).toEqual([{ kind: 'async', member: 'project.get' }]);
 });

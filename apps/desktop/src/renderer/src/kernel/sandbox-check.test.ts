@@ -62,36 +62,30 @@ it('reports trusted-only membership probes during the compatibility check', asyn
   expect(report.ok).toBe(false);
 });
 
-it('reports project reads without project:read, naming the permission, and allows them with it', async () => {
-  const reads = async (api: PowermoveAPI) => {
-    try { await (api.project.get() as unknown as Promise<unknown>); } catch { /* fixture recovers */ }
-    try { api.events.on('project:changed', () => {}); } catch { /* fixture recovers */ }
-    void api.project.time();
-    api.events.on('time', () => {});
-  };
-  const denied = await harness(reads);
-  expect(denied.activation).toBe('ok');
-  expect(denied.permissionErrors).toEqual([
-    { namespace: 'project', member: 'get', count: 1, needs: 'project:read' },
-    { namespace: 'events', member: "on('project:changed')", count: 1, needs: 'project:read' }
-  ]);
-  expect(denied.ok).toBe(false);
+it('passes an extension that reads the project without declaring any permission', async () => {
   let read: unknown;
-  const allowed = await harness(async api => { read = await (api.project.get() as unknown as Promise<unknown>); }, ['project:read' as ExtensionPermission]);
-  expect(allowed.permissionErrors).toEqual([]);
-  expect(allowed.ok).toBe(true);
+  let selection: unknown;
+  const report = await harness(async api => {
+    read = await (api.project.get() as unknown as Promise<unknown>);
+    selection = api.project.selection();
+    api.events.on('project:changed', () => {});
+    api.events.on('selection', () => {});
+    await (api.project.snapshot() as unknown as Promise<unknown>);
+  });
+  expect(report.permissionErrors).toEqual([]);
+  expect(report.runtimeErrors).toEqual([]);
+  expect(report.ok).toBe(true);
   expect(read).toEqual({ id: 'test' });
+  expect(selection).toEqual({ layers: [], keys: [], chan: null });
 });
 
-it('denies project reads to apiVersion 2 code and reports its apiVersion for the repair line', async () => {
-  let message = '';
-  const report = await harness(async api => {
-    try { await (api.project.get() as unknown as Promise<unknown>); } catch (error) { message = (error as Error).message; }
-  }, ['project:read' as ExtensionPermission], 2);
+it('lets apiVersion 2 code read the project, and reports its apiVersion', async () => {
+  let read: unknown;
+  const report = await harness(async api => { read = await (api.project.get() as unknown as Promise<unknown>); }, [], 2);
   expect(report.apiVersion).toBe(2);
-  expect(report.permissionErrors).toEqual([{ namespace: 'project', member: 'get', count: 1, needs: 'project:read' }]);
-  expect(report.ok).toBe(false);
-  expect(message).toBe('project.get requires project:read permission. Set "apiVersion": 3 and declare "project:read" in the manifest\'s permissions.');
+  expect(report.permissionErrors).toEqual([]);
+  expect(report.ok).toBe(true);
+  expect(read).toEqual({ id: 'test' });
 });
 
 it('reports a panel that throws while mounting', async () => {

@@ -11,22 +11,6 @@ export class PermissionError extends Error {
     this.name = 'PermissionError';
   }
 }
-/** How to get read access. Manifest permissions exist from apiVersion 3, so older code has to move up first. */
-export const projectReadHint = (apiVersion: number): string => apiVersion < 3
-  ? 'Set "apiVersion": 3 and declare "project:read" in the manifest\'s permissions.'
-  : 'Declare "project:read" in the manifest\'s permissions.';
-export class ProjectReadPermissionError extends Error {
-  readonly code = 'project:read';
-  constructor(member: string, apiVersion: number) {
-    super(`${member} requires project:read permission. ${projectReadHint(apiVersion)}`);
-    this.name = 'PermissionError';
-  }
-}
-/** Members that read the project: gated on `project:read` (or `project:write`), reported under these names. */
-export const PROJECT_READ_MEMBERS: ReadonlySet<string> = new Set(['project.get', 'project.selection', 'project.snapshot', "events.on('project:changed')", "events.on('selection')"]);
-/** Events that describe the project, so they need read access too. */
-export const PROJECT_READ_EVENTS: ReadonlySet<string> = new Set(['project:changed', 'selection']);
-export const canReadProject = (permissions: readonly string[] | undefined): boolean => !!permissions?.some(permission => permission === 'project:read' || permission === 'project:write');
 export class ProjectWritePermissionError extends Error {
   readonly code = 'project:write';
   constructor(member: string) {
@@ -48,7 +32,7 @@ export const sandboxControl = (api: PowermoveAPI): SandboxControl => (api as unk
 /**
  * What every sandbox document holds without asking: small, pushed as deltas
  * in `tick`. `generation` names the project snapshot `project.get()` would
- * return; `selection` is null without project read access.
+ * return.
  */
 export interface SandboxState { time: number; playing: boolean; revision: number; generation: number; selection: Selection | null }
 export type SandboxEvent = [name: string, payload: unknown];
@@ -169,10 +153,8 @@ export function panelInfo(def: Record<string, any>): SandboxPanelInfo {
  * every caller; the copy is parsed and deep-frozen. `events.on` listeners stay
  * in this document: the first listener for a name registers interest with
  * the kernel and the last one withdraws it, so no callback handle crosses and
- * an occurrence costs no round trip. Reading the project (`get`,
- * `selection`, the `project:changed` and `selection` events) needs
- * apiVersion 3 and `project:read` or `project:write`; the kernel enforces
- * the permission again on its side.
+ * an occurrence costs no round trip. Reading the project needs no
+ * permission; `network` is what gates sending it anywhere.
  */
 export type SandboxMode = 'runtime' | 'view';
 const VIEW_READS = new Set(['storage.get', 'assets.get', 'assets.readText', 'media.getImportDefaults', 'ui.icon']);
@@ -186,9 +168,7 @@ function deepFreeze<T>(value: T): T {
 
 /** A per-iframe API. Only serializable values and callback ids cross the port. */
 export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode = 'runtime'): PowermoveAPI {
-  /* Project reads need apiVersion 3 and project:read (or project:write); the manifest parser keeps permissions off older manifests. */
-  const readable = init.apiVersion >= 3 && canReadProject(init.manifest.permissions);
-  const state: SandboxState = { ...init.state, selection: readable ? deepFreeze(init.state.selection ?? null) : null };
+  const state: SandboxState = { ...init.state, selection: deepFreeze(init.state.selection ?? null) };
   /** True while a view's `activate` replays; see the mode comment above. */
   let quiet = false;
   const panelPorts = new Map<string, Rpc>();
@@ -231,11 +211,6 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
   const restricted = (name: string) => (..._args: unknown[]) => { report('permission', name); throw new PermissionError(name, 'project.apply or the pure matrix helpers'); };
   const send = (method: string, ...args: unknown[]): Promise<any> => {
     if (quiet && method === 'invoke' && !VIEW_READS.has(`${args[0]}.${args[1]}`)) return Promise.resolve(undefined);
-    // A rendered frame shows the project as much as its data does.
-    if (method === 'invoke' && args[0] === 'project' && args[1] === 'snapshot' && !readable) {
-      report('permission', 'project.snapshot');
-      return Promise.reject(new ProjectReadPermissionError('project.snapshot', init.apiVersion));
-    }
     if (method === 'invoke' && !init.manifest.permissions?.includes('project:write')) {
       const [namespace, member, params] = args;
       const command = Array.isArray(params) ? params[0] : undefined;
@@ -293,7 +268,7 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     if ('unchanged' in reply || snapshot && reply.generation < snapshot.generation) return;
     snapshot = 'json' in reply ? { generation: reply.generation, value: deepFreeze(JSON.parse(reply.json)) } : { generation: reply.generation, tooLarge: true };
   }).finally(() => { inflight = null; });
-  const readProject = async (): Promise<unknown> => {
+  const pullProject = async (): Promise<unknown> => {
     const wanted = state.generation;
     /* A reply the kernel built before the change this document already heard
        about is one generation behind; the next call is not. */
@@ -308,10 +283,6 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
   const listen = (event: string, fn: (payload: any) => unknown): { dispose(): void } => {
     const name = String(event);
     if (typeof fn !== 'function') throw new TypeError('events.on needs a listener function');
-    if (PROJECT_READ_EVENTS.has(name) && !readable) {
-      report('permission', `events.on('${name}')`);
-      throw new ProjectReadPermissionError(`events.on('${name}')`, init.apiVersion);
-    }
     let entry = listeners.get(name);
     if (!entry) { entry = { fns: new Set(), interest: registration('events', { event: name }) }; listeners.set(name, entry); }
     const listener = { fn };
@@ -391,13 +362,7 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
          the icon on the extension's art. */
       return registration('panels', panelInfo(def), [], def);
     }, list: () => list('panels').map(item => item.id), open: (id: string, options?: unknown) => fire('invoke', 'panels', 'open', options === undefined ? [id] : [id, options]), close: (id: string) => fire('invoke', 'panels', 'close', [id]), refresh: (id: string) => fire('invoke', 'panels', 'refresh', [id]), isOpen: () => false },
-    project: { get: () => {
-      if (!readable) { report('permission', 'project.get'); return Promise.reject(new ProjectReadPermissionError('project.get', init.apiVersion)); }
-      return readProject();
-    }, revision: () => state.revision, selection: () => {
-      if (!readable) { report('permission', 'project.selection'); throw new ProjectReadPermissionError('project.selection', init.apiVersion); }
-      return state.selection;
-    },
+    project: { get: () => legacy ? watchPromise(pullProject(), 'project.get', report) : pullProject(), revision: () => state.revision, selection: () => state.selection,
       time: () => state.time, playing: () => state.playing,
       apply: (...args: unknown[]) => later('project.apply', 'invoke', 'project', 'apply', args), select: (...args: unknown[]) => later('project.select', 'invoke', 'project', 'select', args),
       setTime: (time: number) => later('project.setTime', 'invoke', 'project', 'setTime', [time]), play: () => later('project.play', 'invoke', 'project', 'play', []), pause: () => later('project.pause', 'invoke', 'project', 'pause', []), undo: () => later('project.undo', 'invoke', 'project', 'undo', []), redo: () => later('project.redo', 'invoke', 'project', 'redo', []), snapshot: (...args: unknown[]) => send('invoke', 'project', 'snapshot', args) },
@@ -426,7 +391,7 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     tick(delta: Partial<SandboxState>, events: SandboxEvent[]) {
       if (delta) {
         Object.assign(state, delta);
-        if ('selection' in delta) state.selection = readable ? deepFreeze(delta.selection ?? null) : null;
+        if ('selection' in delta) state.selection = deepFreeze(delta.selection ?? null);
       }
       for (const [name, payload] of events ?? []) {
         const entry = listeners.get(name);
