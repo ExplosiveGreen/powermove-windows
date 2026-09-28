@@ -35,11 +35,13 @@ export class CompatibleWorkspace {
   private readonly commands = new Set<WorkspaceCommand>();
   private readonly jobs = new Map<string, WorkspaceCommand>();
   private readonly startedAt = Date.now();
+  /** Every Project command of this run carries it, so the run end finds what any of them left. */
+  private readonly mark = sandboxMark();
 
   constructor(readonly layout: AgentWorkspace, readonly access: 'project' | 'computer', readonly context: 'app' | 'project' = 'project') {}
 
   private async start(command: string, timeoutMs: number, signal: AbortSignal, keepTail: boolean, input?: string): Promise<WorkspaceCommand> {
-    const started = await startWorkspaceCommand(this.layout.root, this.access, command, { timeoutMs, signal, keepTail, input });
+    const started = await startWorkspaceCommand(this.layout.root, this.access, command, { timeoutMs, signal, keepTail, input, runMark: this.mark });
     this.commands.add(started);
     void started.done.finally(() => this.commands.delete(started)).catch(() => undefined);
     return started;
@@ -52,7 +54,7 @@ export class CompatibleWorkspace {
    */
   async stopCommands(): Promise<void> {
     await Promise.all([...this.commands].map(command => command.stop()));
-    await killStrays(await realpath(this.layout.root), this.startedAt);
+    await killStrays({ cwd: await realpath(this.layout.root), since: this.startedAt, ...(this.access === 'project' ? { marks: [this.mark] } : {}) });
   }
 
   /** Resolve existing ancestors too, so symlinks cannot redirect file writes. */
@@ -293,8 +295,11 @@ export interface WorkspaceCommand {
   stop(): Promise<void>;
 }
 
+/** A mach service name no one registers; a sandbox that denies it marks its processes. */
+const sandboxMark = () => `com.powermove.command.${randomUUID()}`;
+
 export async function startWorkspaceCommand(root: string, access: 'project' | 'computer', command: string,
-  options: { timeoutMs: number; signal: AbortSignal; keepTail?: boolean; input?: string }): Promise<WorkspaceCommand> {
+  options: { timeoutMs: number; signal: AbortSignal; keepTail?: boolean; input?: string; runMark?: string }): Promise<WorkspaceCommand> {
   const { timeoutMs, signal } = options;
   signal.throwIfAborted();
   const real = await realpath(root);
@@ -305,7 +310,12 @@ export async function startWorkspaceCommand(root: string, access: 'project' | 'c
   if (proxy) Object.assign(env, agentProxyEnvironment(proxy.port));
   const agentRules = proxy ? agentSeatbeltRules(proxy.port,
     await agentCredentialPaths(agentWorkspaceUserData(real), { codexHome: 'all' })) : '';
+  // Its own mark finds what this command started, even processes that left
+  // its group and folder; the run's mark finds them at the run end.
+  const mark = sandboxMark();
+  const marks = [mark, ...(options.runMark ? [options.runMark] : [])];
   const profile = `(version 1)(allow default)${agentRules}(deny appleevent-send)`
+    + `(deny mach-lookup ${marks.map(name => `(global-name ${JSON.stringify(name)})`).join(' ')})`
     + `(deny file-write*)(allow file-write* (subpath ${JSON.stringify(await realpath(root))}) (literal "/dev/null") (literal "/dev/tty")`
     // Inherited stdio only; a broad /dev subpath would expose devices.
     + ' (literal "/dev/stdout") (literal "/dev/stderr") (regex #"^/dev/fd/[0-9]+$"))';
@@ -323,7 +333,7 @@ export async function startWorkspaceCommand(root: string, access: 'project' | 'c
   let ending: CommandEnding | null = null, exited = false;
   // Descendants are recorded while it runs, so one that left the group and
   // lost its parent is still killed with the command.
-  const family = new ProcessFamily(child.pid ?? null, { cwd: real, since: startedAt });
+  const family = new ProcessFamily(child.pid ?? null, { cwd: real, since: startedAt, ...(access === 'project' ? { marks: [mark] } : {}) });
   if (child.pid) family.watch();
   const sweep = () => child.pid ? family.kill() : Promise.resolve();
   // A command that already exited on its own is not reported as stopped.

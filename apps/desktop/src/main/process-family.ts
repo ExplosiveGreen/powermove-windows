@@ -40,6 +40,31 @@ function workingDirectories(pids: readonly number[]): Promise<Map<number, string
   });
 }
 
+type NativeSandbox = typeof import('@powermove/macos-haptics');
+let native: Promise<NativeSandbox | null> | undefined;
+// The standalone Node host does not ship the desktop's native addon.
+function nativeSandbox(): Promise<NativeSandbox | null> {
+  return native ??= process.platform === 'darwin' ? import('@powermove/macos-haptics').then(module =>
+    (module as NativeSandbox & { default?: NativeSandbox }).default ?? module, () => null) : Promise.resolve(null);
+}
+
+/**
+ * Per pid, whether it runs in a sandbox that denies a lookup of one of
+ * `marks` and allows its `.unmarked` twin, which other sandboxes deny too.
+ * Null when that cannot be checked.
+ */
+async function sandboxMarked(pids: readonly number[], marks: readonly string[]): Promise<boolean[] | null> {
+  const check = (await nativeSandbox())?.sandboxDeniesLookup;
+  if (!check) return null;
+  const found = pids.map(() => false);
+  for (const mark of marks) {
+    const denied = check(pids, mark), twin = check(pids, `${mark}.unmarked`);
+    if (!denied || !twin) return null;
+    denied.forEach((value, index) => { if (value && !twin[index]) found[index] = true; });
+  }
+  return found;
+}
+
 function signal(pid: number, name: NodeJS.Signals): boolean {
   try { process.kill(pid, name); return true; } catch { return false; }
 }
@@ -63,13 +88,17 @@ function schedulePoll(): void {
   poll.unref();
 }
 
+export type FamilyOptions = { cwd: string; since: number; marks?: readonly string[] };
+
 /**
  * Everything a command started, by pid and start time. A group kill misses
  * children that left the group, and the parent walk loses them once their
  * parent exits (launchd adopts them), so descendants are recorded while the
- * command runs. At kill time, adopted processes that started since then in
- * the command's folder are claimed too: a child spawned into a new session
- * by a parent that exits at once is never seen by a poll.
+ * command runs. At kill time, processes that started since then and carry
+ * one of the command's sandbox marks are claimed too: a process cannot leave
+ * its sandbox, whatever its parent, group or folder. Without marks, adopted
+ * processes in the command's folder that no other running command recorded
+ * are claimed instead.
  */
 export class ProcessFamily {
   private readonly members = new Map<number, string>();
@@ -77,7 +106,7 @@ export class ProcessFamily {
   private killing: Promise<void> = Promise.resolve();
 
   /** `group` is the command's process group, or null to claim strays only. */
-  constructor(readonly group: number | null, readonly options: { cwd: string; since: number }) {}
+  constructor(readonly group: number | null, readonly options: FamilyOptions) {}
 
   get since(): number { return this.options.since; }
 
@@ -104,12 +133,24 @@ export class ProcessFamily {
   private async claimStrays(rows: readonly ProcessRow[]): Promise<void> {
     const uid = process.getuid?.();
     const floor = this.options.since - 1_000;
-    const candidates = rows.filter(row => row.ppid === 1 && row.uid === uid && row.pid !== process.pid
+    const candidates = rows.filter(row => row.uid === uid && row.pid !== process.pid
       && !this.members.has(row.pid) && !this.checked.has(`${row.pid}:${row.started}`) && Date.parse(row.started) >= floor);
     if (!candidates.length) return;
-    const cwd = await workingDirectories(candidates.map(row => row.pid));
+    const marked = this.options.marks?.length ? await sandboxMarked(candidates.map(row => row.pid), this.options.marks) : null;
+    if (marked) {
+      candidates.forEach((row, index) => {
+        this.checked.add(`${row.pid}:${row.started}`);
+        if (marked[index]) this.members.set(row.pid, row.started);
+      });
+      return;
+    }
+    const others = [...watched].filter(family => family !== this);
+    const adopted = candidates.filter(row => row.ppid === 1
+      && !others.some(family => family.members.get(row.pid) === row.started));
+    if (!adopted.length) return;
+    const cwd = await workingDirectories(adopted.map(row => row.pid));
     const inside = (dir: string) => dir === this.options.cwd || dir.startsWith(this.options.cwd + path.sep);
-    for (const row of candidates) {
+    for (const row of adopted) {
       this.checked.add(`${row.pid}:${row.started}`);
       const dir = cwd.get(row.pid);
       if (dir !== undefined && inside(dir)) this.members.set(row.pid, row.started);
@@ -155,11 +196,11 @@ export class ProcessFamily {
 }
 
 /** SIGKILL a command's process group and every descendant recorded or found now. */
-export function killProcessFamily(group: number, options: { cwd: string; since: number }): Promise<void> {
+export function killProcessFamily(group: number, options: FamilyOptions): Promise<void> {
   return new ProcessFamily(group, options).kill();
 }
 
-/** SIGKILL whatever escaped every command since `since`: adopted processes in `cwd`, with their descendants. */
-export function killStrays(cwd: string, since: number): Promise<void> {
-  return new ProcessFamily(null, { cwd, since }).kill();
+/** SIGKILL whatever escaped every command since `since`: marked processes, or adopted ones in `cwd`, with their descendants. */
+export function killStrays(options: FamilyOptions): Promise<void> {
+  return new ProcessFamily(null, options).kill();
 }
