@@ -60,7 +60,7 @@ it('watches an extension that has its own process', async () => {
   const runtime = await pending;
   close.push(() => runtime.dispose());
   await wait(20);
-  expect(doc.pings.length).toBeGreaterThan(0);
+  expect(doc.pings.length).toBe(2); // the boot ping, then the watchdog's first
 });
 
 it('runs no watchdog where sandboxes share one process or cannot be terminated', async () => {
@@ -72,7 +72,7 @@ it('runs no watchdog where sandboxes share one process or cannot be terminated',
     doc.frame.dispatchEvent(new Event('load'));
     const runtime = await pending;
     await wait(20);
-    expect(doc.pings).toEqual([]);
+    expect(doc.pings).toHaveLength(1); // the boot ping alone
     runtime.dispose();
     vi.restoreAllMocks();
   }
@@ -86,12 +86,16 @@ async function activation(doc: ReturnType<typeof runtimeDoc>, hostDeps: HostDeps
   const error = await pending.then(runtime => { runtime.dispose(); return null; }, (failure: Error & { code?: string }) => failure);
   return { error, elapsed: performance.now() - started };
 }
-const spins = { ping: () => new Promise(() => {}), activate: () => {} };
+/** Boots (answers the first ping, as the shim does before importing the bundle), then spins in activate. */
+function spins() {
+  let pings = 0;
+  return { ping: () => (++pings === 1 ? true : new Promise(() => {})), activate: () => {} };
+}
 
 it('rejects a runtime that spins while activating as sandbox_fatal, killed, within the budget', async () => {
   const { terminate } = host('electron');
   const hostDeps = deps();
-  const { error, elapsed } = await activation(runtimeDoc(spins), hostDeps, 400);
+  const { error, elapsed } = await activation(runtimeDoc(spins()), hostDeps, 400);
   expect(error).toMatchObject({ message: 'stopped responding while activating', code: 'sandbox_fatal' });
   expect(terminate).toHaveBeenCalledWith('live-ext');
   // The caller reports it; the sandbox does not report it a second time.
@@ -103,9 +107,35 @@ it('rejects a runtime that spins while activating as sandbox_fatal, killed, with
 it('a timeout where sandboxes share a process is a plain activation error', async () => {
   const { terminate } = host('browser');
   const hostDeps = deps();
-  const { error } = await activation(runtimeDoc(spins), hostDeps, 200);
+  const { error } = await activation(runtimeDoc(spins()), hostDeps, 200);
   expect(error?.message).toBe('Sandbox document or activation timed out');
   expect(error?.code).toBeUndefined();
   expect(terminate).not.toHaveBeenCalled();
   expect(hostDeps.reportRuntimeError).not.toHaveBeenCalled();
+});
+
+it('a runtime that never booted is a plain activation error, not spinning', async () => {
+  const { terminate } = host('electron');
+  const cases = {
+    // The document never loaded, or an error page stood in for it: nothing ever answers.
+    'no runtime': { ping: () => new Promise(() => {}), activate: () => {} },
+    // A document that never took init leaves its port unread.
+    'no init': 'unread'
+  } as const;
+  for (const [name, doc] of Object.entries(cases)) {
+    const hostDeps = deps();
+    const frame = document.createElement('iframe');
+    const runtime = doc === 'unread' ? { frame, test: { frame, onPostInit: () => {} }, pings: [] } : runtimeDoc(doc);
+    const { error } = await activation(runtime as ReturnType<typeof runtimeDoc>, hostDeps, 300);
+    expect({ name, message: error?.message, code: error?.code }).toEqual({ name, message: 'Sandbox document or activation timed out', code: undefined });
+    expect(hostDeps.reportRuntimeError).not.toHaveBeenCalled();
+  }
+  expect(terminate).not.toHaveBeenCalled();
+});
+
+it('a booted runtime that still answers was only waiting: not killed', async () => {
+  const { terminate } = host('electron');
+  const { error } = await activation(runtimeDoc({ activate: () => {} }), deps(), 300);
+  expect(error?.code).toBeUndefined();
+  expect(terminate).not.toHaveBeenCalled();
 });

@@ -464,7 +464,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
      spinning runtime from a waiting one comes out of it too. */
   const budgetMs = test?.timeoutMs !== undefined && test.timeoutMs > 0 ? test.timeoutMs : 10_000;
   const probeMs = isolated ? Math.min(1_500, budgetMs / 4) : 0;
-  let timedOut = false;
+  let timedOut = false, booted = false;
   try {
     host.setActivating(true);
     const loaded = new Promise<void>((resolve, reject) => { frame.addEventListener('load', () => resolve(), { once: true }); frame.addEventListener('error', () => reject(new Error('Sandbox document failed to load')), { once: true }); });
@@ -475,6 +475,11 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
       const init = initFor(openDoc(runtimeLink, rpc));
       if (test?.onPostInit) test.onPostInit(channel.port2, init);
       else frame.contentWindow?.postMessage({ t: 'init', ...init }, '*', [channel.port2]);
+      /* The shim answers pings before it imports the bundle, so an answer
+         proves the runtime booted: only then can a later silence be the
+         extension's. A document that never loaded, an error page served in
+         its place, or one that never took init answers nothing. */
+      void rpc.call('ping').then(() => { booted = true; }, () => {});
       await ready;
     } finally { clearTimeout(timeout); }
     host.setActivating(false);
@@ -488,10 +493,10 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   } catch (error) {
     host.setActivating(false);
     /* A runtime still answering pings was only waiting (a slow fetch in
-       activate); an isolated one that does not is spinning and would spin
-       again next launch, so it is killed and turned off. The caller reports
-       it (sandbox_fatal), once. */
-    const spinning = isolated && timedOut && !await Promise.race([rpc.call('ping').then(() => true, () => false), new Promise<boolean>(resolve => setTimeout(() => resolve(false), probeMs))]);
+       activate); an isolated one that booted and no longer does is spinning
+       and would spin again next launch, so it is killed and turned off. The
+       caller reports it (sandbox_fatal), once. */
+    const spinning = isolated && timedOut && booted && !await Promise.race([rpc.call('ping').then(() => true, () => false), new Promise<boolean>(resolve => setTimeout(() => resolve(false), probeMs))]);
     if (spinning) await terminate();
     dispose();
     throw spinning ? Object.assign(new Error('stopped responding while activating'), { code: 'sandbox_fatal' }) : error;
