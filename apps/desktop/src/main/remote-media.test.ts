@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { createServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -294,9 +294,25 @@ describe('remote media IPC', () => {
     expect((await stat(path.join(dir, folder!))).isDirectory()).toBe(true);
   });
 
-  it('frees its download slot when it cannot even create the file', async () => {
-    const service = new RemoteMediaService({ directory: path.join(await scratch(), 'missing', 'deeper'), resolve: dns({ 'cdn.example': [PUBLIC] }), transport: server({}) });
+  it('frees its download slot when it cannot even create the file, and tries the folder again next time', async () => {
+    const parent = path.join(await scratch(), 'missing', 'deeper');
+    const service = new RemoteMediaService({ directory: parent, resolve: dns({ 'cdn.example': [PUBLIC] }), transport: server({ 'https://cdn.example/a.png': { body: [PNG] } }) });
     for (let attempt = 0; attempt < 6; attempt++) await expect(service.fetch(1, 'https://cdn.example/a.png')).rejects.toThrow('ENOENT');
+    // A failed mkdtemp is not remembered: once the parent exists, downloads work without a relaunch.
+    await mkdir(parent, { recursive: true });
+    await expect(service.fetch(1, 'https://cdn.example/a.png')).resolves.toMatchObject({ size: PNG.byteLength });
+  });
+
+  it('makes its folder again when the system purged it from the temporary directory', async () => {
+    const dir = await scratch();
+    const service = new RemoteMediaService({ directory: dir, resolve: dns({ 'cdn.example': [PUBLIC] }), transport: server({ 'https://cdn.example/a.png': { body: [PNG] } }) });
+    const first = await service.fetch(1, 'https://cdn.example/a.png');
+    await service.release(1, first.token);
+    const [folder] = await readdir(dir);
+    await rm(path.join(dir, folder!), { recursive: true });
+    const second = await service.fetch(1, 'https://cdn.example/a.png');
+    expect(await service.read(1, second.token, 0, 8)).toEqual(PNG.subarray(0, 8));
+    expect(await readdir(dir)).toHaveLength(1);
   });
 
   it('refuses untrusted senders before touching the network', async () => {

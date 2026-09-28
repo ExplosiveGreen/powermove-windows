@@ -22,7 +22,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { lookup as dnsLookup } from 'node:dns/promises';
-import { mkdtemp, open, rm, type FileHandle } from 'node:fs/promises';
+import { access, mkdtemp, open, rm, type FileHandle } from 'node:fs/promises';
 import { request as httpsRequest } from 'node:https';
 import { isIP, type LookupFunction } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -319,8 +319,20 @@ export class RemoteMediaService {
     await Promise.all([...this.held].filter(([, entry]) => entry.owner === owner).map(([token]) => this.release(owner, token)));
   }
 
-  private dir(): Promise<string> {
-    return this.directory ??= mkdtemp(path.join(this.options.directory ?? tmpdir(), 'powermove-remote-media-'));
+  /* Made once, but never trusted forever: a failed mkdtemp is not cached, and
+     a folder macOS purged from $TMPDIR since is made again. */
+  private async dir(): Promise<string> {
+    for (let attempt = 0; ; attempt++) {
+      const pending = this.directory ??= mkdtemp(path.join(this.options.directory ?? tmpdir(), 'powermove-remote-media-'));
+      try {
+        const directory = await pending;
+        await access(directory);
+        return directory;
+      } catch (error) {
+        if (this.directory === pending) this.directory = null;
+        if (attempt > 0 || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
   }
 }
 
