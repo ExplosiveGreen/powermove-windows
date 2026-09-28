@@ -28,9 +28,12 @@ Nothing here has shipped to Store users yet, so the sandbox contract may change.
 - Each Store extension's documents (runtime and panel views) load from its own
   host: `app://<sandboxHost(id)>/host/ext-sandbox.html?id=…&perms=…[&view=…]`.
   `sandboxHost(id)` (`src/shared/sandbox-origin.ts`) is `x-<slug>-<hash>`, a DNS-safe,
-  lowercase label: a readable slug (≤ 20 chars) plus a 64-bit FNV-1a hash in
-  base32 so distinct ids never collide. Different hosts = different sites =
-  different processes (verified: two extensions → two pids, editor a third).
+  lowercase label (≤ 49 chars): a readable slug (≤ 20 chars) plus the leading
+  130 bits of the id's SHA-256 in base32 (26 chars), so no one can craft an id
+  that lands on another extension's host. The hash is a synchronous pure-JS
+  SHA-256 (`src/shared/sha256.ts`) so main and the renderer agree. Different
+  hosts = different sites = different processes (verified: two extensions →
+  two pids, editor a third).
 - The extension's bundle is served from its own host only:
   `app://<host>/ext/<id>/bundle.js`. A sandbox host serves exactly: its
   `host/ext-sandbox.html` (id must hash to the host; perms must match the

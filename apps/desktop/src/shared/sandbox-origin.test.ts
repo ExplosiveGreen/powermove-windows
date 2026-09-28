@@ -1,27 +1,52 @@
+import { createHash, randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { fnv1a64, isSandboxHost, sandboxBundleUrl, sandboxDocumentId, sandboxDocumentUrl, sandboxHost, sandboxOrigin } from './sandbox-origin';
+import { isSandboxHost, sandboxBundleUrl, sandboxDocumentId, sandboxDocumentUrl, sandboxHost, sandboxOrigin } from './sandbox-origin';
 
 describe('sandboxHost', () => {
-  it('uses the reference FNV-1a 64-bit hash', () => {
-    expect(fnv1a64('')).toBe(0xcbf29ce484222325n);
-    expect(fnv1a64('a')).toBe(0xaf63dc4c8601ec8cn);
-    expect(fnv1a64('foobar')).toBe(0x85944171f73967e8n);
+  /* RFC 4648 base32 of the digest's leading 130 bits, spelled out bit by bit. */
+  const reference = (hex: string): string => {
+    const bits = [...Buffer.from(hex, 'hex')].map(byte => byte.toString(2).padStart(8, '0')).join('').slice(0, 130);
+    return bits.match(/.{5}/g)!.map(chunk => 'abcdefghijklmnopqrstuvwxyz234567'.charAt(parseInt(chunk, 2))).join('');
+  };
+  const code = (host: string): string => host.slice(-26);
+
+  it('codes the id with SHA-256', () => {
+    // FIPS 180-2 vectors: "abc" and the empty string (literals from Python's base64.b32encode).
+    expect(code(sandboxHost('abc'))).toBe(reference('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'));
+    expect(code(sandboxHost('abc'))).toBe('xj4bnp4pahh6uqkbidpf3lrceo');
+    expect(sandboxHost('')).toBe(`x-${reference('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')}`);
+    expect(sandboxHost('')).toBe('x-4oymiquy7qobjgx36tejs35zeq');
+  });
+
+  it('matches node:crypto for random ids', () => {
+    for (let round = 0; round < 200; round++) {
+      const id = randomBytes(1 + (round % 64)).toString('base64url');
+      expect(code(sandboxHost(id))).toBe(reference(createHash('sha256').update(id, 'utf8').digest('hex')));
+    }
+    const unicode = 'ünïcode-☃';
+    expect(code(sandboxHost(unicode))).toBe(reference(createHash('sha256').update(unicode, 'utf8').digest('hex')));
+  });
+
+  it('stays one DNS label for the longest ids', () => {
+    const host = sandboxHost('a'.repeat(64));
+    expect(host.length).toBeLessThanOrEqual(63);
+    expect(host).toMatch(/^x-a{20}-[a-z2-7]{26}$/);
   });
 
   it('is a readable DNS label with a base32 hash', () => {
     const host = sandboxHost('sandboxed-ext');
-    expect(host).toMatch(/^x-sandboxed-ext-[a-z2-7]{13}$/);
+    expect(host).toBe('x-sandboxed-ext-vkyvbqsl7rchbesnaeceq5ga5t');
     expect(host).toBe(sandboxHost('sandboxed-ext'));
     expect(isSandboxHost(host)).toBe(true);
     expect(new URL(`app://${host}/`).host).toBe(host);
   });
 
   it('slugs to at most 20 characters without edge or doubled dashes', () => {
-    expect(sandboxHost('a-very-long-extension-identifier-here')).toMatch(/^x-a-very-long-extensio-[a-z2-7]{13}$/);
-    expect(sandboxHost('abcdefghijklmnopqrst-uvw')).toMatch(/^x-abcdefghijklmnopqrst-[a-z2-7]{13}$/);
-    expect(sandboxHost('abcdefghijklmnopqrs-tuvw')).toMatch(/^x-abcdefghijklmnopqrs-[a-z2-7]{13}$/);
-    expect(sandboxHost('--Weird__ID..')).toMatch(/^x-weird-id-[a-z2-7]{13}$/);
-    expect(sandboxHost('___')).toMatch(/^x-[a-z2-7]{13}$/);
+    expect(sandboxHost('a-very-long-extension-identifier-here')).toMatch(/^x-a-very-long-extensio-[a-z2-7]{26}$/);
+    expect(sandboxHost('abcdefghijklmnopqrst-uvw')).toMatch(/^x-abcdefghijklmnopqrst-[a-z2-7]{26}$/);
+    expect(sandboxHost('abcdefghijklmnopqrs-tuvw')).toMatch(/^x-abcdefghijklmnopqrs-[a-z2-7]{26}$/);
+    expect(sandboxHost('--Weird__ID..')).toMatch(/^x-weird-id-[a-z2-7]{26}$/);
+    expect(sandboxHost('___')).toMatch(/^x-[a-z2-7]{26}$/);
     for (const id of ['a', 'x-y', '--Weird__ID..', '___', 'ünïcode']) expect(isSandboxHost(sandboxHost(id))).toBe(true);
   });
 
@@ -33,7 +58,10 @@ describe('sandboxHost', () => {
   it('never looks like the editor host', () => {
     expect(isSandboxHost('powermove')).toBe(false);
     expect(isSandboxHost('localhost:5173')).toBe(false);
-    expect(isSandboxHost('x--aaaaaaaaaaaaa')).toBe(false);
+    expect(isSandboxHost('x--aaaaaaaaaaaaaaaaaaaaaaaaaa')).toBe(false);
+    // The old 13-character FNV code and an over-long slug are not sandbox hosts.
+    expect(isSandboxHost('x-sandboxed-ext-aaaaaaaaaaaaa')).toBe(false);
+    expect(isSandboxHost(`x-${'a'.repeat(21)}-${'a'.repeat(26)}`)).toBe(false);
   });
 });
 
