@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import { mkdtemp, readFile, readdir, realpath, rm, symlink, access, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, realpath, rm, stat, symlink, access, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { COMPATIBLE_WORKSPACE_TOOLS, CompatibleWorkspace, runWorkspaceCommand } from './compatible-workspace';
@@ -83,6 +83,23 @@ it.runIf(process.platform === 'darwin')('keeps Project temp files, heredocs and 
   expect((await runWorkspaceCommand(ws.layout.root, 'project', 'mktemp /private/tmp/pm-escape.XXXXXX', 5000, signal())).exitCode).not.toBe(0);
 });
 
+it.runIf(process.platform === 'darwin')('never writes tool shims or scratch folders through links a command planted', async () => {
+  const ws = await workspace();
+  const outside = await mkdtemp(path.join(os.tmpdir(), 'pm-planted-')); directories.push(outside);
+  const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+  const target = path.join(outside, 'zshrc');
+  await writeFile(target, 'keep', { mode: 0o600 });
+  const plant = (script: string) => runWorkspaceCommand(ws.layout.root, 'project', script, 5000, signal());
+  expect((await plant(`mkdir -p .powermove/bin && ln -sf ${quote(target)} .powermove/bin/mktemp`)).exitCode).toBe(0);
+  expect((await plant('mktemp')).exitCode).toBe(0);
+  expect(await readFile(target, 'utf8')).toBe('keep');
+  expect((await stat(target)).mode & 0o777).toBe(0o600);
+  // A linked bin/ or scratch folder must not let main create files or folders elsewhere.
+  expect((await plant(`rm -rf .powermove/bin .powermove/tmp && ln -s ${quote(outside)} .powermove/bin && ln -s ${quote(path.join(outside, 'scratch'))} .powermove/tmp`)).exitCode).toBe(0);
+  await plant('true');
+  expect(await readdir(outside)).toEqual(['zshrc']);
+});
+
 it.runIf(process.platform === 'darwin')('gives commands the login PATH without the rest of the host environment', async () => {
   const ws = await workspace();
   process.env.PM_TEST_PROVIDER_TOKEN = 'must-not-leak';
@@ -91,7 +108,7 @@ it.runIf(process.platform === 'darwin')('gives commands the login PATH without t
     expect(result.output).not.toContain('must-not-leak');
     const PATH = /^PATH=(.*)$/m.exec(result.output)?.[1]?.split(':') ?? [];
     // ~/.zshenv may still prepend its own entries inside the shell.
-    const bin = path.join(await realpath(ws.layout.root), '.powermove', 'bin');
+    const bin = path.join(path.dirname(path.dirname(await realpath(ws.layout.root))), 'Agent Tools', 'bin');
     expect(PATH).toEqual(expect.arrayContaining([bin, '/usr/bin', '/bin']));
     expect(PATH.indexOf(bin)).toBeLessThan(PATH.indexOf('/usr/bin'));
     expect(PATH.every(entry => path.isAbsolute(entry))).toBe(true);

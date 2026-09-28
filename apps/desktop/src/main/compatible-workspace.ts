@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
-import { chmod, mkdir, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { AgentToolContent, CodexRunResult } from '../shared/ipc';
@@ -221,20 +222,41 @@ exec /usr/bin/mktemp "\${flags[@]}" -- "\${resolved[@]}"
 const PROJECT_CACHES = [['BUN_INSTALL_CACHE_DIR', 'bun'], ['npm_config_cache', 'npm'], ['XDG_CACHE_HOME', 'xdg'],
   ['PIP_CACHE_DIR', 'pip'], ['CLANG_MODULE_CACHE_PATH', 'clang']] as const;
 
-/** Scratch and tool locations inside the app-owned workspace. */
+const shimWrites = new Map<string, Promise<string>>();
+
+/**
+ * Tool shims live beside Agent Workspaces, never inside one: Project commands
+ * cannot rewrite them, and main never writes where commands can, since a
+ * planted link would redirect the write. Written once per launch; the rename
+ * replaces whatever is at the name instead of following it.
+ */
+function toolShims(root: string): Promise<string> {
+  const bin = path.join(path.dirname(path.dirname(root)), 'Agent Tools', 'bin');
+  let written = shimWrites.get(bin);
+  if (!written) {
+    written = (async () => {
+      await mkdir(bin, { recursive: true });
+      const temporary = path.join(bin, `.mktemp-${randomUUID()}`);
+      try {
+        const file = await open(temporary, 'wx', 0o755);
+        try { await file.writeFile(MKTEMP_SHIM); await file.chmod(0o755); } finally { await file.close(); }
+        await rename(temporary, path.join(bin, 'mktemp'));
+      } finally { await rm(temporary, { force: true }); }
+      return bin;
+    })();
+    shimWrites.set(bin, written);
+    written.catch(() => shimWrites.delete(bin));
+  }
+  return written;
+}
+
+/** Scratch inside the workspace and tool shims beside it. */
 async function commandEnvironment(root: string, access: 'project' | 'computer'): Promise<NodeJS.ProcessEnv> {
   const scratch = path.join(root, '.powermove', 'tmp');
-  const bin = path.join(root, '.powermove', 'bin');
-  await mkdir(scratch, { recursive: true });
-  const shims = process.platform === 'darwin';
-  if (shims) {
-    await mkdir(bin, { recursive: true });
-    await writeFile(path.join(bin, 'mktemp'), MKTEMP_SHIM, { mode: 0o755 });
-    await chmod(path.join(bin, 'mktemp'), 0o755);
-  }
+  const bin = process.platform === 'darwin' ? await toolShims(root) : null;
   const PATH = await loginShellPath();
   // Keep account keys and provider configuration out of subprocess environments.
-  const env: NodeJS.ProcessEnv = { PATH: shims ? `${bin}:${PATH}` : PATH, HOME: process.env.HOME, LANG: 'en_US.UTF-8',
+  const env: NodeJS.ProcessEnv = { PATH: bin ? `${bin}:${PATH}` : PATH, HOME: process.env.HOME, LANG: 'en_US.UTF-8',
     TMPDIR: scratch, TMP: scratch, TEMP: scratch, TMPPREFIX: path.join(scratch, 'zsh') };
   if (access === 'project') for (const [name, tool] of PROJECT_CACHES) env[name] = path.join(root, '.powermove', 'cache', tool);
   return env;
@@ -266,8 +288,11 @@ export async function startWorkspaceCommand(root: string, access: 'project' | 'c
     // Inherited stdio only; a broad /dev subpath would expose devices.
     + ' (literal "/dev/stdout") (literal "/dev/stderr") (regex #"^/dev/fd/[0-9]+$"))';
   if (access === 'project' && process.platform !== 'darwin') throw new Error('Project command sandbox is only available on macOS.');
-  const child = spawn(access === 'project' ? '/usr/bin/sandbox-exec' : '/bin/zsh',
-    access === 'project' ? ['-p', profile, '/bin/zsh', '-c', command] : ['-c', command],
+  // The command creates its own scratch folder, so the sandbox, not main,
+  // decides where a planted link may lead.
+  const shell = ['/bin/sh', '-c', 'mkdir -p -- "$TMPDIR" 2>/dev/null; exec /bin/zsh -c "$1"', 'zsh', command];
+  const child = spawn(access === 'project' ? '/usr/bin/sandbox-exec' : shell[0]!,
+    access === 'project' ? ['-p', profile, ...shell] : shell.slice(1),
     { cwd: root, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '', truncated = false, running = true, exitCode: number | null = null;
   let ending: CommandEnding | null = null, exited = false;
