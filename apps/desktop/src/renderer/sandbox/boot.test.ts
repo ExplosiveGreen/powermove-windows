@@ -7,7 +7,7 @@ import type { SandboxViewInit } from './shim-api';
 afterEach(() => { document.body.replaceChildren(); });
 
 const init = (panelId: string): SandboxViewInit => ({
-  id: 'fake-ext', apiVersion: 3, manifest: { id: 'fake-ext', name: 'Fake', version: '1.0.0', apiVersion: 3, permissions: ['project:read' as never] }, vars: {},
+  id: 'fake-ext', apiVersion: 3, manifest: { id: 'fake-ext', name: 'Fake', version: '1.0.0', apiVersion: 3, permissions: [] }, vars: {},
   theme: { scheme: 'dark', tokens: { '--accent': 'rgb(1 2 3)' } }, bundleUrl: 'fake://bundle',
   state: { time: 0, playing: false, revision: 3, generation: 1, selection: null },
   mode: 'view', panelId, spec: { from: 'workspace' }, keys: [], size: { width: 320, height: 200 }

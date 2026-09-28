@@ -26,23 +26,14 @@ it('renders each blocked reason as a separate row', async () => {
   target.remove();
 });
 
-it('names project:read for an undeclared project read', () => {
-  const lines = sandboxCheckLines(report({
-    permissionErrors: [{ namespace: 'project', member: 'get', count: 1, needs: 'project:read' }],
-    runtimeErrors: ['project.get requires project:read permission. Declare "project:read" in the manifest\'s permissions.']
-  }));
-  expect(lines).toEqual(['Reads the project with api.project.get without permission. Declare `permissions: ["project:read"]`.']);
-});
-
 it('tells apiVersion 2 code to set apiVersion 3 before declaring a permission', () => {
   const lines = sandboxCheckLines(report({
     apiVersion: 2,
-    permissionErrors: [{ namespace: 'project', member: 'get', count: 1, needs: 'project:read' }, { namespace: 'render', member: 'gl', count: 1 }],
+    permissionErrors: [{ namespace: 'render', member: 'gl', count: 1 }],
     cspViolations: [{ directive: 'connect-src', blockedUri: 'https://example.com/data' }],
-    runtimeErrors: ['project.get requires project:read permission. Set "apiVersion": 3 and declare "project:read" in the manifest\'s permissions.']
+    runtimeErrors: ['render.gl requires full access. Use project.apply or commands in a sandboxed extension.']
   }));
   expect(lines).toEqual([
-    'Reads the project with api.project.get without permission. Set `apiVersion: 3` and declare `permissions: ["project:read"]`.',
     'Calls api.render.gl, which needs full access. Set `apiVersion: 3` and declare `permissions: ["full-access"]` or use api.project instead.',
     'Reaches example.com without the network permission. Set `apiVersion: 3` and declare `permissions: ["network"]`.'
   ]);

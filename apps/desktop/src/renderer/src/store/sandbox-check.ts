@@ -58,7 +58,6 @@ function declare(permission: ExtensionPermission, apiVersion = 3): string {
 
 function permissionLine(hit: SandboxCheckReport['permissionErrors'][number], apiVersion?: number): string {
   const name = hit.namespace === 'powermove' ? `${hit.member} from 'powermove'` : `api.${hit.namespace}${hit.member ? `.${hit.member}` : ''}`;
-  if (hit.needs === 'project:read') return `Reads the project with ${name} without permission. ${declare('project:read', apiVersion)}.`;
   const alternative = ALTERNATIVE[hit.namespace];
   return alternative
     ? `Calls ${name}, which needs full access. ${declare('full-access', apiVersion)} or ${alternative}.`
@@ -81,7 +80,7 @@ export function sandboxCheckLines(report: SandboxCheckReport): string[] {
   if (report.skipped || report.ok) return [];
   const lines: string[] = [];
   const permission = report.permissionErrors.length > 0;
-  const covered = (message: string): boolean => permission && /requires (?:full access|project:read permission)/.test(message);
+  const covered = (message: string): boolean => permission && /requires full access/.test(message);
   for (const hit of report.permissionErrors) lines.push(permissionLine(hit, report.apiVersion));
   if (report.activation !== 'ok' && !covered(report.activation.error)) lines.push(`Failed to start in the sandbox: ${report.activation.error}`);
   for (const hit of report.cspViolations) lines.push(cspLine(hit, report.apiVersion));
