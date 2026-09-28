@@ -82,6 +82,7 @@
   let sampling = $state(false);
   let menu = $state<{ kind: 'settings' | 'notation'; handle: PopoverMenuHandle } | null>(null);
   let closeTimer: number | undefined;
+  let stopDrag: (() => void) | undefined;
 
   const hsl = $derived(toHsl(color));
   const oklch = $derived(toOklch(color));
@@ -265,10 +266,42 @@
   function startDrag(event: PointerEvent, kind: Kind): void {
     if (event.button !== 0) return;
     event.preventDefault();
+    event.stopPropagation();
     const element = event.currentTarget as HTMLElement;
     element.focus({ preventScroll: true });
+    stopDrag?.();
+    // Track the picker in its own document, including moves outside its bounds.
+    // Do not depend on the host's drag service for this portalled control.
+    const view = element.ownerDocument.defaultView!;
+    const pointerId = event.pointerId;
+    const move = (next: PointerEvent): void => {
+      if (next.pointerId === pointerId) pick(next, element, kind);
+    };
+    const stop = (): void => {
+      view.removeEventListener('pointermove', move, true);
+      view.removeEventListener('pointerup', up, true);
+      view.removeEventListener('pointercancel', cancel, true);
+      view.removeEventListener('blur', stop);
+      try {
+        if (element.hasPointerCapture?.(pointerId)) element.releasePointerCapture(pointerId);
+      } catch { /* The pointer may already have been released by the browser. */ }
+      stopDrag = undefined;
+    };
+    const up = (next: PointerEvent): void => {
+      if (next.pointerId !== pointerId) return;
+      move(next);
+      stop();
+    };
+    const cancel = (next: PointerEvent): void => {
+      if (next.pointerId === pointerId) stop();
+    };
+    stopDrag = stop;
+    view.addEventListener('pointermove', move, true);
+    view.addEventListener('pointerup', up, true);
+    view.addEventListener('pointercancel', cancel, true);
+    view.addEventListener('blur', stop);
+    try { element.setPointerCapture?.(pointerId); } catch { /* Window listeners still track the drag. */ }
     pick(event, element, kind);
-    api.ui.drag(event, { move: (_dx: number, _dy: number, next: PointerEvent) => pick(next, element, kind), up: () => {} });
   }
 
   function sliderKey(event: KeyboardEvent, kind: Kind): void {
@@ -380,6 +413,7 @@
   }
 
   function cancelPreview(): void {
+    stopDrag?.();
     if (previewing) {
       if (edit.mode === 'local') gesture.write(storedHex(previous));
       gesture.cancel();
@@ -390,6 +424,7 @@
   }
 
   function commitAndClose(): void {
+    stopDrag?.();
     if (phase === 'closed') return;
     // A field still being typed in applies first, as leaving it would.
     const active = document.activeElement;
@@ -433,7 +468,7 @@
     });
   });
   onMount(() => { if (embedded) show(); });
-  onDestroy(() => { window.clearTimeout(closeTimer); menu?.handle.close(); });
+  onDestroy(() => { stopDrag?.(); window.clearTimeout(closeTimer); menu?.handle.close(); });
   function overlay(node: HTMLElement) { return embedded ? undefined : mountOverlayOnBody(node); }
 </script>
 

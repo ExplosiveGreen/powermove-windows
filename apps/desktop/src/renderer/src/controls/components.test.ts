@@ -361,7 +361,7 @@ describe('TextField', () => {
 
 describe('picker drafts', () => {
   it('ColorField previews saturation and brightness continuously, then cancels the preview', async () => {
-    const { api, Edit, drag, invalidate } = fakeAPI();
+    const { api, Edit, invalidate } = fakeAPI();
     const target = render(ColorField, { api, get: () => '#FF0000', edit: commandEdit('Color'), label: 'Color' });
     target.querySelector<HTMLButtonElement>('button.color-field')!.click();
     await tick();
@@ -378,13 +378,28 @@ describe('picker drafts', () => {
     expect(Edit.begin).toHaveBeenCalledWith('Color', { origin: 'inspector' });
     expect(Edit.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ value: '#BF6060' }));
 
-    drag().move(25, 25, pointer('pointermove', { pointerId: 1, clientX: 75, clientY: 50 }));
+    window.dispatchEvent(pointer('pointermove', { pointerId: 1, clientX: 75, clientY: 50 }));
     expect(Edit.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ value: '#802020' }));
     expect(invalidate).toHaveBeenLastCalledWith('render');
+    // An unrelated pointer must not move or end this drag.
+    const writes = Edit.dispatch.mock.calls.length;
+    window.dispatchEvent(pointer('pointermove', { pointerId: 2, clientX: 0, clientY: 0 }));
+    window.dispatchEvent(pointer('pointerup', { pointerId: 2, clientX: 0, clientY: 0 }));
+    expect(Edit.dispatch).toHaveBeenCalledTimes(writes);
+    window.dispatchEvent(pointer('pointerup', { pointerId: 1, clientX: 100, clientY: 0 }));
+    expect(Edit.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ value: '#FF0000' }));
+    const releasedWrites = Edit.dispatch.mock.calls.length;
+    window.dispatchEvent(pointer('pointermove', { pointerId: 1, clientX: 0, clientY: 0 }));
+    expect(Edit.dispatch).toHaveBeenCalledTimes(releasedWrites);
 
+    // Closing mid-drag removes the listeners too.
+    sv.dispatchEvent(pointer('pointerdown', { pointerId: 1, clientX: 75, clientY: 50 }));
     document.body.querySelector<HTMLElement>('.color-picker')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(Edit.cancel).toHaveBeenCalledOnce();
     expect(Edit.commit).not.toHaveBeenCalled();
+    const cancelledWrites = Edit.dispatch.mock.calls.length;
+    window.dispatchEvent(pointer('pointermove', { pointerId: 1, clientX: 0, clientY: 0 }));
+    expect(Edit.dispatch).toHaveBeenCalledTimes(cancelledWrites);
   });
 
   it('ColorField removes confirmation buttons and commits the normalized choice when clicking outside', async () => {
@@ -475,7 +490,7 @@ describe('picker drafts', () => {
   });
 
   it('FillField previews color continuously across pointer moves', async () => {
-    const { api, Edit, drag, invalidate } = fakeAPI();
+    const { api, Edit, invalidate } = fakeAPI();
     const target = render(FillField, {
       api,
       get: () => ({ type: 'solid', angle: 0, stops: [{ id: 'red', color: '#FF0000', position: 0 }] }),
@@ -493,7 +508,7 @@ describe('picker drafts', () => {
       toJSON: () => ({})
     });
     sv.dispatchEvent(pointer('pointerdown', { pointerId: 1, clientX: 50, clientY: 25 }));
-    drag().move(25, 25, pointer('pointermove', { pointerId: 1, clientX: 75, clientY: 50 }));
+    window.dispatchEvent(pointer('pointermove', { pointerId: 1, clientX: 75, clientY: 50 }));
 
     expect(Edit.begin).toHaveBeenCalledWith('Fill', { origin: 'inspector' });
     expect(Edit.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({
