@@ -30,7 +30,7 @@ export async function validateStagedExtensions(
     const texts = await readStagedText(dir);
     const { blocked } = scanFiles(texts);
     if (blocked.length) throw new AgentResultValidationError(blocked.map((finding) => credentialLine(change.id, finding)).join('\n'));
-    for (const finding of permissionFindings(texts, manifest.manifest.permissions)) console.warn(`[extension ${change.id}] ${finding.text}`);
+    for (const finding of permissionFindings(texts, manifest.manifest)) console.warn(`[extension ${change.id}] ${finding.text}`);
     const compiled = await compileExtension({ dir, entry: manifest.manifest.entry || 'index.ts', outDir: path.join(layout.runDirectory, '.compiled') });
     if (!compiled.ok) throw new AgentResultValidationError(`${change.id} failed compilation: ${compiled.error}. Repair its staged source. Nothing was published.`);
   }
