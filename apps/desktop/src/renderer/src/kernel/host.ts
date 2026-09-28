@@ -379,7 +379,8 @@ export function createExtensionAPI(
     },
     run: (commandId, ...args) => runKernelCommand(kernel, commandId, args),
     has: (commandId) => kernel.commands.has(commandId),
-    list: () => kernel.commands.list()
+    // Every registration path leaves `when` synchronous (settledWhen above; legacy commands are).
+    list: () => kernel.commands.list() as ReturnType<CommandsAPI['list']>
   };
 
   /* ── keybindings ───────────────────────────────────────── */

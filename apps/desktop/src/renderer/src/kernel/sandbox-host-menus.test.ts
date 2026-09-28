@@ -126,7 +126,8 @@ it('keeps the handles of the newest palette query however the replies land', asy
   });
   const provider = kernel.paletteProviders()[0]!.provider;
   // Typed a, ab, abc; abc answers first, then the slower ab and a.
-  const [a, ab, abc] = ['a', 'ab', 'abc'].map(query => provider(query) as Promise<Array<{ run(): unknown }>>);
+  const ask = (query: string) => provider(query) as Promise<Array<{ label: string; run(): unknown }>>;
+  const a = ask('a'), ab = ask('ab'), abc = ask('abc');
   await new Promise(resolve => setTimeout(resolve, 5));
   await gate.answer('abc');
   await gate.answer('ab');
@@ -135,7 +136,7 @@ it('keeps the handles of the newest palette query however the replies land', asy
   await shown[0]!.run(); // the palette shows abc's rows
   expect(ran).toEqual(['abc']);
   expect(await a).toEqual([]); // two newer queries already answered: nothing to run
-  expect((await ab).map(entry => (entry as { label: string }).label)).toEqual(['ab']);
+  expect((await ab).map(entry => entry.label)).toEqual(['ab']);
 });
 
 it('keeps the handles of the newest menu open however the replies land', async () => {
