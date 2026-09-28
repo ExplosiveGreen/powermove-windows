@@ -62,11 +62,16 @@ it.runIf(process.platform === 'darwin')('uses the marked PATH even when a profil
   expect((await loginShellPath('/Users/me')).split(':')[0]).toBe('/opt/tools/bin');
 });
 
-it.runIf(process.platform === 'darwin')('falls back to common tool folders when the probe fails and retries it next time', async () => {
+it.runIf(process.platform === 'darwin')('falls back to common tool folders for a minute after a failed probe, then retries it', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
   reply('no markers');
   const fallback = '/opt/homebrew/bin:/usr/local/bin:/Users/me/.bun/bin:/usr/bin:/bin:/usr/sbin:/sbin';
   expect(await loginShellPath('/Users/me')).toBe(fallback);
   reply('__POWERMOVE_PATH_START__/opt/tools/bin__POWERMOVE_PATH_END__');
+  vi.setSystemTime(Date.now() + 59_000);
+  expect(await loginShellPath('/Users/me')).toBe(fallback);
+  expect(spawn).toHaveBeenCalledTimes(1);
+  vi.setSystemTime(Date.now() + 1_000);
   expect((await loginShellPath('/Users/me')).split(':')[0]).toBe('/opt/tools/bin');
   expect(spawn).toHaveBeenCalledTimes(2);
 });

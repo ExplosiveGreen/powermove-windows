@@ -6,8 +6,10 @@ const SYSTEM_PATH = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'];
 const START = '__POWERMOVE_PATH_START__';
 const END = '__POWERMOVE_PATH_END__';
 const PROBE_TIMEOUT_MS = 5_000;
+const RETRY_AFTER_MS = 60_000;
 
 let probe: Promise<string[]> | null = null;
+let retryAt = 0;
 
 /** Absolute, unique PATH entries in order; relative entries resolve against a caller's cwd. */
 export function absolutePathEntries(value: string | undefined): string[] {
@@ -71,16 +73,20 @@ function readLoginShellPath(): Promise<string[] | null> {
  * The user's login-shell PATH, so Dock and Finder launches (which get a
  * minimal PATH) still find Homebrew, bun and node tools. Homebrew and bun
  * folders are appended when the profile left them out. A successful probe is
- * kept for the app's lifetime; a failed one is retried by the next command.
+ * kept for the app's lifetime; after a failed one, commands use the fallback
+ * folders for a minute, so a slow profile does not delay each of them.
  */
 export async function loginShellPath(home = process.env.HOME): Promise<string> {
   let login: string[] = [];
-  if (process.platform === 'darwin') {
+  if (process.platform === 'darwin' && (probe || Date.now() >= retryAt)) {
     const current = probe ??= readLoginShellPath().then(entries => {
       if (!entries?.length) throw new Error('The login shell reported no PATH.');
       return entries;
     });
-    login = await current.catch(() => { if (probe === current) probe = null; return []; });
+    login = await current.catch(() => {
+      if (probe === current) { probe = null; retryAt = Date.now() + RETRY_AFTER_MS; }
+      return [];
+    });
   }
   const fallback = ['/opt/homebrew/bin', '/usr/local/bin', ...(home && path.isAbsolute(home) ? [path.join(home, '.bun', 'bin')] : [])];
   return absolutePathEntries([...login, ...fallback, ...absolutePathEntries(process.env.PATH), ...SYSTEM_PATH].join(':')).join(':');
@@ -88,4 +94,5 @@ export async function loginShellPath(home = process.env.HOME): Promise<string> {
 
 export function resetLoginShellPathForTests(): void {
   probe = null;
+  retryAt = 0;
 }
