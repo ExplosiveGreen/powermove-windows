@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -6,8 +6,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { CodexRunRequest } from '../../shared/ipc';
 import { agentResultSchema } from './instructions';
 import {
+  agentStateRoot,
   agentWorkspaceRoot,
   clearSession,
+  discardExtensionStage,
   prepareAgentWorkspace,
   preserveCancelledRun,
   readSession,
@@ -119,7 +121,8 @@ describe('prepareAgentWorkspace', () => {
     expect(layout.runId).toBe('run-123');
     expect(layout.root).toBe(path.join(userData, 'Agent Workspaces', 'Project_123'));
     expect(layout.runDirectory).toBe(path.join(layout.root, 'artifacts', 'run-123'));
-    expect(layout.outputPath).toBe(path.join(layout.root, '.powermove', 'result-run-123.json'));
+    expect(layout.outputPath).toBe(path.join(agentStateRoot(layout.root), 'result-run-123.json'));
+    expect(layout.schemaPath).toBe(path.join(userData, 'Agent State', 'Project_123', 'result-schema.json'));
     expect(layout.sessionPath).toBe(path.join(layout.root, '.powermove', 'session-v2-project.txt'));
     expect(layout.apiPackDirectory).toBe(path.join(layout.root, 'powermove-api'));
     expect(layout.liveDirectory).toBe(options.extensionsDir);
@@ -267,5 +270,82 @@ describe('session helpers', () => {
     await expect(readSession(file)).resolves.toBe('thread-123');
     await clearSession(file);
     await expect(readSession(file)).resolves.toBeNull();
+  });
+});
+
+describe('links planted by Project commands', () => {
+  /* Each link leads outside to a folder or file holding `keep`; main must
+     leave every one untouched and write only inside the workspace. */
+  async function plant(root: string, outside: string, links: Record<string, 'file' | 'folder'>) {
+    const targets: Array<[string, 'file' | 'folder']> = [];
+    for (const [name, kind] of Object.entries(links)) {
+      const target = path.join(outside, name.replaceAll('/', '_'));
+      if (kind === 'folder') { await mkdir(target); await writeFile(path.join(target, 'keep'), 'keep'); }
+      else await writeFile(target, 'keep');
+      await mkdir(path.dirname(path.join(root, name)), { recursive: true });
+      await symlink(target, path.join(root, name));
+      targets.push([target, kind]);
+    }
+    return async () => {
+      for (const [target, kind] of targets) {
+        if (kind === 'folder') expect(await readdir(target)).toEqual(['keep']);
+        else expect(await readFile(target, 'utf8')).toBe('keep');
+      }
+    };
+  }
+
+  async function prepared(links: Record<string, 'file' | 'folder'>) {
+    const userData = await temporaryDirectory();
+    const outside = await temporaryDirectory();
+    const extensionsDir = path.join(userData, 'extensions');
+    await mkdir(path.join(extensionsDir, 'live-mod'), { recursive: true });
+    await writeFile(path.join(extensionsDir, 'live-mod', 'index.ts'), 'live');
+    const untouched = await plant(agentWorkspaceRoot(userData, 'Project_123'), outside, links);
+    const layout = await prepareAgentWorkspace(request(), userData, 'project', agentResultSchema(),
+      workspaceOptions({ extensionsDir, apiPackFiles: [{ name: 'api.ts', text: 'api' }, { name: 'samples/a/index.ts', text: 'sample' }] }), 'run-123');
+    await untouched();
+    await expect(readFile(path.join(layout.inputsDirectory, 'powermove-project.json'), 'utf8')).resolves.toBe('{"layers":[]}');
+    await expect(readFile(path.join(layout.attachmentsDirectory, 'brief-txt'), 'utf8')).resolves.toBe('hello');
+    await expect(readFile(layout.imagePaths[0]!)).resolves.toHaveLength(8);
+    await expect(readFile(path.join(layout.apiPackDirectory, 'samples/a/index.ts'), 'utf8')).resolves.toBe('sample');
+    await expect(readFile(path.join(layout.stagingDirectory, 'live-mod', 'index.ts'), 'utf8')).resolves.toBe('live');
+    for (const folder of [layout.inputsDirectory, layout.apiPackDirectory, layout.runDirectory, layout.stagingDirectory]) {
+      expect((await lstat(folder)).isDirectory()).toBe(true);
+    }
+    return { layout, outside };
+  }
+
+  it('replaces linked top-level folders instead of writing through them', async () => {
+    await prepared({ inputs: 'folder', 'powermove-api': 'folder', artifacts: 'folder', '.powermove': 'folder' });
+  });
+
+  it('replaces linked files and folders inside the workspace', async () => {
+    await prepared({
+      'inputs/powermove-project.json': 'file', 'inputs/attachments': 'folder', 'inputs/references/reference-0.png': 'file',
+      'powermove-api/api.ts': 'file', 'powermove-api/samples': 'folder', '.powermove/extension-runs': 'folder',
+      '.powermove/result-schema.json': 'file', 'artifacts/run-123': 'folder'
+    });
+    await prepared({ 'inputs/attachments/brief-txt': 'file', 'inputs/references': 'folder', '.powermove/extension-runs/run-123': 'folder' });
+  });
+
+  it('removes a stage without deleting through a folder swapped for a link above it', async () => {
+    const { layout, outside } = await prepared({});
+    const decoy = path.join(outside, 'extension-runs', 'run-123');
+    await mkdir(decoy, { recursive: true });
+    await writeFile(path.join(decoy, 'keep'), 'keep');
+    await rm(layout.internalDirectory, { recursive: true });
+    await symlink(outside, layout.internalDirectory);
+    await discardExtensionStage(layout);
+    expect(await readdir(decoy)).toEqual(['keep']);
+  });
+
+  it('removes a stage and any links inside it without following them', async () => {
+    const { layout, outside } = await prepared({});
+    await writeFile(path.join(outside, 'keep'), 'keep');
+    await symlink(outside, path.join(layout.stagingDirectory, 'linked'));
+    await discardExtensionStage(layout);
+    await expect(lstat(layout.stagingDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readdir(outside)).toEqual(['keep']);
+    expect((await readdir(agentStateRoot(layout.root))).filter(name => name.startsWith('.scratch-'))).toEqual([]);
   });
 });
