@@ -1,7 +1,7 @@
 import type { ExtensionRecord } from '../../../shared/extensions';
 import { createRpc, createRpcBudget, rpcTransfers, type Rpc } from '../../../shared/sandbox-rpc';
 import { panelInfo, type SandboxEvent, type SandboxInit, type SandboxKey, type SandboxSnapshot, type SandboxState, type SandboxViewInit } from '../../sandbox/shim-api';
-import type { Disposable, Selection } from './api';
+import type { Disposable, MenuContribution, Selection } from './api';
 import { createExtensionAPI, type ExtensionHandle, type HostDeps } from './host';
 import type { Kernel } from './registries';
 import { themeScheme, themeTokens } from './theme-apply';
@@ -245,12 +245,17 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
           if (!ownId(record.id, entry.id) || reg.commands.topEntry(entry.id)?.ownerId && reg.commands.topEntry(entry.id)?.ownerId !== record.id) denied('Palette entry id collides with another owner', 'id_collision');
           return { ...entry, run: () => rpc.invokeHandle(entry.run) };
         }))); break;
-        case 'menus': item = host.api.menus.contribute(value.location as Parameters<typeof host.api.menus.contribute>[0], cached(rpc, Number(value.items), [], result => menuEntriesSchema.parse(result).map(entry => {
-          if (typeof entry === 'string' || !('run' in entry) || !entry.run) return entry;
-          const run = entry.run;
-          claimHandles([run]);
-          return { ...entry, run: () => rpc.invokeHandle(run) };
-        })) as Parameters<typeof host.api.menus.contribute>[1]); break;
+        /* Asked afresh on every open, with that open's ctx: the reply to this
+           call is the only one these items can come from, so a menu never
+           shows (or runs) items built for another target. The kernel bounds
+           the wait. */
+        case 'menus': item = host.api.menus.contribute(value.location as Parameters<typeof host.api.menus.contribute>[0], ctx => rpc.invokeHandle(Number(value.items), ctx)
+          .then(result => menuEntriesSchema.parse(result).map(entry => {
+            if (typeof entry === 'string' || !('run' in entry) || !entry.run) return entry;
+            const run = entry.run;
+            claimHandles([run]);
+            return { ...entry, run: () => rpc.invokeHandle(run) };
+          }) as MenuContribution[])); break;
         case 'events': {
           const doc = docOf.get(link);
           if (!doc) throw new Error('Sandbox document is not connected');

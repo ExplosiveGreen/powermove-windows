@@ -367,10 +367,13 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     menus: { contribute(location: string, fn: (...args: any[]) => unknown) {
       if (mode === 'view') return registration('menus', { location, items: 0 }, [], fn);
       let current: HandleId[] = [], previous: HandleId[] = [];
-      const id = handle((ctx: unknown) => {
+      /* The items may be a Promise; the host waits for them within its menu
+         deadline. Handles live for this open and the next. */
+      const id = handle(async (ctx: unknown) => {
+        const items = await fn(ctx) as Array<string | Record<string, any>>;
         for (const item of previous) rpc.release(item);
         previous = current; current = [];
-        return (fn(ctx) as Array<string | Record<string, any>>).map(entry => {
+        return items.map(entry => {
           if (typeof entry === 'string' || !entry.run) return entry;
           const run = handle(entry.run); current.push(run); return { ...entry, run };
         });
