@@ -85,6 +85,31 @@ it('keeps cancelled extension work in its isolated stage for the next run', asyn
   const resumed = await prepareAgentWorkspace(req as any, directory, 'project', agentResultSchema(), { extensionsDir, apiPackFiles: [] });
   expect(resumed.stagingDirectory).toBe(stage);
 });
+it.runIf(process.platform === 'darwin')('stops background jobs when a run ends, even when it fails', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'pm-api-jobs-')); directories.push(directory);
+  let stage = '';
+  const fetcher = vi.fn(async (_url: any, options: any) => {
+    if (options.method === 'GET') return new Response(null, { status: 404 });
+    const body = JSON.parse(options.body);
+    if (!body.stream) return Response.json({ choices: [{ message: { content: 'OK' } }] });
+    if (body.messages.length === 2) return streamed(event({ tool_calls: [{ index: 0, id: 'job', function: {
+      name: 'run_command', arguments: JSON.stringify({ command: 'echo $$ > job.pid; exec sleep 30', background: true })
+    } }] }, 'tool_calls'));
+    await expect.poll(() => readFile(pidFile(), 'utf8').then(text => /^\d+\n$/.test(text), () => false)).toBe(true);
+    throw new Error('Provider went away');
+  }) as typeof fetch;
+  const pidFile = () => path.join(stage, '..', '..', '..', 'job.pid');
+  const provider = new CompatibleProvider(directory, fetcher);
+  await provider.configure({ baseUrl: 'http://localhost:11434/v1', model: 'local', vision: false });
+  const req = { id: 'job-run', provider: 'compatible', mode: 'autonomous', access: 'project', projectId: 'proof', projectName: 'Proof', projectJSON: '{}', prompt: 'Render', images: [], attachments: [] };
+  const result = await provider.run(req as any, () => {}, undefined, { extensionsDir: path.join(directory, 'extensions'), apiPackFiles: async () => [], onWorkspace: value => { stage = value; } });
+  expect(result).toMatchObject({ ok: false, cancelled: false });
+  const pid = Number(await readFile(pidFile(), 'utf8'));
+  expect(pid).toBeGreaterThan(1);
+  const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  await expect.poll(alive).toBe(false);
+});
+
 it('discovers provider models and sends the selected model and reasoning on every tool turn', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'pm-model-picker-')); directories.push(directory);
   const requests: any[] = [];

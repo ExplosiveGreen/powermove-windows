@@ -1,27 +1,53 @@
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import type { AgentToolContent, CodexRunResult } from '../shared/ipc';
 import { EXTENSION_ID, parseManifest } from '../shared/extensions';
 import { compileExtension } from './extensions/compiler';
 import { collectArtifacts, mimeTypeForPath } from './codex/artifacts';
 import { publishExtensionChanges } from './codex/change-history';
+import { loginShellPath } from './login-shell-path';
+import { killProcessFamily } from './process-family';
 import { agentResultSchema } from './codex/instructions';
 import type { AgentWorkspace } from './codex/workspace';
 import type { PowermoveAgentToolSpec } from './agent-tools/spec';
 
 const object = (properties: Record<string, unknown>, required: string[]) => ({ type: 'object', additionalProperties: false, properties, required });
+const COMMAND_TIMEOUT_MS = 600_000;
+const MAX_BACKGROUND_JOBS = 4;
+const JOB_OUTPUT_CHARS = 20_000;
 export const COMPATIBLE_WORKSPACE_TOOLS: readonly PowermoveAgentToolSpec[] = [
   { name: 'list_files', description: 'List a workspace directory. Paths may be absolute or relative to the workspace.', inputSchema: object({ path: { type: 'string' } }, ['path']) },
   { name: 'read_file', description: 'Read a UTF-8 file, or return an image for visual inspection. Use offset/limit to page large text files. Read shipped API types and samples before implementing extensions.', inputSchema: object({ path: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 100000 } }, ['path']) },
   { name: 'write_file', description: 'Create or replace a UTF-8 file. Creates parent directories. Write extensions only in the supplied staging directory and deliverables in the run artifact directory. Read existing files before replacing them.', inputSchema: object({ path: { type: 'string' }, text: { type: 'string', maxLength: 1000000 } }, ['path', 'text']) },
-  { name: 'run_command', description: 'Run a shell command in the project workspace. Use for searching, editing, scripts, tests, downloads and web research (curl). Project access restricts filesystem writes to this workspace; Computer access allows broader operations. Commands time out after at most 120 seconds. Output is bounded. Never repeat a timed-out mutation without inspecting its result.', inputSchema: object({ command: { type: 'string', maxLength: 100000 }, timeoutMs: { type: 'integer', minimum: 1, maximum: 120000 } }, ['command']) },
+  { name: 'run_command', description: 'Run a shell command in the project workspace. Use for searching, editing, scripts, tests, downloads and web research (curl). Project access restricts filesystem writes to this workspace; Computer access allows broader operations. Commands time out after 30 seconds unless timeoutMs allows up to 600 seconds. For longer work such as renders or installs, set background: true and follow the job with command_status. Processes a command leaves running stop when it exits; background jobs stop when complete_task runs or the run ends. Output is bounded. Never repeat a timed-out mutation without inspecting its result.', inputSchema: object({ command: { type: 'string', maxLength: 100000 }, timeoutMs: { type: 'integer', minimum: 1, maximum: COMMAND_TIMEOUT_MS }, background: { type: 'boolean' } }, ['command']) },
+  { name: 'command_status', description: 'Check a background job from run_command: its state, exit code and recent output. Set waitMs to wait up to 120 seconds for it to finish, or stop: true to stop it and everything it started.', inputSchema: object({ jobId: { type: 'string' }, waitMs: { type: 'integer', minimum: 0, maximum: 120000 }, stop: { type: 'boolean' } }, ['jobId']) },
   { name: 'compile_extension', description: 'Compile a staged extension with Powermove’s real compiler. Returns compilation errors for repair. This does not activate it; after completing this run, Powermove loads it and continues the task for live verification.', inputSchema: object({ id: { type: 'string', pattern: EXTENSION_ID.source } }, ['id']) },
   { name: 'complete_task', description: 'Finish the run with its summary, typed project commands, artifacts and all staged extension changes. Validates and publishes the staged extensions. Return commands: [] for edits already applied through live tools. Powermove loads extensions before applying dependent commands and continues with live verification. If this tool fails, repair the reported problem and call it again.', inputSchema: agentResultSchema() }
 ];
 
 export class CompatibleWorkspace {
+  private readonly commands = new Set<WorkspaceCommand>();
+  private readonly jobs = new Map<string, WorkspaceCommand>();
+
   constructor(readonly layout: AgentWorkspace, readonly access: 'project' | 'computer', readonly context: 'app' | 'project' = 'project') {}
+
+  private async start(command: string, timeoutMs: number, signal: AbortSignal, keepTail: boolean): Promise<WorkspaceCommand> {
+    const started = await startWorkspaceCommand(this.layout.root, this.access, command, { timeoutMs, signal, keepTail });
+    this.commands.add(started);
+    void started.done.finally(() => this.commands.delete(started)).catch(() => undefined);
+    return started;
+  }
+
+  /**
+   * Stop every command and background job of this run, with everything they
+   * started. Runs before complete_task validates, so nothing can change the
+   * staged files between the compile check and publishing, and at run end.
+   */
+  async stopCommands(): Promise<void> {
+    await Promise.all([...this.commands].map(command => command.stop()));
+  }
 
   /** Resolve existing ancestors too, so symlinks cannot redirect file writes. */
   private async resolve(file: unknown): Promise<string> {
@@ -77,7 +103,31 @@ export class CompatibleWorkspace {
     }
     if (name === 'run_command') {
       if (typeof args.command !== 'string' || !args.command.trim() || args.command.length > 100000) throw new Error('Provide a nonempty command, at most 100,000 characters.');
-      return text(await runWorkspaceCommand(this.layout.root, this.access, args.command, boundedInteger(args.timeoutMs, 30000, 1, 120000), signal));
+      if (args.background !== undefined && typeof args.background !== 'boolean') throw new Error('background must be true or false.');
+      if (!args.background) {
+        return text(await settleCommand(await this.start(args.command, boundedInteger(args.timeoutMs, 30000, 1, COMMAND_TIMEOUT_MS), signal, false), signal));
+      }
+      if ([...this.jobs.values()].filter(job => job.running).length >= MAX_BACKGROUND_JOBS) {
+        throw new Error(`At most ${MAX_BACKGROUND_JOBS} background jobs can run at once. Wait for or stop one with command_status.`);
+      }
+      const job = await this.start(args.command, boundedInteger(args.timeoutMs, COMMAND_TIMEOUT_MS, 1, COMMAND_TIMEOUT_MS), signal, true);
+      const jobId = `job-${this.jobs.size + 1}`;
+      this.jobs.set(jobId, job);
+      return text({ jobId, state: 'running' });
+    }
+    if (name === 'command_status') {
+      const job = typeof args.jobId === 'string' ? this.jobs.get(args.jobId) : undefined;
+      if (!job) throw new Error('Unknown background job. Use a jobId returned by run_command.');
+      if (args.stop !== undefined && typeof args.stop !== 'boolean') throw new Error('stop must be true or false.');
+      const waitMs = boundedInteger(args.waitMs, 0, 0, 120000);
+      if (args.stop) await job.stop();
+      else if (waitMs && job.running) {
+        const waited = new AbortController();
+        try { await Promise.race([job.done.catch(() => undefined), delay(waitMs, undefined, { signal: AbortSignal.any([signal, waited.signal]) })]); }
+        finally { waited.abort(); }
+        signal.throwIfAborted();
+      }
+      return text({ jobId: args.jobId, ...job.status() });
     }
     if (name === 'compile_extension') return text(await this.compile(args.id));
     throw new Error(`Unknown workspace tool: ${name}`);
@@ -93,6 +143,7 @@ export class CompatibleWorkspace {
   }
 
   async finish(value: Record<string, unknown>, signal: AbortSignal): Promise<CodexRunResult> {
+    await this.stopCommands();
     if (typeof value.summary !== 'string' || !Array.isArray(value.commands) || value.commands.length > 80
       || !value.commands.every(command => typeof command === 'string')
       || !Array.isArray(value.extensions) || value.extensions.length > 32
@@ -128,39 +179,146 @@ function boundedInteger(value: unknown, fallback: number, min: number, max: numb
   return value as number;
 }
 
-export async function runWorkspaceCommand(root: string, access: 'project' | 'computer', command: string, timeoutMs: number, signal: AbortSignal): Promise<{ output: string; exitCode: number | null; truncated: boolean }> {
-  signal.throwIfAborted();
-  const scratch = path.join(await realpath(root), '.powermove', 'tmp');
+// macOS mktemp ignores TMPDIR for -t and bare calls and uses the per-user
+// temp folder, which Project commands must not write: other tools run code
+// cached there. Default those templates to $TMPDIR; keep explicit ones.
+const MKTEMP_SHIM = `#!/bin/zsh -f
+emulate -L zsh
+local -a flags templates resolved
+local dir= prefix= arg rest c named=0
+while (( $# )); do
+  arg=$1; shift
+  case $arg in
+    --) templates+=("$@"); break ;;
+    --tmpdir) dir=\${TMPDIR:-/tmp} ;;
+    --tmpdir=*) dir=\${arg#--tmpdir=} ;;
+    --*) flags+=("$arg") ;;
+    -?*)
+      rest=\${arg#-}
+      while [[ -n $rest ]]; do
+        c=\${rest[1]}; rest=\${rest[2,-1]}
+        case $c in
+          t|p)
+            local value=$rest; rest=
+            if [[ -z $value ]] && (( $# )); then value=$1; shift; fi
+            if [[ $c == t ]]; then prefix=$value; named=1; else dir=$value; fi ;;
+          *) flags+=("-$c") ;;
+        esac
+      done ;;
+    *) templates+=("$arg") ;;
+  esac
+done
+local base=\${\${dir:-\${TMPDIR:-/tmp}}%/}
+for arg in "\${templates[@]}"; do
+  if [[ -n $dir && $arg != /* ]]; then resolved+=("$base/$arg"); else resolved+=("$arg"); fi
+done
+if (( named || ! \${#templates} )); then resolved+=("$base/\${prefix:-tmp}.XXXXXXXX"); fi
+exec /usr/bin/mktemp "\${flags[@]}" -- "\${resolved[@]}"
+`;
+
+// HOME stays unwritable in Project access so a run cannot poison packages
+// the user's other projects share; package tools cache in the workspace.
+const PROJECT_CACHES = [['BUN_INSTALL_CACHE_DIR', 'bun'], ['npm_config_cache', 'npm'], ['XDG_CACHE_HOME', 'xdg'],
+  ['PIP_CACHE_DIR', 'pip'], ['CLANG_MODULE_CACHE_PATH', 'clang']] as const;
+
+/** Scratch and tool locations inside the app-owned workspace. */
+async function commandEnvironment(root: string, access: 'project' | 'computer'): Promise<NodeJS.ProcessEnv> {
+  const scratch = path.join(root, '.powermove', 'tmp');
+  const bin = path.join(root, '.powermove', 'bin');
   await mkdir(scratch, { recursive: true });
+  const shims = process.platform === 'darwin';
+  if (shims) {
+    await mkdir(bin, { recursive: true });
+    await writeFile(path.join(bin, 'mktemp'), MKTEMP_SHIM, { mode: 0o755 });
+    await chmod(path.join(bin, 'mktemp'), 0o755);
+  }
+  const PATH = await loginShellPath();
   // Keep account keys and provider configuration out of subprocess environments.
-  const env: NodeJS.ProcessEnv = { PATH: process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin', HOME: process.env.HOME, LANG: 'en_US.UTF-8', TMPDIR: scratch };
-  const profile = `(version 1)(allow default)(deny appleevent-send)(deny file-write*)(allow file-write* (subpath ${JSON.stringify(await realpath(root))}) (literal "/dev/null") (literal "/dev/tty"))`;
+  const env: NodeJS.ProcessEnv = { PATH: shims ? `${bin}:${PATH}` : PATH, HOME: process.env.HOME, LANG: 'en_US.UTF-8',
+    TMPDIR: scratch, TMP: scratch, TEMP: scratch, TMPPREFIX: path.join(scratch, 'zsh') };
+  if (access === 'project') for (const [name, tool] of PROJECT_CACHES) env[name] = path.join(root, '.powermove', 'cache', tool);
+  return env;
+}
+
+export type WorkspaceCommandResult = { output: string; exitCode: number | null; truncated: boolean };
+type CommandEnding = 'timeout' | 'abort' | 'stop';
+
+/** A started command. `done` settles once it and everything it started are gone. */
+export interface WorkspaceCommand {
+  readonly done: Promise<WorkspaceCommandResult & { ending: CommandEnding | null }>;
+  readonly running: boolean;
+  status(): { state: 'running' | 'exited' | 'timed out' | 'stopped'; exitCode: number | null; output: string; truncated: boolean };
+  stop(): Promise<void>;
+}
+
+export async function startWorkspaceCommand(root: string, access: 'project' | 'computer', command: string,
+  options: { timeoutMs: number; signal: AbortSignal; keepTail?: boolean }): Promise<WorkspaceCommand> {
+  const { timeoutMs, signal } = options;
+  signal.throwIfAborted();
+  const env = await commandEnvironment(await realpath(root), access);
+  // Project access keeps outbound network for research and downloads (the
+  // footage chip depends on it); only the filesystem is confined.
+  const profile = `(version 1)(allow default)(allow network-outbound)(deny appleevent-send)`
+    // Stay in the process group the host kills; posix_spawn escapes are
+    // found through their parents by killProcessFamily.
+    + '(deny syscall-unix (syscall-number SYS_setsid SYS_setpgid))'
+    + `(deny file-write*)(allow file-write* (subpath ${JSON.stringify(await realpath(root))}) (literal "/dev/null") (literal "/dev/tty")`
+    // Inherited stdio only; a broad /dev subpath would expose devices.
+    + ' (literal "/dev/stdout") (literal "/dev/stderr") (regex #"^/dev/fd/[0-9]+$"))';
   if (access === 'project' && process.platform !== 'darwin') throw new Error('Project command sandbox is only available on macOS.');
-  return new Promise((resolve, reject) => {
-    const child = spawn(access === 'project' ? '/usr/bin/sandbox-exec' : '/bin/zsh',
-      access === 'project' ? ['-p', profile, '/bin/zsh', '-c', command] : ['-c', command],
-      { cwd: root, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    let output = '', truncated = false, stopped = false;
-    const stop = () => {
-      stopped = true;
-      if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* Already exited. */ } }
-    };
-    const timer = setTimeout(stop, timeoutMs);
-    signal.addEventListener('abort', stop, { once: true });
-    if (signal.aborted) stop();
-    const append = (chunk: Buffer) => {
-      const next = chunk.toString('utf8');
-      truncated ||= output.length + next.length > 100000;
-      output += next.slice(0, Math.max(0, 100000 - output.length));
-    };
-    child.stdout.on('data', append); child.stderr.on('data', append);
-    const cleanup = () => { clearTimeout(timer); signal.removeEventListener('abort', stop); };
+  const child = spawn(access === 'project' ? '/usr/bin/sandbox-exec' : '/bin/zsh',
+    access === 'project' ? ['-p', profile, '/bin/zsh', '-c', command] : ['-c', command],
+    { cwd: root, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  let output = '', truncated = false, running = true, exitCode: number | null = null;
+  let ending: CommandEnding | null = null, exited = false;
+  const sweep = () => child.pid ? killProcessFamily(child.pid) : Promise.resolve();
+  // A command that already exited on its own is not reported as stopped.
+  const end = (reason: CommandEnding) => { if (!exited) ending ??= reason; return sweep(); };
+  const onTimeout = () => void end('timeout');
+  const onAbort = () => void end('abort');
+  const timer = setTimeout(onTimeout, timeoutMs);
+  signal.addEventListener('abort', onAbort, { once: true });
+  if (signal.aborted) onAbort();
+  // Foreground output keeps its start; background jobs keep their latest lines.
+  const append = (chunk: Buffer) => {
+    const next = chunk.toString('utf8');
+    if (options.keepTail) {
+      truncated ||= output.length + next.length > JOB_OUTPUT_CHARS;
+      output = (output + next).slice(-JOB_OUTPUT_CHARS);
+      return;
+    }
+    truncated ||= output.length + next.length > 100000;
+    output += next.slice(0, Math.max(0, 100000 - output.length));
+  };
+  child.stdout.on('data', append); child.stderr.on('data', append);
+  const done = new Promise<WorkspaceCommandResult & { ending: CommandEnding | null }>((resolve, reject) => {
+    const cleanup = () => { clearTimeout(timer); signal.removeEventListener('abort', onAbort); running = false; };
     child.on('error', error => { cleanup(); reject(error); });
-    child.on('close', code => {
-      cleanup();
-      if (signal.aborted) reject(signal.reason);
-      else if (stopped) reject(new Error(`Command timed out. Inspect its effects before retrying. Output: ${output}`));
-      else resolve({ output, exitCode: code, truncated });
+    // Nothing a command starts outlives it. A process that escaped the kill
+    // may still hold the output pipes, so stop waiting on them shortly after.
+    child.on('exit', () => {
+      exited = true;
+      void sweep().finally(() => setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); }, 250).unref());
     });
+    child.on('close', code => { cleanup(); exitCode = code; resolve({ output, exitCode: code, truncated, ending }); });
   });
+  done.catch(() => undefined);
+  return {
+    done,
+    get running() { return running; },
+    status: () => ({ state: running ? 'running' : ending === 'timeout' ? 'timed out' : ending ? 'stopped' : 'exited', exitCode, output, truncated }),
+    stop: async () => { if (running) await end('stop'); await done.catch(() => undefined); }
+  };
+}
+
+/** Wait for a foreground command; a timeout or Stop is an error the model must inspect. */
+async function settleCommand(command: WorkspaceCommand, signal: AbortSignal): Promise<WorkspaceCommandResult> {
+  const { ending, ...result } = await command.done;
+  if (signal.aborted) throw signal.reason;
+  if (ending) throw new Error(`Command ${ending === 'timeout' ? 'timed out' : 'was stopped'}. Inspect its effects before retrying. Output: ${result.output}`);
+  return result;
+}
+
+export async function runWorkspaceCommand(root: string, access: 'project' | 'computer', command: string, timeoutMs: number, signal: AbortSignal): Promise<WorkspaceCommandResult> {
+  return settleCommand(await startWorkspaceCommand(root, access, command, { timeoutMs, signal }), signal);
 }
