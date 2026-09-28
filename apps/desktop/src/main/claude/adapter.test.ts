@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildClaudeArgv, CLAUDE_PROJECT_SANDBOX_SETTINGS } from './adapter';
+import {
+  buildClaudeArgv,
+  CLAUDE_EDITOR_SANDBOX_SETTINGS,
+  CLAUDE_PROJECT_NETWORK_HOSTS,
+  CLAUDE_PROJECT_SANDBOX_SETTINGS
+} from './adapter';
 
 const schema = { type: 'object', required: ['message'], properties: { message: { type: 'string' } } };
 
@@ -57,6 +62,46 @@ describe('Claude CLI adapter', () => {
     expect(JSON.parse(CLAUDE_PROJECT_SANDBOX_SETTINGS)).toMatchObject({
       sandbox: { enabled: true, allowUnsandboxedCommands: false, failIfUnavailable: true }
     });
+  });
+
+  it('lets project Bash reach only read-only media and package CDNs', () => {
+    const argv = buildClaudeArgv({
+      schema, prompt: 'Find useful footage', imagePaths: [], model: null, reasoningEffort: null,
+      sessionId: null, access: 'project', instructions: 'Work inside Powermove.'
+    });
+    const settings = JSON.parse(argv[argv.indexOf('--settings') + 1]!);
+    expect(settings).toEqual({
+      sandbox: {
+        enabled: true,
+        autoAllowBashIfSandboxed: true,
+        allowUnsandboxedCommands: false,
+        failIfUnavailable: true,
+        network: { allowedDomains: [...CLAUDE_PROJECT_NETWORK_HOSTS], strictAllowlist: true }
+      }
+    });
+    expect(CLAUDE_PROJECT_NETWORK_HOSTS).toEqual(expect.arrayContaining([
+      'videos.pexels.com', 'images.pexels.com', 'cdn.pixabay.com', 'upload.wikimedia.org'
+    ]));
+    // Hosts that accept authenticated uploads would be exfiltration channels.
+    for (const host of ['*', 'github.com', 'api.github.com', 'uploads.github.com', 'registry.npmjs.org', 'pypi.org', 'archive.org']) {
+      expect(CLAUDE_PROJECT_NETWORK_HOSTS).not.toContain(host);
+    }
+    for (const host of CLAUDE_PROJECT_NETWORK_HOSTS) expect(host).toMatch(/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/);
+    const allowed = argv[argv.indexOf('--allowedTools') + 1]!.split(',');
+    expect(allowed).toEqual(expect.arrayContaining(['Bash', 'WebSearch', 'WebFetch']));
+    expect(argv[argv.indexOf('--system-prompt') + 1]).toContain('Sandboxed Bash can download only from');
+    expect(argv[argv.indexOf('--system-prompt') + 1]).toContain('videos.pexels.com');
+  });
+
+  it('keeps editor runs without shell network', () => {
+    const argv = buildClaudeArgv({
+      schema, prompt: 'Inspect', imagePaths: [], model: null, reasoningEffort: null,
+      sessionId: null, access: 'editor', instructions: 'Inspect only.'
+    });
+    expect(argv[argv.indexOf('--settings') + 1]).toBe(CLAUDE_EDITOR_SANDBOX_SETTINGS);
+    expect(JSON.parse(CLAUDE_EDITOR_SANDBOX_SETTINGS).sandbox.network).toBeUndefined();
+    expect(argv[argv.indexOf('--system-prompt') + 1]).not.toContain('Sandboxed Bash');
+    expect(argv[argv.indexOf('--allowedTools') + 1]!.split(',')).not.toContain('Bash');
   });
 
   it('only enables unrestricted CLI permissions after computer consent is handled by main', () => {

@@ -24,6 +24,10 @@ export const REQUIRED_CODEX_FLAGS = [
   '--dangerously-bypass-approvals-and-sandbox'
 ] as const;
 
+/** Documented workspace-write switch. Codex 0.156 has no stable per-host
+ * allowlist for it, so this is all outbound hosts. */
+export const PROJECT_NETWORK_CONFIG = 'sandbox_workspace_write.network_access=true';
+
 interface CommonArgvOptions {
   schemaPath: string;
   outputPath: string;
@@ -42,6 +46,9 @@ export interface AutonomousArgvOptions extends CommonArgvOptions {
   sessionId: string | null;
   instructions: string;
   nativeTools?: NativeMcpServerConfig;
+  /** Outbound network for sandboxed shell commands. Only the Project access
+   * choice grants it; Edit project runs keep project authority without it. */
+  shellNetwork?: boolean;
 }
 
 function appendModelOptions(
@@ -103,6 +110,9 @@ export function buildAutonomousArgv(options: AutonomousArgvOptions): string[] {
     // --approve-for-me itself routes approvals through the workspace-write
     // sandbox (the Swift shell's flag pair predates that change).
     argv.push('--approve-for-me');
+    // Research-and-download tasks need shell network; writes stay confined to
+    // the workspace and --add-dir roots either way.
+    if (options.shellNetwork) argv.push('--config', PROJECT_NETWORK_CONFIG);
   }
   argv.push('--add-dir', options.extensionsDir);
 

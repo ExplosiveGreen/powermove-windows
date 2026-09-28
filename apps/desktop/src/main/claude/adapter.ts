@@ -1,3 +1,5 @@
+import type { SandboxSettings } from '@anthropic-ai/claude-agent-sdk';
+
 import type { CodexAccess, ReasoningEffort } from '../../shared/ipc';
 import { AGENT_TESTING_INSTRUCTIONS } from '../../shared/agent-testing';
 import { modelEffort } from '../../shared/agent-models';
@@ -12,14 +14,52 @@ import type { UserMcpServers } from '../agent-tools/user-mcp';
 const PROJECT_TOOLS = 'Read,Glob,Grep,Write,Edit,Bash,WebSearch,WebFetch,Skill,Agent,Task';
 const EDITOR_TOOLS = 'Read,Glob,Grep,Skill,Agent,Task';
 
-const STRICT_SANDBOX = JSON.stringify({
+const STRICT_SANDBOX_SETTINGS = {
+  enabled: true,
+  autoAllowBashIfSandboxed: true,
+  allowUnsandboxedCommands: false,
+  failIfUnavailable: true
+} satisfies SandboxSettings;
+
+const STRICT_SANDBOX = JSON.stringify({ sandbox: STRICT_SANDBOX_SETTINGS });
+
+/** Hosts sandboxed Bash may reach in project mode: read-only media, font and
+ * package CDNs, so research-and-download work (the "Find useful footage" chip)
+ * can finish. The sandbox proxy filters by host, not method, so a host that
+ * accepts authenticated writes (github.com, registry.npmjs.org, archive.org)
+ * would be a bulk upload channel for files the agent can read; none is listed.
+ * WebSearch and WebFetch stay available for research on any site. */
+export const CLAUDE_PROJECT_NETWORK_HOSTS = [
+  'assets.mixkit.co',
+  'cdn.freesound.org',
+  'cdn.jsdelivr.net',
+  'cdn.pixabay.com',
+  'codeload.github.com',
+  'files.pythonhosted.org',
+  'fonts.googleapis.com',
+  'fonts.gstatic.com',
+  'images-assets.nasa.gov',
+  'images.pexels.com',
+  'images.unsplash.com',
+  'live.staticflickr.com',
+  'objects.githubusercontent.com',
+  'raw.githubusercontent.com',
+  'unpkg.com',
+  'upload.wikimedia.org',
+  'videos.pexels.com'
+] as const;
+
+// strictAllowlist denies every other host outright instead of prompting, and
+// stops a command's allowed_domains parameter from widening the list.
+const PROJECT_SANDBOX = JSON.stringify({
   sandbox: {
-    enabled: true,
-    autoAllowBashIfSandboxed: true,
-    allowUnsandboxedCommands: false,
-    failIfUnavailable: true
-  }
+    ...STRICT_SANDBOX_SETTINGS,
+    network: { allowedDomains: [...CLAUDE_PROJECT_NETWORK_HOSTS], strictAllowlist: true }
+  } satisfies SandboxSettings
 });
+
+const PROJECT_NETWORK_INSTRUCTIONS = `SHELL NETWORK
+Sandboxed Bash can download only from ${CLAUDE_PROJECT_NETWORK_HOSTS.join(', ')}; other hosts are refused. Research any site with WebSearch and WebFetch, then download the file itself from one of those hosts into the deliverable directory.`;
 
 interface ClaudeArgvOptions {
   schema: Record<string, unknown>;
@@ -76,19 +116,21 @@ export function buildClaudeArgv(options: ClaudeArgvOptions): string[] {
   } else {
     argv.push(
       '--permission-mode', options.access === 'editor' ? 'dontAsk' : 'acceptEdits',
-      '--settings', STRICT_SANDBOX,
+      '--settings', options.access === 'editor' ? STRICT_SANDBOX : PROJECT_SANDBOX,
       '--tools', 'default',
       '--allowedTools', withExternal(options.access === 'editor' ? editorTools : projectTools)
     );
   }
 
   if (options.extensionsDir) argv.push('--add-dir', options.extensionsDir);
+  const network = options.access === 'project' ? `\n\n${PROJECT_NETWORK_INSTRUCTIONS}` : '';
   const systemPrompt = options.instructions
-    ? `${options.instructions}\n\nReturn the final answer only through the requested JSON schema.`
+    ? `${options.instructions}${network}\n\nReturn the final answer only through the requested JSON schema.`
     : `${AGENT_TESTING_INSTRUCTIONS}\n\nUse the supplied reference files as read-only context. Return only a value matching the requested JSON schema.`;
   argv.push('--system-prompt', systemPrompt);
   argv.push(promptWithImages(options.prompt, options.imagePaths));
   return argv;
 }
 
-export const CLAUDE_PROJECT_SANDBOX_SETTINGS = STRICT_SANDBOX;
+export const CLAUDE_PROJECT_SANDBOX_SETTINGS = PROJECT_SANDBOX;
+export const CLAUDE_EDITOR_SANDBOX_SETTINGS = STRICT_SANDBOX;

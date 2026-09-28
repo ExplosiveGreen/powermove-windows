@@ -447,6 +447,7 @@ export class CodexRunner {
           model: req.model,
           reasoningEffort: req.reasoningEffort,
           access: authority,
+          shellNetwork: req.access === 'project',
           extensionsDir: layout.extensionsDir,
           sessionId,
           nativeTools: options.nativeTools,
