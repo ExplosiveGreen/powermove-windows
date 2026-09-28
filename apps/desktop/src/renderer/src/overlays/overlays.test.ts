@@ -781,6 +781,24 @@ describe('palette with sandboxed command when()', () => {
     expect(PM.cmd).toHaveBeenCalledWith('newSolid');
     expect(PM.cmd).not.toHaveBeenCalledWith('ext.tidy');
   });
+
+  it('highlights nothing when the highlighted row goes, and Enter waits for the person', async () => {
+    const tidy = sandboxedCommand('ext.tidy', 'New solid tidy', true);
+    PM.commands = { 'ext.tidy': PM.commands['ext.tidy'], ...PM.commands };
+    const palette = open({ 'ext.tidy': tidy.check });
+    palette.type('new solid');
+    expect(palette.labels()).toEqual(['New solid tidy', 'New solid ⌘Y']);
+    await tidy.answer(false); // the highlighted row leaves
+    expect(palette.labels()).toEqual(['New solid ⌘Y']);
+    expect(document.querySelector('#palette [role="option"][aria-selected="true"]')).toBeNull();
+    palette.enter();
+    expect(PM.cmd).not.toHaveBeenCalled();
+    expect(document.querySelector('#palette')).not.toBeNull();
+    document.querySelector('#palette input[role="combobox"]')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+    flushSync();
+    palette.enter();
+    expect(PM.cmd).toHaveBeenCalledExactlyOnceWith('newSolid');
+  });
 });
 
 describe('scorePaletteMatch legacy parity', () => {
