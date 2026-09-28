@@ -58,6 +58,7 @@ function harness(kernel: Kernel = createKernel()) {
       controls: {} as HostDeps['ui']['controls'],
       toast: (text, opts) => { toasts.push(text); toastCalls.push({ text, opts }); },
       confirm: async () => true,
+      openExternal: async () => true,
       menu: vi.fn(),
       modal: () => ({ close: () => {}, body: document.createElement('div') }),
       icon: (name) => `<svg data-icon="${name}"></svg>`
@@ -67,7 +68,8 @@ function harness(kernel: Kernel = createKernel()) {
       pick: async () => [],
       import: async (file) => ({ id: 'asset-1', name: file.name, kind: 'model' }),
       get: () => undefined,
-      readText: async () => ''
+      readText: async () => '',
+      importUrl: async () => 'asset-1'
     },
     storage,
     extensions: { list: () => [], setEnabled: async () => {}, remove: async () => {}, reload: async () => {}, reveal: async () => {}, requestFix: vi.fn(), rebase: vi.fn() },

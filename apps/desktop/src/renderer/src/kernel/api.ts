@@ -293,6 +293,14 @@ export interface AssetsAPI {
   pick(options?: { accept?: string; multiple?: boolean }): Promise<File[]>;
   /** Import into Powermove's durable project media store. The file remains after layer Undo. */
   import(file: File, options?: { layerDefinition?: string }): Promise<AssetRecord>;
+  /**
+   * Download an https image, video or audio file (at most 512 MiB) and import it
+   * like `import`; resolves to the new asset's id. Sandboxed, it needs `assets`
+   * and `network` and runs one download at a time. Powermove fetches it without
+   * credentials or cookies, from public addresses only, following at most 5
+   * https redirects, and imports it only if it decodes as media.
+   */
+  importUrl(url: string): Promise<string>;
   /** Returns a Promise when the extension runs sandboxed (Store installs). */
   get(id: string): AssetRecord | undefined;
   /** Read a text asset from the live cache or durable media store. */
@@ -816,7 +824,7 @@ export interface ControlsAPI {
  * UI exposes kernel controls, overlays, menus and pointer helpers. Most members only mutate transient interface state; parent picking can apply an edit, shader opening mutates workspace state, and gesture coordinates the backing edit/history transaction.
  */
 export interface UIAPI {
-  /** Only toast, confirm, icon and copy are sandbox-safe; other UI members require full access. */
+  /** Only toast, confirm, openExternal, icon and copy are sandbox-safe; other UI members require full access. */
   /** Requires the full-access permission for Store extensions. */
   readonly controls: ControlsAPI;
   toast(
@@ -844,6 +852,14 @@ export interface UIAPI {
     }
   ): void;
   confirm(title: string, body?: string): Promise<boolean>;
+  /**
+   * Open an https URL (at most 2 KB, no credentials) in the person's browser.
+   * Resolves false when they decline. Sandboxed, one call may be pending and
+   * at most one runs every 2 s; origins in the manifest's `links` open without
+   * asking when the extension declares `network`, and any other URL is shown
+   * in full for the person to confirm first.
+   */
+  openExternal(url: string): Promise<boolean>;
   /** Store extensions only: writes plain text to the clipboard from a panel that has focus. Needs the clipboard permission; at most once a second. */
   copy?(text: string): Promise<void>;
   /** Requires the full-access permission for Store extensions. A Promise of

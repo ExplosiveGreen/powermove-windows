@@ -51,6 +51,8 @@ export interface ExtensionManifest {
   forkedFrom?: string; // "<id>@<version>" or "<handle>/<id>@<version>"
   vars?: ExtensionVarDecl[];
   permissions?: ExtensionPermission[];
+  /** apiVersion 3: up to 5 https origins (`"https://example.com"`) that `ui.openExternal` opens without asking, when the extension also declares `network`. The Store lists them. */
+  links?: string[];
   author?: ExtensionAuthor;
   /** Stable, specific feature identifiers; broad contribution kinds are not features. */
   features?: string[];
@@ -72,6 +74,8 @@ export const MANIFEST_LIMITS = {
   descriptionChars: 400,
   listItems: 32,
   forkedFromChars: 160,
+  links: 5,
+  linkChars: 200,
   sourceFiles: 400,
   sourceBytes: 8 * 1024 * 1024,
   bundleBytes: 16 * 1024 * 1024,
@@ -155,6 +159,12 @@ export function parseManifest(raw: unknown): ManifestParse {
       !permissions.every((permission) => typeof permission === 'string' && (EXTENSION_PERMISSIONS as readonly string[]).includes(permission)) ||
       new Set(permissions).size !== permissions.length) return { ok: false, error: 'invalid "permissions"' };
   }
+  const links = m.links;
+  if (links !== undefined) {
+    if (apiVersion < 3) return { ok: false, error: '"links" requires apiVersion 3' };
+    if (!Array.isArray(links) || links.length > MANIFEST_LIMITS.links || !links.every(isLinkOrigin) || new Set(links).size !== links.length)
+      return { ok: false, error: 'invalid "links" (up to 5 origins like "https://example.com")' };
+  }
   const author = m.author;
   if (author !== undefined && author !== 'powermove' && author !== 'user' && author !== 'agent') return { ok: false, error: 'invalid "author"' };
 
@@ -167,6 +177,7 @@ export function parseManifest(raw: unknown): ManifestParse {
   if (forkedFrom) manifest.forkedFrom = forkedFrom;
   if (vars) manifest.vars = vars as ExtensionVarDecl[];
   if (permissions) manifest.permissions = permissions as ExtensionPermission[];
+  if (links) manifest.links = links as string[];
   if (author) manifest.author = author as ExtensionAuthor;
   if (features) manifest.features = [...new Set(features)];
   if (integrates) manifest.integrates = [...new Set(integrates)];
@@ -187,6 +198,22 @@ export function parseForkedFrom(s: string):
   const handle = origin.slice(0, slash);
   const id = origin.slice(slash + 1);
   return EXTENSION_HANDLE.test(handle) && EXTENSION_ID.test(id) ? { kind: 'store', handle, id, version } : null;
+}
+
+/**
+ * A `links` entry: an https origin written exactly as the URL standard
+ * serializes it (lowercase punycode host, no default port, no path), so what
+ * the Store shows is what the host compares. Named hosts only: no IP literals,
+ * single-label, `localhost` or `.local` names.
+ */
+export function isLinkOrigin(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length > MANIFEST_LIMITS.linkChars) return false;
+  let url: URL;
+  try { url = new URL(value); } catch { return false; }
+  if (url.protocol !== 'https:' || url.origin !== value) return false;
+  const labels = url.hostname.split('.');
+  return labels.length > 1 && labels.every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) &&
+    !/^\d+$/.test(labels.at(-1)!) && !['localhost', 'local'].includes(labels.at(-1)!);
 }
 
 export function isSafeEntry(entry: string): boolean {

@@ -62,6 +62,7 @@ import { installMenu, installRendererMenuShortcutRouting } from './menu';
 import { openProjectForWindow, registerSaveIpc } from './save';
 import { ProjectFiles } from './project-files';
 import { registerShellIpc } from './shell';
+import { registerRemoteMediaIpc } from './remote-media';
 import { CONTENT_SECURITY_POLICY, SANDBOX_CONTENT_SECURITY_POLICY, extensionSandboxCsp, sandboxFrameNavigationAllowed, sandboxHostOwner, sandboxProcessesToKill, type ContentsFrames } from './security-policy';
 import { SANDBOX_DOCUMENT, isSandboxHost, sandboxDocumentId, sandboxHost } from '../shared/sandbox-origin';
 import { EXTENSION_ID } from '../shared/extensions';
@@ -982,6 +983,9 @@ if (!hasSingleInstanceLock) {
     registerConfirmIpc(ipcMain, ctx);
     registerClipboardIpc(ipcMain, ctx);
     registerCloudMediaIpc(ipcMain, ctx);
+    const remoteMedia = registerRemoteMediaIpc(ipcMain, ctx);
+    // e2e swaps DNS and the socket for fakes; only an isolated background test profile exposes it.
+    if (isBackgroundTest) (globalThis as { __powermoveRemoteMedia?: unknown }).__powermoveRemoteMedia = remoteMedia;
     registerAgentNotifications(ipcMain, ctx);
     registerNativeEditIpc(ipcMain, ctx);
     registerLogIpc(ipcMain, ctx);

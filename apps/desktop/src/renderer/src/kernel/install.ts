@@ -102,6 +102,8 @@ import {
   type Workspace as LayoutWorkspace
 } from '../layout/model';
 import { bridge as hostBridge } from './bridge';
+import { parseExtensionUrl } from '../../../shared/extension-url';
+import { fetchRemoteMedia } from './remote-media';
 
 type LegacyPM = Record<string, any>;
 type ExtensionsHostBridge = ExtensionsBridge & Partial<Pick<PowermoveExtensionsBridge, 'fork'>>;
@@ -487,6 +489,16 @@ function makeUI(
     controls: boundControls(controlAPI),
     toast: (text, opts) => PM?.toast?.(text, opts?.sticky ? 8000 : 2200, opts ?? {}),
     confirm: (title, body) => confirmPrompt(PM, { message: title, ...(body ? { detail: body } : {}) }),
+    openExternal: async (value) => {
+      const url = parseExtensionUrl(value);
+      if (!url) throw new TypeError('ui.openExternal accepts an https URL of at most 2 KB without credentials');
+      const host = hostBridge();
+      // The browser host (powermove serve) opens it in the page's own browser.
+      const open = host?.extensionOpenExternal ?? host?.openExternal;
+      if (!open) throw new Error('ui.openExternal is unavailable in this host');
+      await open.call(host, url.href);
+      return true;
+    },
     menu: (anchor, items: MenuContribution[] | Promise<MenuContribution[]>) => {
       if (anchor && typeof (anchor as HTMLElement).getBoundingClientRect === 'function') PM?.menu?.(anchor, items);
       else {
@@ -528,7 +540,7 @@ function makeStorage(PM: LegacyPM): (id: string) => StorageAPI {
 }
 
 function makeAssets(PM: LegacyPM): AssetsAPI {
-  return {
+  const assets: AssetsAPI = {
     pick: (options = {}) => new Promise<File[]>((resolve, reject) => {
       const input = window.document.createElement('input');
       input.type = 'file';
@@ -565,8 +577,10 @@ function makeAssets(PM: LegacyPM): AssetsAPI {
       const blob = live?.blob instanceof Blob ? live.blob : await PM?.MediaStore?.get?.(meta);
       if (!(blob instanceof Blob)) throw new Error(`Asset data is missing: ${meta.name || id}`);
       return blob.text();
-    }
+    },
+    importUrl: async (url) => (await assets.import(await fetchRemoteMedia(url))).id
   };
+  return assets;
 }
 
 /**

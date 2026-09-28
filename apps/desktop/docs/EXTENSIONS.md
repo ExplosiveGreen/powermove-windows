@@ -79,6 +79,8 @@ reloaded, or removed. Return a `Disposable` or use `api.onDispose` for anything 
 | `dependsOn` | no | ids that must be enabled and load first |
 | `forkedFrom` | no | `"<id>@<version>"` for a built-in or `"<handle>/<id>@<version>"` for a Store fork |
 | `vars` | no | `apiVersion: 2`; up to 32 declarations `{ key, label, secret?, hint? }`. Keys use uppercase letters, digits and underscores, starting with a letter. Read values through `api.vars`; never put credentials in source. |
+| `permissions` | no | `apiVersion: 3`; see [Permissions and the sandbox](#permissions-and-the-sandbox) |
+| `links` | no | `apiVersion: 3`; up to 5 https origins, written exactly as `"https://example.com"`, that `ui.openExternal` opens without asking when the extension also declares `network`. The Store lists them. See [Opening links and importing from a URL](#opening-links-and-importing-from-a-url). |
 | `author` | no | `powermove` \| `user` \| `agent` |
 
 Imports allowed: `powermove` (types only), the client-side Svelte modules listed in
@@ -114,7 +116,8 @@ sandbox.
   that panel has focus. No permission lets an extension read the clipboard.
   Treat it as a disclosure rather than a hard boundary: a focused panel can
   also copy with `document.execCommand('copy')`.
-- `assets` allows picking, importing, and reading asset files.
+- `assets` allows picking, importing, and reading asset files. `assets.importUrl`
+  also needs `network`.
 - `project:write` allows project mutation through `apply`, `undo`, `redo`, `select`, time and transport controls. `commands.run` can call an extension's own commands and, with this permission, the named legacy editing commands. It cannot call another extension's commands or File, app, export, settings, or mods commands.
 - `full-access` allows trusted-only APIs. Store installs that request it stay off
   until the person installing them accepts Powermove's full-access dialog. They
@@ -125,6 +128,44 @@ navigation. A request the sandbox blocks is logged once and never turns the
 extension off; the Sandbox compatibility check still reports it.
 
 Store extensions supply simple event names; the kernel publishes them as `ext:<extension-id>:<name>`. They may subscribe to those events and the validated read-only host events `project:changed`, `selection`, `time`, `transport`, `theme`, and `extensions:changed`. Registration IDs must start with `<extension-id>.`, and keybindings may invoke only their own commands. Store code can list extensions and call `setUp` for itself; management of other extensions requires a trusted extension.
+
+### Opening links and importing from a URL
+
+`await api.ui.openExternal(url)` opens an https URL in the person's browser and
+resolves `true`, or `false` when they decline. The URL must be https, at most 2
+KB, and carry no user name or password. One call may be pending and at most one
+runs every 2 s; others reject with `code: 'resource_limit'`.
+
+- An origin listed in the manifest's `links` opens without asking, but only when
+  the extension also declares `network`. Origins match exactly: listing
+  `https://example.com` covers neither `https://www.example.com` nor another port.
+- Every other URL, and every URL when the extension lacks `network`, opens only
+  after the person confirms a Powermove sheet that names the extension and shows
+  the whole URL. Without `network`, a link is the one way data could leave, so
+  it always asks.
+
+```json
+"permissions": ["network"],
+"links": ["https://replicate.com"]
+```
+
+`await api.assets.importUrl(url)` downloads an image, video or audio file and
+imports it like `api.assets.import`, resolving to the new asset id. It needs
+`assets` and `network`, and one download runs at a time. Powermove fetches it
+itself, so CORS does not apply, but:
+
+- the URL is https on the default port, at most 2 KB, without credentials; no
+  cookies or `Authorization` are sent;
+- the host must resolve to public internet addresses only (never loopback,
+  private, link-local, CGNAT, unique-local or IPv4-mapped addresses), and the
+  connection goes to the address that was checked;
+- at most 5 redirects are followed, each one https and checked the same way;
+- the file may be at most 512 MiB, must be PNG, JPEG, GIF, WebP, AVIF, BMP,
+  MP4, MOV, WebM, MP3, AAC, M4A, WAV, Ogg or FLAC by its contents (not its
+  name or `Content-Type`), and must decode. The asset is named after the last
+  path segment with the extension of what the bytes are.
+
+The desktop app provides `importUrl`; `powermove serve` does not.
 
 The runtime sandbox is the security boundary. The **Sandbox compatibility check** is a compatibility lint: it runs a short, detectable sample of extension behavior to find problems before publishing. A pass is not a security review or trust signal.
 
@@ -337,7 +378,7 @@ in-realm type in `api.ts` shows a synchronous result: `api.commands.run`,
 `api.storage.get/set/delete`, `api.media.getImportDefaults`, `api.ui.icon`,
 `api.panels.isOpen` (your own panel ids only) and `api.extensions.list`.
 `apiVersion` 1 and 2 code gets the same Promises; the Sandbox check reports
-code that uses one of their results without awaiting it. Methods already typed as asynchronous, such as `api.assets.pick/import/readText` and `api.ui.confirm`, remain asynchronous.
+code that uses one of their results without awaiting it. Methods already typed as asynchronous, such as `api.assets.pick/import/importUrl/readText` and `api.ui.confirm/openExternal`, remain asynchronous.
 `api.project.revision/selection/time/playing/latest`, `api.transport.time/playing`
 and `api.theme.active/scheme` stay synchronous, and are reactive in components.
 Outside a component, react to events:
@@ -353,7 +394,7 @@ api.events.on('project:changed', async () => {
 | --- | --- |
 | `effects`, `transitions`, `layers`, `theme`, `keybindings`, `commands`, `palette`, `menus`, `status`, `panels` | `anim`, `model`, `groups`, `history`, `edit`, `inspector`, `render`, `uiState` |
 | `assets`, `project`, `transport` time and controls, `storage`, `events`, `vars`, `util`, `ease`, pure `space3d` helpers | `selection` live graph helpers, `dnd`, `workspace`, `services`, `host`; live `space3d` methods |
-| `media.registerImportDefaults/getImportDefaults`, `ui.toast/confirm/icon/copy`, `extensions.list`, `log`, `onDispose` | `media.importFiles/assets/audio/fonts`, `ui.controls/modal/menu/drag/gesture/mount` |
+| `media.registerImportDefaults/getImportDefaults`, `ui.toast/confirm/openExternal/icon/copy`, `extensions.list`, `log`, `onDispose` | `media.importFiles/assets/audio/fonts`, `ui.controls/modal/menu/drag/gesture/mount` |
 
 Sandboxed panels render their `component` or `build` content in a separate
 view iframe. `panels.header`, `panels.moveSlot`, and `panels.library.render`
@@ -373,7 +414,7 @@ in-realm API after the person installing the extension accepts the trust dialog.
   Params are keyframable automatically and appear in the Effects browser + inspector.
 - **transitions** — `register({ id, label, params, frag })`. Inputs `u_from` (frame so far), `u_to` (incoming layer), `u_prog` 0→1. Output `o`. Applied on a layer via its `transition` property (inspector or `set_layer` command with `{ transition: { type, dur, p } }`).
 - **layers** — `register({ id, label, version, params, defaults?, renderer })` adds a programmable renderer with structured project instances. Fragment renderers use `{ kind:'fragment', fragment }`; mesh renderers use `{ kind:'mesh', assetField:'assetId' }` and resolve a durable OBJ model id from layer data. Projects store only the definition id, version, JSON data, and keyframe channels—not renderer code or expanded vertex arrays. Missing definitions/assets keep their data and show a placeholder.
-- **assets** — `pick({ accept, multiple? })`, `import(file, { layerDefinition? })`, `get(id)`, and `readText(id)`. Imported files live in Powermove's durable media store and are embedded when the `.pmv` is saved. Use an asset id in structured layer data instead of storing binary or large text in the project JSON.
+- **assets** — `pick({ accept, multiple? })`, `import(file, { layerDefinition? })`, `importUrl(url)` (see [Opening links and importing from a URL](#opening-links-and-importing-from-a-url)), `get(id)`, and `readText(id)`. Imported files live in Powermove's durable media store and are embedded when the `.pmv` is saved. Use an asset id in structured layer data instead of storing binary or large text in the project JSON.
 - **theme** — `register({ id, name, scheme, tokens, darkTokens?, css?, rootAttributes? })`, `activate(id)`, `active()`, `scheme()` (both reactive in components). Tokens are CSS custom properties (see "Theme tokens"). `css` may restyle anything.
 - **palette** — `registerProvider(query => entries[])`. The provider may return a Promise; its entries appear when it settles, if the palette still shows that query.
 - **menus** — `contribute(location, ctx => items[])`, `collect(location, ctx?)` (in a Store sandbox, only your own contributions); locations: `panel:context`, `layer:context`, `timeline:context`, `viewer:context`. The function runs on every open with that open's `ctx`; it may return a Promise, which the menu waits for at most 100 ms. `gather(location, ctx)` resolves every contribution for one open, for `ui.menu`. Titlebar extension shortcuts are retired; registered panels appear in the panel Library automatically.
@@ -392,7 +433,7 @@ in-realm API after the person installing the extension accepts the trust dialog.
 - **inspector** — `registerSection({ id, title, after: 'content' | 'transform' | 'effects', when?, build })` adds controls to Properties. `build(target, { layerIds })` returns a disposer or cleanup function. Sections rebuild on selection changes, and disappear when the mod unloads. Use `sections()` to inspect active contributions.
 - **render** — WebGL bounds/picking/setup and `gl.compileError(key)`, raster access, offscreen frame rendering, and snapshots.
 - **uiState** — layer/FX disclosure, key handles, timeline reveal state, and shader metadata via `getShaderMeta(layer)` / `setShaderMeta(layer, patch)`.
-- **ui** — API-backed controls, overlays, menus, pointer drag, parent picking, shader editor opening, and edit/history-backed `gesture` construction.
+- **ui** — API-backed controls, overlays, menus, pointer drag, parent picking, shader editor opening, edit/history-backed `gesture` construction, and `openExternal(url)` for https links.
 - **dnd** — canonical asset/FX MIME payloads, drag detection/parsing, live media drag state, and FX drop application.
 - **workspace** — active workspace mutation plus indexed panel add/move/hide/restore/refresh operations.
 - **util** — numeric interpolation/snapping, timecode, ids, and colour conversion.

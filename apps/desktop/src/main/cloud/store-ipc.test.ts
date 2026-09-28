@@ -261,12 +261,13 @@ describe('library', () => {
   it('carries trust and permissions, from the record when main derived it', () => {
     const withPermissions = [
       ...records.slice(0, 1),
-      { ...record('glass-blur', 'user', { apiVersion: 3, permissions: ['network', 'full-access'] }), trust: 'store-trusted' as const },
+      { ...record('glass-blur', 'user', { apiVersion: 3, permissions: ['network', 'full-access'], links: ['https://glass.example.com'] }), trust: 'store-trusted' as const },
       ...records.slice(2)
     ];
     const byId = Object.fromEntries(buildLibrary({ records: withPermissions, provenance, updates, me: me(MINE), modified: () => false }).map((item) => [item.localId, item]));
-    expect(byId['glass-blur']).toMatchObject({ trust: 'store-trusted', permissions: ['network', 'full-access'] });
+    expect(byId['glass-blur']).toMatchObject({ trust: 'store-trusted', permissions: ['network', 'full-access'], links: ['https://glass.example.com'] });
     expect(byId['timeline']).toMatchObject({ trust: 'builtin', permissions: [] });
+    expect(byId['timeline']).not.toHaveProperty('links');
     expect(byId['ease-lab']).toMatchObject({ trust: 'local' });
     expect(byId['gone-one']).toMatchObject({ trust: 'store' });
     expect(byId['my-fork']).toMatchObject({ trust: 'local' });

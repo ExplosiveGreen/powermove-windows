@@ -4,6 +4,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+import { parseExtensionUrl } from '../shared/extension-url';
 import { isBytes, isRecord, isString, IpcValidationError } from '../shared/guards';
 import { IPC } from '../shared/ipc';
 
@@ -53,6 +54,16 @@ export function registerShellIpc(ipcMain: Pick<IpcMain, 'handle'>, ctx: ShellIpc
     const url = parseExternalUrl(value);
     if (url === null) throw new IpcValidationError(IPC.openExternal, 'expected an http(s) URL');
     await shell.openExternal(url.toString());
+  });
+
+  /* The renderer already applied the extension's policy (links, prompt,
+     rate); what reaches the browser is still only an https URL it could
+     have typed, whatever the renderer sent. */
+  ipcMain.handle(IPC.extensionOpenExternal, async (event, value: unknown): Promise<void> => {
+    if (!ctx.isTrustedSender(event)) throw new Error('Unauthorized IPC sender');
+    const url = parseExtensionUrl(value);
+    if (url === null) throw new IpcValidationError(IPC.extensionOpenExternal, 'expected an https URL of at most 2 KB without credentials');
+    await shell.openExternal(url.href);
   });
 
   ipcMain.handle(IPC.mediaRevealSource, (event, value: unknown): void => {

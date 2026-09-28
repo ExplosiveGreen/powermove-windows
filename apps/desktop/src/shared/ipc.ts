@@ -62,6 +62,10 @@ export const IPC = {
   cloudDownload: 'cloud:download',
   cloudRead: 'cloud:read',
   cloudRelease: 'cloud:release',
+  /** `assets.importUrl`: main downloads remote media behind its SSRF guard, then the renderer reads it back in chunks. */
+  remoteMediaFetch: 'media:remote-fetch',
+  remoteMediaRead: 'media:remote-read',
+  remoteMediaRelease: 'media:remote-release',
   attachmentReveal: 'attachment:reveal',
 
   extensionFork: 'ext:fork',
@@ -125,6 +129,8 @@ export const IPC = {
   menuPopup: 'menu:popup',
   log: 'log',
   openExternal: 'shell:open-external',
+  /** An extension's `ui.openExternal`, after the host's own policy: https only, re-checked here. */
+  extensionOpenExternal: 'shell:open-extension-url',
   nativeEdit: 'edit:native',
   menuCommand: 'menu:command', // main → renderer
   updateStatus: 'update:status',
@@ -618,6 +624,9 @@ export type NativeMenuRequest = {
   y?: number;
 };
 
+/** A remote file main downloaded for `assets.importUrl`, held until released. `type` and `kind` come from its bytes, not the server. */
+export interface RemoteMediaInfo { token: string; size: number; name: string; type: string; kind: 'image' | 'video' | 'audio' }
+
 export interface PowermoveBridge {
   onInputKey?(cb: (input: SandboxInputKey) => void): () => void;
   sandboxFocus?(focus: { focused: boolean; field: boolean; extensionId: string }): void;
@@ -803,6 +812,14 @@ export interface PowermoveBridge {
   };
   log(level: LogLevel, text: string): void;
   openExternal(url: string): Promise<void>;
+  /** For extension URLs: main accepts only https, at most 2 KB, without credentials. */
+  extensionOpenExternal?(url: string): Promise<void>;
+  /** Remote media downloads for `assets.importUrl` (desktop only). Reads are at most 4 MiB. */
+  remoteMedia?: {
+    fetch(url: string): Promise<RemoteMediaInfo>;
+    read(token: string, offset: number, length: number): Promise<Uint8Array>;
+    release(token: string): Promise<void>;
+  };
   nativeEdit(action: NativeEditAction): void;
   onMenuCommand(cb: (cmd: MenuCommand) => void): () => void;
 
