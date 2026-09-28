@@ -45,17 +45,22 @@ function signal(pid: number, name: NodeJS.Signals): boolean {
 }
 
 const watched = new Set<ProcessFamily>();
-let polling: NodeJS.Timeout | null = null;
+let poll: NodeJS.Timeout | null = null, due = 0, polling = false;
 
 /** One process table per tick serves every running command; fast while one is young. */
 function schedulePoll(): void {
   if (polling || !watched.size) return;
   const young = [...watched].some(family => Date.now() - family.since < 5_000);
-  polling = setTimeout(() => {
+  const at = Date.now() + (young ? 100 : 500);
+  if (poll && due <= at) return;
+  if (poll) clearTimeout(poll);
+  due = at;
+  poll = setTimeout(() => {
+    poll = null; polling = true;
     void processTable().then(rows => { for (const family of watched) family.record(rows); }, () => undefined)
-      .finally(() => { polling = null; schedulePoll(); });
-  }, young ? 100 : 500);
-  polling.unref();
+      .finally(() => { polling = false; schedulePoll(); });
+  }, at - Date.now());
+  poll.unref();
 }
 
 /**

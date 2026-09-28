@@ -306,9 +306,9 @@ export async function startWorkspaceCommand(root: string, access: 'project' | 'c
     // Inherited stdio only; a broad /dev subpath would expose devices.
     + ' (literal "/dev/stdout") (literal "/dev/stderr") (regex #"^/dev/fd/[0-9]+$"))';
   if (access === 'project' && process.platform !== 'darwin') throw new Error('Project command sandbox is only available on macOS.');
+  const startedAt = Date.now();
   // The command creates its own scratch folder, so the sandbox, not main,
   // decides where a planted link may lead.
-  const startedAt = Date.now();
   const shell = ['/bin/sh', '-c', 'mkdir -p -- "$TMPDIR" 2>/dev/null; exec /bin/zsh -c "$1"', 'zsh', command];
   const child = spawn(access === 'project' ? '/usr/bin/sandbox-exec' : shell[0]!,
     access === 'project' ? ['-p', profile, ...shell] : shell.slice(1),
