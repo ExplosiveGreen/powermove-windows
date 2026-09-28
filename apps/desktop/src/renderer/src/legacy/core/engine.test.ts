@@ -94,6 +94,108 @@ afterEach(() => {
 });
 
 describe('legacy engine install', () => {
+  it('updates paused scrub values without rebuilding structural UI', () => {
+    const { PM } = engine();
+    const invalidate = vi.spyOn(PM, 'invalidate'), time = vi.fn();
+    PM.bus.on('time', time);
+    PM.setTime(2);
+    expect(time).toHaveBeenCalledWith(2);
+    expect(invalidate.mock.calls.map(([kind]: any[]) => kind)).toEqual(['render', 'timeline', 'status']);
+  });
+  it('does not invalidate a cached loop by raising quality based on its cheap replay cost', () => {
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    const { PM, runFrame } = engine();
+    PM.GL.gl = {}; PM.GL.render = vi.fn(); PM.GL.stats = { previewHit: true };
+    PM.quality = .5; PM.perf.auto = true;
+    PM.play(); runFrame(1000);
+    expect(PM.quality).toBe(.5);
+    PM.GL.stats.previewHit = false;
+    runFrame(2000);
+    expect(PM.quality).toBe(.5);
+  });
+
+  it('reduces GPU-bound playback to Quarter despite cheap CPU submissions and restores Full when paused', () => {
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    const { PM, runFrame } = engine();
+    PM.GL.gl = {}; PM.GL.render = vi.fn(() => true); PM.GL.stats = { previewHit: false };
+    for (let frame = 1; frame <= 10; frame++) runFrame(frame * 1000 / 60);
+    PM.play();
+    for (let frame = 1; frame <= 140; frame++) runFrame(1000 / 6 + frame * 1000 / 15);
+    expect(PM.perf.ms).toBe(0);
+    expect(PM.quality).toBe(.25);
+    // Healthy playback after adaptation does not pump resolution back up.
+    for (let frame = 1; frame <= 180; frame++) runFrame(9500 + frame * 1000 / 60);
+    expect(PM.quality).toBe(.25);
+    PM.pause(); PM.bus.emit('draw'); runFrame(12700);
+    expect(PM.quality).toBe(1);
+  });
+
+  it.each([[30, 120], [120, 60]])('keeps healthy %i fps projects at Full on %i Hz displays', (fps, displayHz) => {
+    const { PM, runFrame } = engine();
+    PM.proj.fps = fps;
+    PM.GL.gl = {}; PM.GL.render = vi.fn(() => true);
+    for (let frame = 1; frame <= 10; frame++) runFrame(frame * 1000 / displayHz);
+    PM.play();
+    for (let frame = 1; frame <= displayHz * 5; frame++) runFrame((10 + frame) * 1000 / displayHz);
+    expect(PM.quality).toBe(1);
+  });
+
+  it('recognizes very slow GPU frames instead of repeatedly treating them as startup', () => {
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    const { PM, runFrame } = engine();
+    PM.GL.gl = {}; PM.GL.render = vi.fn(() => true);
+    PM.play();
+    for (let frame = 1; frame <= 15; frame++) runFrame(frame * 1000 / 3);
+    expect(PM.quality).toBeLessThan(1);
+  });
+
+  it('does not mistake unsuccessful decoder frames or repeated seeks for GPU pressure', () => {
+    const { PM, runFrame } = engine();
+    PM.GL.gl = {}; PM.GL.render = vi.fn(() => false);
+    PM.play();
+    for (let frame = 1; frame <= 90; frame++) runFrame(frame * 1000 / 15);
+    expect(PM.quality).toBe(1);
+    PM.GL.render.mockReturnValue(true);
+    for (let frame = 91; frame <= 180; frame++) {
+      if (frame % 5 === 0) PM.setTime(2);
+      runFrame(frame * 1000 / 15);
+    }
+    expect(PM.quality).toBe(1);
+  });
+
+  it('preserves manual preview resolution under sustained low playback cadence', () => {
+    const { PM, runFrame } = engine();
+    PM.GL.gl = {}; PM.GL.render = vi.fn(() => true);
+    PM.perf.auto = false; PM.quality = .75;
+    PM.play();
+    for (let frame = 1; frame <= 90; frame++) runFrame(frame * 1000 / 15);
+    expect(PM.quality).toBe(.75);
+    PM.pause(); PM.bus.emit('draw'); runFrame(6500);
+    expect(PM.quality).toBe(.75);
+  });
+
+  it('excludes cached replay and shader warmup from cadence-driven quality changes', () => {
+    const { PM, runFrame } = engine();
+    PM.GL.gl = {}; PM.GL.render = vi.fn(() => true); PM.GL.stats = { previewHit: true };
+    PM.play();
+    for (let frame = 1; frame <= 75; frame++) runFrame(frame * 1000 / 15);
+    expect(PM.quality).toBe(1);
+    PM.GL.stats.previewHit = false; PM.GL.compiling = 3;
+    for (let frame = 76; frame <= 150; frame++) runFrame(frame * 1000 / 15);
+    expect(PM.quality).toBe(1);
+  });
+
+  it('starts a fresh cadence window after a long background gap', () => {
+    const { PM, runFrame } = engine();
+    PM.GL.gl = {}; PM.GL.render = vi.fn(() => true);
+    PM.play();
+    for (let frame = 1; frame <= 30; frame++) runFrame(frame * 1000 / 15);
+    expect(PM.quality).toBe(1);
+    runFrame(10000);
+    for (let frame = 1; frame <= 30; frame++) runFrame(10000 + frame * 1000 / 15);
+    expect(PM.quality).toBe(1);
+  });
+
   it('holds non-linear overlapping videos at one composition time until the complete frame is presented', () => {
     const foreground = delayedVideo(), background = delayedVideo();
     const layer = { id: 'foreground', type: 'video', from: 0, dur: 2, d: { asset: 'asset-1', speed: 1, trim: 1, timeRemap: true } };
@@ -151,6 +253,74 @@ describe('legacy engine install', () => {
     PM.bus.emit('quality'); runFrame(48);
     expect(PM.GL.render).toHaveBeenCalledTimes(3);
   });
+
+  it('plans video decoders once per presented project frame while audio keeps ticking at display refresh', () => {
+    const media = delayedVideo();
+    const layer = { id: 'video', type: 'video', from: 0, dur: 2, d: { asset: 'asset-1', speed: 1 } };
+    const { PM, runFrame, audioCalls } = engine({ layer, media });
+    PM.GL.gl = {}; PM.GL.render = vi.fn();
+    const active = vi.spyOn(PM, 'active');
+    PM.play(); runFrame(1);
+    const firstFrameChecks = active.mock.calls.length;
+    expect(firstFrameChecks).toBeGreaterThan(0);
+    runFrame(8); runFrame(16); runFrame(24);
+    expect(active).toHaveBeenCalledTimes(firstFrameChecks);
+    expect(audioCalls.filter(([name]: any[]) => name === 'tick')).toHaveLength(4);
+    expect(PM.time).toBe(.024);
+    runFrame(40);
+    expect(active.mock.calls.length).toBeGreaterThan(firstFrameChecks);
+    expect(PM.GL.render).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries an unfinished decode within the same project frame instead of skipping it', () => {
+    const media = delayedVideo();
+    const layer = { id: 'video', type: 'video', from: 0, dur: 2, d: { asset: 'asset-1', speed: 1 } };
+    const { PM, runFrame } = engine({ layer, media });
+    PM.GL.gl = {}; PM.GL.render = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(false).mockReturnValue(true);
+    PM.play(); runFrame(1); runFrame(8); runFrame(16); runFrame(24);
+    expect(PM.GL.render.mock.calls.map(([time]: number[]) => time)).toEqual([0, 0, 0]);
+  });
+
+  it('replans an already presented frame after a seek, frame-rate change or quality change', () => {
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    const media = delayedVideo();
+    const layer = { id: 'video', type: 'video', from: 0, dur: 2, d: { asset: 'asset-1', speed: 1 } };
+    const { PM, runFrame } = engine({ layer, media });
+    PM.GL.gl = {}; PM.GL.render = vi.fn();
+    PM.play(); runFrame(1);
+    PM.setTime(0, { raw: true, force: true }); runFrame(2);
+    PM.previewFps = 60; runFrame(3);
+    PM.bus.emit('quality'); runFrame(4);
+    runFrame(5);
+    expect(PM.GL.render.mock.calls.map(([time]: number[]) => time)).toEqual([0, 0, 0, 0]);
+  });
+
+  it('replans the same project frame when a short work area loops', () => {
+    const media = delayedVideo();
+    const layer = { id: 'video', type: 'video', from: 0, dur: 2, d: { asset: 'asset-1', speed: 1 } };
+    const { PM, runFrame, audioCalls } = engine({ layer, media, work: [0, .03] });
+    PM.GL.gl = {}; PM.GL.render = vi.fn();
+    PM.play(); runFrame(1); runFrame(32);
+    expect(PM.GL.render.mock.calls.map(([time]: number[]) => time)).toEqual([0, 0]);
+    expect(audioCalls.filter(([name]: any[]) => name === 'seek')).toHaveLength(1);
+  });
+
+  it('resolves a shared upcoming cut once instead of rescanning the timeline for every clip', () => {
+    const { PM, assets, runFrame } = engine();
+    for (let i = 0; i < 6; i++) {
+      const asset = `asset-${i}`;
+      assets.set(asset, { el: delayedVideo().el, dur: 10 });
+      PM.proj.layers.push({ id: `video-${i}`, type: 'video', from: .3, dur: 2, d: { asset, speed: 1, trim: 1 } });
+    }
+    PM.GL.gl = {}; PM.GL.render = vi.fn();
+    const active = vi.spyOn(PM, 'active');
+    PM.play(); runFrame(1);
+    // One scan at the current frame, one at the shared cut, and one active
+    // check per upcoming layer. Repeated planning would grow quadratically.
+    expect(active.mock.calls.length).toBeLessThanOrEqual(18);
+    for (const asset of assets.values()) expect(asset.el.currentTime).toBe(1);
+  });
+
   it('keeps a navigation redraw pending until refinement and never defers playback', () => {
     const { PM, runFrame } = engine();
     PM.GL.gl = {}; PM.GL.render = vi.fn();

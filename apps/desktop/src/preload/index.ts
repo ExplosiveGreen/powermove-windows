@@ -89,6 +89,12 @@ const bridge: PowermoveBridge = {
     finish: (uploadId, metadata) => ipcRenderer.invoke(IPC.fileSave, { ...metadata, uploadId }),
     abort: uploadId => ipcRenderer.invoke(IPC.fileSaveAbort, uploadId),
   },
+  projectSave: {
+    begin: request => ipcRenderer.invoke(IPC.projectSaveBegin, request),
+    chunk: (token, assetId, data) => ipcRenderer.invoke(IPC.projectSaveChunk, { token, assetId, data }),
+    finish: token => ipcRenderer.invoke(IPC.projectSaveFinish, token),
+    abort: token => ipcRenderer.invoke(IPC.projectSaveAbort, token),
+  },
   saveFile: async (req) => {
     if (req.data.byteLength <= 4 * 1024 * 1024) return ipcRenderer.invoke(IPC.fileSave, req) as Promise<FileSaveResult>;
     const uploadId: string = await ipcRenderer.invoke(IPC.fileSaveUpload, req.data.byteLength);

@@ -31,4 +31,26 @@ describe('keyframe navigation', () => {
     state.selection.chan = 'rotation'; expect(keyframeTimes(api)).toEqual([]);
     expect(JSON.stringify(state.project)).toBe(before);
   });
+
+  it('does not scan unrelated layers or reread row keyframes during playback', () => {
+    const { api, state } = setup();
+    let reads = 0;
+    const keys = Array.from({ length: 2000 }, (_, i) => ({ get t() { reads++; return i / 1000; } }));
+    const row = { L: { from: 0 }, prop: { kf: keys } };
+    Object.defineProperty(state.project, 'layers', { get() { throw new Error('Unrelated layers must not be scanned'); } });
+    state.time = 1;
+    expect(adjacentKeyframe(api, -1, row)).toBe(.999);
+    reads = 0;
+    expect(adjacentKeyframe(api, 1, row)).toBe(1.001);
+    state.time = 1.5;
+    expect(adjacentKeyframe(api, -1, row)).toBe(1.499);
+    expect(reads).toBe(0);
+    vi.mocked(api.anim.version).mockReturnValue(1);
+    expect(adjacentKeyframe(api, 1, row)).toBe(1.501);
+    expect(reads).toBe(2000);
+    row.L.from = 2;
+    expect(adjacentKeyframe(api, 1, row)).toBe(2);
+    state.project.dur = 1;
+    expect(adjacentKeyframe(api, 1, row)).toBeUndefined();
+  });
 });

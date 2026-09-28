@@ -10,7 +10,7 @@
 import type { Project } from '../core/types/project';
 import { doc } from '../state/document.svelte';
 import { sel, setSelection } from '../state/selection.svelte';
-import { perf, transport } from '../state/transport.svelte';
+import { perf, transport, updateControlTime } from '../state/transport.svelte';
 import { frameBus } from './frame-bus';
 import { frame, invalidate } from './invalidate';
 import { installPorts, type MutationKind, type RuntimePorts, type Selection } from './ports';
@@ -67,6 +67,7 @@ export function installLegacyRuntime(PM: LegacyPM): () => void {
   setSelection(currentSelection(PM));
   transport.time = PM.time ?? 0;
   transport.playing = !!PM.playing;
+  updateControlTime(transport.time, transport.playing, performance.now(), true);
   transport.quality = PM.quality ?? 1;
   transport.tool = PM.tool ?? 'select';
 
@@ -84,9 +85,11 @@ export function installLegacyRuntime(PM: LegacyPM): () => void {
   on('sel', () => setSelection(currentSelection(PM)));
   on('time', (t: number) => {
     transport.time = t;
+    updateControlTime(t, !!PM.playing, performance.now());
   });
   on('transport', () => {
     transport.playing = !!PM.playing;
+    updateControlTime(PM.time ?? transport.time, transport.playing, performance.now(), true);
   });
   on('quality', () => {
     transport.quality = PM.quality ?? 1;

@@ -13,9 +13,10 @@ import {
 } from 'electron';
 
 import { isBytes, isRecord, isString, IpcValidationError } from '../shared/guards';
-import { IPC, LIMITS, PROJECT_ID, type FileSaveResult, type ProjectOpenResult, type CloseDecision } from '../shared/ipc';
+import { IPC, LIMITS, PROJECT_ID, type FileSaveResult, type ProjectOpenResult, type CloseDecision, type ProjectSaveBeginResult } from '../shared/ipc';
 import { atomicWrite, type ProjectFiles } from './project-files';
 import { FileUpload, FILE_CHUNK_BYTES } from './file-upload';
+import { validateSaveMedia, type ProjectSave } from './project-save';
 
 const MAX_SAVE_NAME_CHARS = 200;
 
@@ -139,6 +140,14 @@ export function registerSaveIpc(ipcMain: Pick<IpcMain, 'handle'>, ctx: SaveIpcCo
   const destinations = new Map<object, { token: string; path: string; directory: boolean }>();
   const watchedOwners = new WeakSet<object>();
   const uploads = new Map<object, { id: string; ready: Promise<FileUpload>; timer: ReturnType<typeof setTimeout> }>();
+  const projectSaves = new Map<object, { id: string; ready: Promise<ProjectSave>; timer: ReturnType<typeof setTimeout>; finishing: boolean }>();
+  const discardProjectSave = async (owner: object, id?: string) => {
+    const save = projectSaves.get(owner);
+    if (!save || (id && save.id !== id)) return;
+    clearTimeout(save.timer); projectSaves.delete(owner);
+    try { await (await save.ready.catch(() => undefined))?.dispose(); }
+    finally { pending.delete(owner); }
+  };
   const discardUpload = async (owner: object, id?: string) => {
     const upload = uploads.get(owner);
     if (!upload || (id && id !== upload.id)) return;
@@ -152,8 +161,69 @@ export function registerSaveIpc(ipcMain: Pick<IpcMain, 'handle'>, ctx: SaveIpcCo
     owner.once('destroyed', () => {
       destinations.delete(owner);
       void discardUpload(owner).catch(() => undefined);
+      void discardProjectSave(owner).catch(() => undefined);
     });
   };
+  ipcMain.handle(IPC.projectSaveBegin, async (event, request: unknown): Promise<ProjectSaveBeginResult> => {
+    if (!ctx.isTrustedSender(event)) throw new Error('Unauthorized IPC sender');
+    if (!ctx.projects || !isRecord(request) || typeof request.projectId !== 'string' || !PROJECT_ID.test(request.projectId)
+      || (request.saveAs !== undefined && typeof request.saveAs !== 'boolean') || typeof request.documentBytes !== 'number'
+      || !Number.isSafeInteger(request.documentBytes) || request.documentBytes < 2 || request.documentBytes > 0xffffffff) throw new Error('Invalid project save request');
+    validateSaveMedia(request.media);
+    const name = sanitizeSaveName(request.name);
+    if (!name) throw new Error('Invalid project save name');
+    if (pending.has(event.sender) || uploads.has(event.sender) || projectSaves.has(event.sender)) throw new Error('A save is already in progress.');
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window || window.isDestroyed()) throw new Error('Save window is unavailable');
+    pending.add(event.sender); watchOwner(event.sender);
+    let id: string | undefined;
+    try {
+      const known = await ctx.projects.destination(request.projectId);
+      let selectedPath: string | undefined;
+      if (!known || request.saveAs) {
+        const options = { defaultPath: known || name, filters: saveFiltersForName(name) };
+        const result = ctx.dialogs?.showSave ? await ctx.dialogs.showSave(window, options) : await dialog.showSaveDialog(window, options);
+        if (result.canceled || !result.filePath) { pending.delete(event.sender); return { ok: false, cancelled: true }; }
+        selectedPath = result.filePath;
+      }
+      if (window.isDestroyed() || event.sender.isDestroyed()) throw new Error('Save window is unavailable');
+      id = randomUUID();
+      const timer = setTimeout(() => { void discardProjectSave(event.sender, id).catch(() => undefined); }, 120_000); timer.unref();
+      const ready = ctx.projects.beginIncremental(request.projectId, request.media, request.documentBytes, selectedPath);
+      projectSaves.set(event.sender, { id, ready, timer, finishing: false });
+      const save = await ready;
+      if (event.sender.isDestroyed() || projectSaves.get(event.sender)?.id !== id) throw new Error('Save cancelled');
+      timer.refresh();
+      return { ok: true, token: id, required: save.required };
+    } catch (error: any) {
+      if (id) await discardProjectSave(event.sender, id);
+      pending.delete(event.sender);
+      return { ok: false, cancelled: false, error: error.message || 'Could not start saving.' };
+    }
+  });
+  ipcMain.handle(IPC.projectSaveChunk, async (event, request: unknown) => {
+    if (!ctx.isTrustedSender(event)) throw new Error('Unauthorized IPC sender');
+    const save = projectSaves.get(event.sender);
+    if (!save || save.finishing || !isRecord(request) || request.token !== save.id
+      || (request.assetId !== null && typeof request.assetId !== 'string') || !(request.data instanceof Uint8Array)
+      || request.data.length < 1 || request.data.length > FILE_CHUNK_BYTES) throw new Error('Invalid project save chunk');
+    save.timer.refresh();
+    await (await save.ready).write(request.assetId, request.data);
+    save.timer.refresh();
+  });
+  ipcMain.handle(IPC.projectSaveFinish, async (event, token: unknown): Promise<FileSaveResult> => {
+    if (!ctx.isTrustedSender(event)) throw new Error('Unauthorized IPC sender');
+    const save = projectSaves.get(event.sender);
+    if (!save || save.finishing || save.id !== token) throw new Error('Unknown project save token');
+    save.finishing = true; clearTimeout(save.timer);
+    try { return { ok: true, path: await (await save.ready).finish() }; }
+    catch (error: any) { return { ok: false, cancelled: false, error: error.message || 'Could not save project.' }; }
+    finally { await discardProjectSave(event.sender, save.id); }
+  });
+  ipcMain.handle(IPC.projectSaveAbort, async (event, token: unknown) => {
+    if (!ctx.isTrustedSender(event)) throw new Error('Unauthorized IPC sender');
+    if (typeof token === 'string') await discardProjectSave(event.sender, token);
+  });
   ipcMain.handle(IPC.exportChoose, async (event, request: unknown) => {
     if (!ctx.isTrustedSender(event)) throw new Error('Unauthorized IPC sender');
     if (!isRecord(request)) throw new Error('Invalid export destination');

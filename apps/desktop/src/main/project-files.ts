@@ -1,32 +1,28 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { constants, createReadStream } from 'node:fs';
-import { copyFile, mkdir, open, readFile, readdir, rename, stat, unlink, type FileHandle } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, rename, unlink, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import { PROJECT_ID } from '../shared/ipc';
 import { isProjectContainer, projectContainerIndex, type ProjectMediaRange } from '../shared/project-container';
 import { FILE_CHUNK_BYTES } from './file-upload';
+import { checkVersion, changedFile, copySnapshot, fileVersion, hashHandle, publishFile, syncDirectory, syncFile, temporarySibling, type FileVersion } from './durable-file';
+import { isIncrementalProject, readIncrementalIndex, type SaveMedia } from '../shared/project-incremental';
+import { nativeHash, ProjectSave, validateSaveMedia } from './project-save';
 
 /** Replace only after every byte has reached disk; a failed write preserves the original. */
 export async function atomicWrite(filePath: string, data: Uint8Array | Iterable<Uint8Array> | AsyncIterable<Uint8Array>): Promise<void> {
   const temporary = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${randomUUID()}.tmp`);
   try {
     const handle = await open(temporary, 'wx', 0o600);
-    try { await handle.writeFile(data); await handle.sync(); } finally { await handle.close(); }
+    try { await handle.writeFile(data); await syncFile(handle); } finally { await handle.close(); }
     await rename(temporary, filePath);
+    await syncDirectory(path.dirname(filePath));
   } catch (error) {
     await unlink(temporary).catch(() => undefined);
     throw error;
   }
 }
 
-type Association = { path: string; hash: string };
-const hashFile = (filePath: string): Promise<string> => new Promise((resolve, reject) => {
-  const digest = createHash('sha256');
-  const stream = createReadStream(filePath);
-  stream.on('data', chunk => digest.update(chunk));
-  stream.on('error', reject);
-  stream.on('end', () => resolve(digest.digest('hex')));
-});
+type Association = { path: string; hash: string; generation?: number };
 
 /** Main-process-only grants: renderer data can never invent an overwrite path. */
 export class ProjectFiles {
@@ -34,6 +30,7 @@ export class ProjectFiles {
   private associations = new Map<string, Association>();
   private ready: Promise<void>;
   private queue: Promise<unknown> = Promise.resolve();
+  private saving = new Set<string>();
   constructor(private readonly registryPath: string, private readonly backupDirectory: string) {
     this.ready = this.load();
   }
@@ -46,6 +43,23 @@ export class ProjectFiles {
       }
     } catch (error: any) {
       if (error.code !== 'ENOENT') console.warn('Project file associations unavailable; Save As will be used.', error);
+    }
+    // A file commit can outlive a failed registry write. Reconcile only an
+    // exact matching committed file; never grant an overwrite from stale intent.
+    const directory = path.dirname(this.registryPath), prefix = path.basename(this.registryPath) + '.pending-';
+    for (const name of await readdir(directory).catch(() => [])) {
+      if (!name.startsWith(prefix) || !name.endsWith('.json')) continue;
+      const journal = path.join(directory, name);
+      try {
+        const value = JSON.parse(await readFile(journal, 'utf8'));
+        if (typeof value.id === 'string' && PROJECT_ID.test(value.id) && typeof value.path === 'string' && path.isAbsolute(value.path)
+          && typeof value.hash === 'string' && Number.isSafeInteger(value.generation) && value.generation > (this.associations.get(value.id)?.generation || 0)
+          && (await fileVersion(value.path))?.hash === value.hash) {
+          this.associations.set(value.id, { path: value.path, hash: value.hash, generation: value.generation });
+          await this.persist();
+        }
+        await unlink(journal);
+      } catch (error) { console.warn('Project save metadata needs recovery.', error); }
     }
   }
   private async persist(): Promise<void> {
@@ -75,7 +89,7 @@ export class ProjectFiles {
       throw error;
     }
   }
-  private async backup(id: string, destination: string): Promise<void> {
+  private async backup(id: string, destination: string): Promise<string> {
     const directory = path.join(this.backupDirectory, id);
     await mkdir(directory, { recursive: true });
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -83,13 +97,24 @@ export class ProjectFiles {
     while (true) {
       const name = `${timestamp}.pmv${collision ? `-${collision}` : ''}`;
       try {
-        await copyFile(destination, path.join(directory, name), constants.COPYFILE_EXCL);
-        break;
+        const file = path.join(directory, name);
+        await copySnapshot(destination, file);
+        try {
+          const handle = await open(file, 'r');
+          try { await syncFile(handle); } finally { await handle.close(); }
+          await syncDirectory(directory);
+        } catch (error) {
+          await unlink(file).catch(() => undefined);
+          throw error;
+        }
+        return file;
       } catch (error: any) {
         if (error.code !== 'EEXIST') throw error;
         collision++;
       }
     }
+  }
+  private async prune(id: string): Promise<void> {
     try {
       const backups = await this.backups(id);
       await Promise.all(backups.slice(5).map(filePath => unlink(filePath)));
@@ -97,35 +122,75 @@ export class ProjectFiles {
       console.warn(`Could not prune project backups for ${id}.`, error);
     }
   }
+  private async commit(id: string, destination: string, temporary: string, hash: string, previous?: FileVersion): Promise<string> {
+    await checkVersion(destination, previous);
+    const journal = `${this.registryPath}.pending-${randomUUID()}.json`;
+    const generation = (this.associations.get(id)?.generation || 0) + 1;
+    let backup: string | undefined;
+    try {
+      if (previous) backup = await this.backup(id, destination);
+      await checkVersion(destination, previous);
+      await mkdir(path.dirname(this.registryPath), { recursive: true });
+      await atomicWrite(journal, Buffer.from(JSON.stringify({ id, path: destination, hash, generation })));
+      await publishFile(temporary, destination, previous, hash);
+      this.associations.set(id, { path: destination, hash, generation });
+      // The user's file is durably committed. A failed private registry write
+      // must not report that their file failed; retain the journal for restart.
+      try { await this.persist(); await unlink(journal); }
+      catch (error) { console.warn('Project saved; its file association will be repaired on restart.', error); }
+      await this.prune(id);
+      return destination;
+    } catch (error) {
+      if (backup) {
+        const current = await fileVersion(destination).catch(() => undefined);
+        if (previous && current?.hash === previous.hash) await unlink(backup).catch(() => undefined);
+        else {
+          // A failed/uncertain publication may still need its old version.
+          // Keep it separately so it cannot evict successful backup generations.
+          await rename(backup, backup + '.recovery.pmv').catch(() => undefined);
+        }
+      }
+      throw error;
+    }
+  }
+  beginIncremental(id: string, media: SaveMedia[], documentBytes: number, selectedPath?: string): Promise<ProjectSave> {
+    return this.serial(async () => {
+      if (!PROJECT_ID.test(id)) throw new Error('Invalid project id');
+      validateSaveMedia(media);
+      const known = this.associations.get(id), destination = selectedPath || known?.path;
+      if (!destination) throw new Error('Choose a destination with Save As.');
+      if (this.saving.has(destination)) throw new Error('A save to this project file is already in progress.');
+      const previous = await fileVersion(destination);
+      if (!selectedPath && known && previous?.hash !== known.hash) throw changedFile();
+      this.saving.add(destination);
+      try {
+        return await ProjectSave.create(destination, previous, media, documentBytes,
+          (temporary, hash) => this.serial(() => this.commit(id, destination, temporary, hash, previous)),
+          () => { this.saving.delete(destination); }, !selectedPath);
+      } catch (error) { this.saving.delete(destination); throw error; }
+    });
+  }
   save(id: string, data: Uint8Array | Iterable<Uint8Array> | AsyncIterable<Uint8Array>, selectedPath?: string): Promise<string> {
     return this.serial(async () => {
       if (!PROJECT_ID.test(id)) throw new Error('Invalid project id');
       const known = this.associations.get(id);
       const destination = selectedPath || known?.path;
       if (!destination) throw new Error('Choose a destination with Save As.');
-      let previous = false;
-      let previousHash: string | undefined;
-      try {
-        const info = await stat(destination);
-        if (!info.isFile()) throw new Error('The destination cannot be safely backed up. Choose another file with Save As.');
-        previous = true;
-        previousHash = await hashFile(destination);
-      } catch (error: any) { if (error.code !== 'ENOENT') throw error; }
-      if (!selectedPath && known && (!previous || previousHash !== known.hash)) {
-        throw new Error('The project file was moved, deleted, or changed outside Powermove. Use Save As to avoid overwriting other work.');
-      }
-      if (previous) await this.backup(id, destination);
+      if (this.saving.has(destination)) throw new Error('A save to this project file is already in progress.');
+      const previous = await fileVersion(destination);
+      if (!selectedPath && known && previous?.hash !== known.hash) throw changedFile();
       const digest = createHash('sha256');
       async function* writing() {
         for await (const chunk of data instanceof Uint8Array ? [data] : data) {
           digest.update(chunk); yield chunk;
         }
       }
-      await atomicWrite(destination, writing());
-      // Other open copies of this file keep their old hash, so they cannot silently overwrite it.
-      this.associations.set(id, { path: destination, hash: digest.digest('hex') });
-      await this.persist();
-      return destination;
+      const temporary = temporarySibling(destination);
+      try {
+        const handle = await open(temporary, 'wx', 0o600);
+        try { await handle.writeFile(writing()); await syncFile(handle); } finally { await handle.close(); }
+        return await this.commit(id, destination, temporary, digest.digest('hex'), previous);
+      } finally { await unlink(temporary).catch(() => undefined); }
     });
   }
   open(filePath: string): Promise<{ path: string; projectId: string; token: string; size: number; document: any; media: ProjectMediaRange[] }> {
@@ -145,7 +210,15 @@ export class ProjectFiles {
         };
         const prefix = await readExactly(0, Math.min(9, info.size));
         let document: any, media: ProjectMediaRange[] = [];
-        if (isProjectContainer(prefix)) {
+        if (isIncrementalProject(prefix)) {
+          const index = await readIncrementalIndex(info.size, readExactly, nativeHash);
+          const bytes = await readExactly(index.document.offset, index.document.length);
+          if (await nativeHash(bytes) !== index.document.sha256) throw new Error('The project document checksum does not match.');
+          document = JSON.parse(bytes.toString('utf8')); media = index.media;
+          for (const item of index.media) {
+            if ((await hashHandle(handle, item.offset, item.length)).digest('hex') !== item.sha256) throw new Error('The project media checksum does not match.');
+          }
+        } else if (isProjectContainer(prefix)) {
           if (prefix.length < 9) throw new Error('The project container is truncated.');
           const headerLength = prefix.readUInt32LE(5);
           if (headerLength < 2 || headerLength > info.size - 9) throw new Error('The project container header is invalid.');
@@ -153,7 +226,7 @@ export class ProjectFiles {
           ({ document, media } = projectContainerIndex(header, 9 + headerLength, info.size));
         } else {
           // Legacy JSON stores its media inside the document itself. Keep that
-          // format readable; all newly saved projects use the streamed PMV3 body.
+          // format readable alongside PMV3 and incremental PMV4.
           document = JSON.parse((await readExactly(0, info.size)).toString('utf8'));
         }
         const project = document?.proj || document;

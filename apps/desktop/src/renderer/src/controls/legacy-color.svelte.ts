@@ -12,9 +12,12 @@ export function legacyColorField(PM: PMRegistry, fill: boolean, get: () => unkno
   let revision = $state(0);
   target.sync = () => { revision++; };
   const label = opt.label || (fill ? 'Fill' : 'Color');
-  const edit: EditBinding = opt.local ? { mode: 'local', label, set }
+  // Legacy getters can read plain draft state (for example New project's
+  // background), so a write must also notify the mounted Svelte control.
+  const write = (value: unknown): void => { set(value); revision++; };
+  const edit: EditBinding = opt.local ? { mode: 'local', label, set: write }
     : opt.command ? { mode: 'command', label, origin: opt.origin, command: opt.command }
-    : { mode: 'set', label, set };
+    : { mode: 'set', label, set: write };
   const api = {
     edit: { begin: (...args: any[]) => PM.Edit.begin(...args), dispatch: (command: any) => PM.Edit.dispatch(command), commit: (name: string) => PM.Edit.commit(name), cancel: () => PM.Edit.cancel(), apply: (...args: any[]) => PM.Edit.apply(...args) },
     history: { begin: (name: string) => PM.hist.begin(name), commit: (name: string) => PM.hist.commit(name), cancel: () => PM.hist.cancel(), do: (...args: any[]) => PM.hist.do(...args) },

@@ -57,7 +57,11 @@ export function createPropertyReveal(api: Pick<PowermoveAPI, 'anim' | 'effects' 
     // M without selection is an immediate, repeatable global disclosure toggle.
     if (key === 'all' || (key === 'm' && !selected.length)) {
       const close = layers.every((L: any) => !api.uiState.getLayerCollapsed(L));
-      layers.forEach((L: any) => { api.uiState.setReveal(L, ['*']); api.uiState.setLayerCollapsed(L, close); });
+      layers.forEach((L: any) => {
+        api.uiState.setReveal(L, ['*']);
+        api.uiState.setLayerCollapsed(L, close);
+        if (key === 'm' && L.type === 'group') api.uiState.setGroupCollapsed(L, close);
+      });
       last = undefined;
     } else {
       const double = last && last.key === key && last.shift === shift && now - last.time < 300

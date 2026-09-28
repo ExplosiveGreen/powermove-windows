@@ -3,7 +3,7 @@
   import ColorField from './ColorField.svelte';
   import { parseColor, storedHex } from './color-space';
   import { doc } from '../state/document.svelte';
-  import { transport } from '../state/transport.svelte';
+  import { controlTime } from '../state/transport.svelte';
   import { EditGesture, type EditBinding } from './gesture';
   import { rowLabelId } from './context';
   import { anchorPicker, mountOverlayOnBody } from './overlay';
@@ -30,7 +30,7 @@
   } = $props();
 
   const labelledBy = rowLabelId();
-  const raw = $derived((doc.tick.values, doc.proj, transport.time, get()));
+  const raw = $derived((doc.tick.values, doc.proj, controlTime(), get()));
   const value = $derived(normalizeFill(api, raw, fallback));
   const gesture = $derived(new EditGesture(api, edit));
   const modes: Array<[FillValue['type'], string]> = [['solid', 'Solid'], ['linear', 'Linear'], ['radial', 'Radial'], ['none', 'None']];
@@ -45,7 +45,7 @@
   const selectedStop = () => draft.stops.find((stop) => stop.id === selected) ?? draft.stops[0]!;
   function show(): void {
     previewing = false;
-    before = normalizeFill(api, value, fallback);
+    before = normalizeFill(api, get(), fallback);
     draft = normalizeFill(api, before, fallback);
     selected = draft.stops[0]!.id;
     open = true;

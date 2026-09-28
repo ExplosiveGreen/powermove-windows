@@ -5,6 +5,8 @@ import { installUpdate, subscribeAppUpdates } from '../../shell/app-updates';
 import type { AppUpdateState } from '../../../../shared/ipc';
 import { mount, unmount } from 'svelte';
 import AccountButton from '../../cloud/AccountButton.svelte';
+import { rollText } from '../../controls/roll-text.svelte';
+import { playPageIn } from '../../controls/page-motion';
 
 export function install(PM: PMRegistry): void {
 const h = PM.h;
@@ -98,6 +100,8 @@ function ensure() {
   const sidebar = h('aside.ps-sidebar', h('label.ps-search', PM.icon('search'), S.search), nav, S.appUpdate, S.updates, S.account);
 
   S.title = h('b'); S.count = h('span');
+  /* The section name and its count roll like the Store's title. */
+  S.titleRoll = rollText(S.title); S.countRoll = rollText(S.count);
   const view = h('div.ps-view', { role: 'group', 'aria-label': 'Project layout' },
     viewButton('grid', 'Grid view', 'grid'), viewButton('list', 'List view', 'list'));
   const sort = h('select.ps-sort', { 'aria-label': 'Sort projects' },
@@ -168,8 +172,8 @@ function paint() {
   if (queryKey !== S.queryKey) { S.page = 0; S.queryKey = queryKey; S.content.scrollTop = 0; }
   const pages = Math.max(1, Math.ceil(metas.length / PAGE_SIZE));
   S.page = Math.min(S.page, pages - 1);
-  S.title.textContent = labels[S.section];
-  S.count.textContent = `${metas.length} ${metas.length === 1 ? 'project' : 'projects'}`;
+  S.titleRoll.set(labels[S.section]);
+  S.countRoll.set(`${metas.length} ${metas.length === 1 ? 'project' : 'projects'}`);
   S.el.querySelectorAll('.ps-view button').forEach((b: any) => b.classList.toggle('on', b.dataset.view === S.view));
   S.grid.className = 'ps-grid' + (S.view === 'list' ? ' list' : '') + (!metas.length ? ' empty' : '');
   S.grid.textContent = '';
@@ -177,6 +181,9 @@ function paint() {
   metas.slice(S.page * PAGE_SIZE, (S.page + 1) * PAGE_SIZE)
     .forEach((m: any) => S.grid.appendChild(card(m, S.section === 'trash', openIds)));
   if (!metas.length) S.grid.appendChild(emptyState(q));
+  /* Another section arrives the way another Store page does. */
+  if (S.paintedSection && S.paintedSection !== S.section) playPageIn(S.grid, 0);
+  S.paintedSection = S.section;
   S.pager.textContent = '';
   S.pager.hidden = pages === 1;
   if (pages > 1) {
@@ -365,6 +372,7 @@ PM.__disposeProjectsScreen = () => {
   S.offUpdates?.(); S.offUpdates = null;
   S.offAppUpdate?.(); S.offAppUpdate = null;
   if (S.accountButton) void unmount(S.accountButton); S.accountButton = null;
+  S.titleRoll?.dispose(); S.countRoll?.dispose();
   offOpen?.();
   S.el?.remove?.();
   S.el = null;

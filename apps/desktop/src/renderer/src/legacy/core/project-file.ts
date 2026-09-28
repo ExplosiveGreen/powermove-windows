@@ -1,8 +1,12 @@
 import { decodeProjectContainer, encodeProjectContainerBlob, encodeTextChunks, isProjectContainer, projectContainerIndex, type ProjectMediaRange } from '../../../../shared/project-container';
 import { stringifyAsync } from './serialize-async';
 import { bridge as hostBridge } from '../../kernel/bridge';
+import { isIncrementalProject, readIncrementalIndex, type SaveMedia } from '../../../../shared/project-incremental';
+import { Sha256, sha256HexOf } from '../../../../shared/sha256';
+import type { PowermoveBridge, FileSaveResult } from '../../../../shared/ipc';
 
-type MediaStore = { get(asset: any): Promise<Blob | null>; put(id: string, blob: Blob, metadata: any): Promise<boolean> };
+type MediaStore = { get(asset: any): Promise<Blob | null>; put(id: string, blob: Blob, metadata: any, revision?: string): Promise<boolean>;
+  getForSave?(asset: any): Promise<{ blob: Blob; revision: string } | null> };
 
 /** Include media reachable only by undo/redo, such as a deleted image. */
 function fileAssets(document: any): Record<string, any> {
@@ -16,6 +20,40 @@ function fileAssets(document: any): Record<string, any> {
     }
   }
   return Object.assign(assets, (document.proj || document).assets || {});
+}
+
+/** Pin immutable Blobs and their storage revisions before any native upload.
+ * Only the main process decides which prior file ranges may be reused. */
+export async function saveIncrementalProject(document: any, serialized: string, store: MediaStore,
+  bridge: NonNullable<PowermoveBridge['projectSave']>, metadata: { name: string; projectId: string; saveAs: boolean },
+  progress: (value: number) => void): Promise<FileSaveResult> {
+  const assets = Object.entries<any>(fileAssets(document)).map(([id, asset]) => [id, { ...asset }] as const);
+  const sources = new Map<string, Blob>(), media: SaveMedia[] = [];
+  for (const [id, asset] of assets) {
+    const saved = store.getForSave ? await store.getForSave(asset) : null;
+    const blob = saved?.blob ?? (store.getForSave ? null : await store.get(asset));
+    if (!blob) continue;
+    sources.set(id, blob);
+    media.push({ id, revision: saved?.revision || crypto.randomUUID(), type: blob.type || asset.type || '', length: blob.size });
+  }
+  const documentBlob = new Blob(await encodeTextChunks(serialized) as BlobPart[]);
+  progress(.3);
+  const begin = await bridge.begin({ ...metadata, documentBytes: documentBlob.size, media });
+  if (!begin.ok) return begin;
+  try {
+    const total = documentBlob.size + begin.required.reduce((sum, id) => sum + (sources.get(id)?.size || 0), 0);
+    let uploaded = 0;
+    for (const id of [null, ...begin.required]) {
+      const blob = id === null ? documentBlob : sources.get(id);
+      if (!blob) throw new Error('The save requested unavailable media.');
+      for (let offset = 0; offset < blob.size; offset += 1024 * 1024) {
+        const data = new Uint8Array(await blob.slice(offset, offset + 1024 * 1024).arrayBuffer());
+        await bridge.chunk(begin.token, id, data);
+        uploaded += data.length; progress(.3 + .6 * uploaded / total);
+      }
+    }
+    return await bridge.finish(begin.token);
+  } finally { await bridge.abort(begin.token).catch(() => undefined); }
 }
 
 /** Embed available media; keep missing-media references editable on reopening. */
@@ -47,10 +85,19 @@ export async function packProjectFile(snapshot: string | any, store: MediaStore,
 export async function restoreProjectFileMedia(document: any, store: MediaStore): Promise<void> {
   if (document?.containerMedia) {
     const assets = fileAssets(document);
-    for (const source of document.containerMedia as Array<{ id: string; type: string; data: Uint8Array | Blob }>) {
+    for (const source of document.containerMedia as Array<{ id: string; type: string; data: Uint8Array | Blob; sha256?: string; revision?: string }>) {
       const asset = assets[source.id];
       if (!asset || !(source.data instanceof Uint8Array) && !(source.data instanceof Blob)) continue;
-      if (!await store.put(source.id, source.data instanceof Blob ? source.data : new Blob([new Uint8Array(source.data)], { type: source.type }), asset)) {
+      const blob = source.data instanceof Blob ? source.data : new Blob([new Uint8Array(source.data)], { type: source.type });
+      if (source.sha256) {
+        const digest = new Sha256();
+        for (let offset = 0; offset < blob.size; offset += 256 * 1024) {
+          digest.update(new Uint8Array(await blob.slice(offset, offset + 256 * 1024).arrayBuffer()));
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+        if (digest.digest() !== source.sha256) throw new Error('The project media checksum does not match.');
+      }
+      if (!await store.put(source.id, blob, asset, source.revision)) {
         throw new Error(`Could not restore ${asset.name || source.id}. Check available disk space.`);
       }
     }
@@ -89,6 +136,14 @@ export function unpackProjectFile(input: string | Uint8Array | ArrayBuffer): any
 /** Browser file imports keep source media as file-backed slices. */
 export async function unpackProjectFileBlob(file: Blob): Promise<any> {
   const prefix = new Uint8Array(await file.slice(0, 9).arrayBuffer());
+  if (isIncrementalProject(prefix)) {
+    const index = await readIncrementalIndex(file.size, async (offset, length) => new Uint8Array(await file.slice(offset, offset + length).arrayBuffer()));
+    const bytes = new Uint8Array(await file.slice(index.document.offset, index.document.offset + index.document.length).arrayBuffer());
+    if (await sha256HexOf(bytes) !== index.document.sha256) throw new Error('The project document checksum does not match.');
+    const document = JSON.parse(new TextDecoder().decode(bytes));
+    document.containerMedia = index.media.map(item => ({ ...item, data: file.slice(item.offset, item.offset + item.length, item.type) }));
+    return document;
+  }
   if (!isProjectContainer(prefix)) return JSON.parse(await file.text());
   if (prefix.length < 9) throw new Error('The project container is truncated.');
   const headerLength = new DataView(prefix.buffer).getUint32(5, true);
@@ -110,14 +165,17 @@ export async function restoreProjectFileStream(document: any, media: ProjectMedi
   if ((typeof window !== 'undefined' && (hostBridge() as any)?.remote) || typeof navigator.storage?.getDirectory !== 'function') {
     for (const source of sources) {
       const chunks: Uint8Array[] = [];
+      const digest = source.sha256 ? new Sha256() : null;
       for (let offset = 0; offset < source.length;) {
         const length = Math.min(1024 * 1024, source.length - offset);
         const chunk = await read(source.offset + offset, length);
         if (!(chunk instanceof Uint8Array) || !chunk.length || chunk.length > length) throw new Error('The project media is truncated.');
         chunks.push(chunk);
+        digest?.update(chunk);
         offset += chunk.length;
       }
-      if (!await store.put(source.id, new Blob(chunks as BlobPart[], { type: source.type }), assets[source.id])) {
+      if (digest && digest.digest() !== source.sha256) throw new Error('The project media checksum does not match.');
+      if (!await store.put(source.id, new Blob(chunks as BlobPart[], { type: source.type }), assets[source.id], source.revision)) {
         throw new Error(`Could not restore ${assets[source.id].name || source.id}. Check available disk space.`);
       }
     }
@@ -129,6 +187,7 @@ export async function restoreProjectFileStream(document: any, media: ProjectMedi
     const name = 'project-import-' + (crypto.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
     const file = await root.getFileHandle(name, { create: true });
     let writer: FileSystemWritableFileStream | undefined;
+    const digest = source.sha256 ? new Sha256() : null;
     try {
       writer = await file.createWritable();
       for (let offset = 0; offset < source.length;) {
@@ -136,11 +195,13 @@ export async function restoreProjectFileStream(document: any, media: ProjectMedi
         const chunk = await read(source.offset + offset, length);
         if (!(chunk instanceof Uint8Array) || !chunk.length || chunk.length > length) throw new Error('The project media is truncated.');
         await writer.write(new Uint8Array(chunk));
+        digest?.update(chunk);
         offset += chunk.length;
       }
       await writer.close(); writer = undefined;
+      if (digest && digest.digest() !== source.sha256) throw new Error('The project media checksum does not match.');
       const blob = (await file.getFile()).slice(0, source.length, source.type);
-      if (!await store.put(source.id, blob, assets[source.id])) {
+      if (!await store.put(source.id, blob, assets[source.id], source.revision)) {
         throw new Error(`Could not restore ${assets[source.id].name || source.id}. Check available disk space.`);
       }
     } finally {

@@ -7,12 +7,15 @@ const DEFAULT_BUDGETS: Record<string, number> = {
   textures: 128 * MIB,
   framebuffers: 256 * MIB,
   audio: 128 * MIB,
+  preview: 256 * MIB,
 };
 
 /** One place for every large cache to declare, measure, and release memory. */
 export function install(PM: PMRegistry): void {
   const providers = new Map<string, any>();
   const budgets = { ...DEFAULT_BUDGETS };
+  const previewLimit = PM.store?.get?.('previewMemoryMiB', 256);
+  if ([0, 128, 256, 512, 1024, 2048].includes(previewLimit)) budgets.preview = previewLimit * MIB;
   const pending = new Map<string, any>();
 
   const cancelPending = (name: string) => {
@@ -39,7 +42,7 @@ export function install(PM: PMRegistry): void {
       return budgets[name] ?? 64 * MIB;
     },
     setBudget(name: string, bytes: number) {
-      if (!Number.isFinite(bytes) || bytes < MIB) return false;
+      if (!Number.isFinite(bytes) || (bytes < MIB && !(name === 'preview' && bytes === 0))) return false;
       budgets[name] = Math.floor(bytes);
       cancelPending(name);
       providers.get(name)?.trim?.(budgets[name]);
@@ -72,7 +75,7 @@ export function install(PM: PMRegistry): void {
       const ratio = level === 'critical' ? 0.25 : 0.6;
       for (const [name, provider] of providers) {
         cancelPending(name);
-        const target = Math.floor((budgets[name] || 64 * MIB) * ratio);
+        const target = Math.floor((budgets[name] ?? 64 * MIB) * ratio);
         if (provider?.pressure) provider.pressure(target);
         else provider?.trim?.(target);
       }
@@ -85,6 +88,16 @@ export function install(PM: PMRegistry): void {
       }]));
     },
   };
+
+  // Automatic frames and explicitly prepared previews share the user's cap.
+  PM.Memory.register('preview', {
+    bytes: () => (PM.GL?.previewFrames?.bytes || 0) + (PM.Preview?.bytes || 0),
+    entries: () => (PM.GL?.previewFrames?.count || 0) + (PM.Preview?.count || 0),
+    trim: (target: number) => {
+      if ((PM.Preview?.bytes || 0) > target) PM.Preview.clear();
+      PM.GL?.previewFrames?.trim(Math.max(0, target - (PM.Preview?.bytes || 0)));
+    },
+  });
 
   window.addEventListener?.('memorypressure', (event: any) => {
     PM.Memory.pressure(event?.detail === 'critical' ? 'critical' : 'moderate');

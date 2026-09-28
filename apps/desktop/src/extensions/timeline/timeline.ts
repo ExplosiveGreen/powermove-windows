@@ -118,13 +118,13 @@ export function propertyValueColumns(
   });
 }
 
-export function toggleTimelineDisclosure(api: PowermoveAPI, layer: any): boolean {
+export function toggleTimelineDisclosure(api: PowermoveAPI, layer: any, wasCollapsed = layer.type === 'group'
+  ? api.uiState.getGroupCollapsed(layer) : api.uiState.getLayerCollapsed(layer)): boolean {
+  const collapsed = !wasCollapsed;
   if (layer.type === 'group') {
-    const collapsed = !api.uiState.getGroupCollapsed(layer);
     api.uiState.setGroupCollapsed(layer, collapsed);
     return collapsed;
   }
-  const collapsed = !api.uiState.getLayerCollapsed(layer);
   layer.collapsed = collapsed;
   api.uiState.setLayerCollapsed(layer, collapsed);
   return collapsed;
@@ -491,6 +491,9 @@ let resizeObserver: ResizeObserver | null = null;
 let disposed = false;
 let shiftHeld = false;
 let refreshActiveScrub: (() => void) | null = null;
+// Pointer feedback remains continuous; the transport still selects project frames.
+let scrubPresentationTime: number | null = null;
+const playheadTime = () => scrubPresentationTime ?? api.transport.time();
 
 function listen(target: any, event: string, handler: any, options?: any, bucket = runtimeCleanups) {
   target?.addEventListener?.(event, handler, options);
@@ -514,13 +517,23 @@ function scheduleTimer(fn: () => void, delay: number) {
   timerIds.add(id);
   return id;
 }
-let drawPending = false;
+let backdrop: HTMLCanvasElement | null = null;
+let backdropKey: unknown[] | null = null;
+let backdropDirty = true;
+let timePaintPending = false;
+function releaseBackdrop() {
+  if (backdrop) { backdrop.width = 0; backdrop.height = 0; }
+  backdrop = null; backdropKey = null;
+}
+function invalidateTime() {
+  timePaintPending = true;
+  api.transport.invalidate('timeline');
+}
 function invalidate(what?: string) {
+  // The host already coalesces timeline paints on RAF. Scheduling another
+  // local draw paints every playback/scrub frame twice.
+  if (what == null || what === 'timeline') backdropDirty = true;
   api.transport.invalidate(what);
-  if ((what == null || what === 'timeline') && T.cv && !drawPending) {
-    drawPending = true;
-    scheduleFrame(() => { drawPending = false; draw(); });
-  }
 }
 function evaluatedValue(layer: any, value: any, time: number, path: string): any {
   return value && typeof value === 'object' && Array.isArray(value.kf) && 'v' in value
@@ -567,6 +580,7 @@ function beginDrag(event: any, options: any) {
 function disposeRuntime() {
   if (disposed) return;
   disposed = true;
+  releaseBackdrop();
   [...activeDrags].forEach((control) => control?.cancel?.()); activeDrags.clear();
   runCleanups(canvasCleanups);
   runCleanups(headCleanups);
@@ -792,6 +806,8 @@ onEvent('layout', () => {
 /* ── row model ─────────────────────────────────────────── */
 let rowsDirty = true;
 let rowsAnimationVersion: number | undefined;
+let rowsUIVersion: number | undefined;
+let rowsSearch: string | undefined;
 let propertyLabelWidth: number | null = null;
 // Selection reveals its ancestor groups without filtering out sibling rows.
 // Only the disclosure control should hide children in an expanded group.
@@ -805,7 +821,9 @@ function revealSelectedAncestors() {
 }
 function buildRows() {
   const animationVersion = api.anim.version();
-  if (!rowsDirty && rowsAnimationVersion === animationVersion && Array.isArray(T.rows)) return T.rows;
+  const uiVersion = api.uiState.timelineVersion?.();
+  if (!rowsDirty && rowsAnimationVersion === animationVersion && rowsUIVersion === uiVersion
+      && rowsSearch === T.search && Array.isArray(T.rows)) return T.rows;
   const rows = [];
   const source = api.project.get().layers;
   const layers: any[] = [];
@@ -848,6 +866,9 @@ function buildRows() {
   T.rows = rows;
   rowsDirty = false;
   rowsAnimationVersion = animationVersion;
+  // Initial disclosure reads may initialize side tables during the build.
+  rowsUIVersion = api.uiState.timelineVersion?.();
+  rowsSearch = T.search;
   propertyLabelWidth = null;
   return rows;
 }
@@ -860,17 +881,24 @@ const t2x = (t: any) => T.gut + (t - T.scrollT) * T.pps;
 /* Unshifted row geometry. While a media drag is over the canvas, rows at or
    below the insertion slot move down one row so the ghost lands in a real
    gap: a new layer strip, never on top of an existing one. */
-const rawRowY = (idx: any) => Math.round(T.ruler + idx * T.row - T.scrollY);
+const rawRowY = (idx: any) => T.ruler + idx * T.row - T.scrollY;
 const rowShift = (idx: any) => T.drop && !T.graph && idx >= T.drop.rowIdx ? 1 : 0;
 const rowY = (idx: any) => rawRowY(idx + rowShift(idx));
 
 /* ── draw ──────────────────────────────────────────────── */
 onEvent('project:changed', () => { rowsDirty = true; invalidate('timeline'); });
-// Host-side invalidations (reveal, collapse, history and selection restore)
-// arrive as a coalesced 'timeline' repaint request; rows depend on UI state,
-// so they are rebuilt, not just repainted.
-onEvent('invalidate', (what) => { if (what === 'timeline') { rowsDirty = true; draw(); } });
-onEvent('time', () => invalidate('timeline'));
+// A time-only repaint reuses rows. Disclosure/reveal and animation revisions
+// retire them independently; older hosts retain the conservative rebuild.
+onEvent('invalidate', (what) => {
+  if (what !== 'timeline') return;
+  // Unexplained host repaints (for example waveform completion while paused)
+  // refresh the backdrop. Time and trail frames have an explicit cheap path.
+  if (!timePaintPending) backdropDirty = true;
+  timePaintPending = false;
+  if (!api.uiState.timelineVersion) rowsDirty = true;
+  draw();
+});
+onEvent('time', invalidateTime);
 onEvent('selection', () => {
   revealSelectedAncestors();
   buildRows();
@@ -929,6 +957,55 @@ function draw() {
 }
 type TimelinePreviewTarget = { canvas: HTMLCanvasElement; width: number; height: number };
 
+function visibleRowRange(): [number, number] {
+  // Include the partially visible rows and the extra drop insertion slot.
+  return [Math.max(0, Math.floor(T.scrollY / T.row) - 1),
+    Math.min(T.rows.length, Math.ceil((T.scrollY + T.hgt - T.ruler) / T.row) + 1)];
+}
+
+function animatedTimelineFlag(value: any): boolean {
+  return !!value && typeof value === 'object' && !!(value.kf?.length || value.expr);
+}
+
+function timelineBackdropKey(): unknown[] | null {
+  // Graph curves and active drag adornments keep their full drawing path.
+  // One bounded viewport bitmap is sufficient; no frame history is retained.
+  if (T.graph || T.drop || T.reorder || T.marquee || T.quickOffset || !api.uiState.timelineVersion
+      || T.cv.width * T.cv.height * 4 > 32 * 1024 * 1024) return null;
+  const p = api.project.get();
+  const key: unknown[] = [T.cv, T.ctx, T.cv.width, T.cv.height, T.w, T.hgt, T.dpr,
+    T.rows, T.gut, T.row, T.ruler, T.pps, T.scrollT, T.scrollY, T.hoverRow, T.dropRow,
+    T.style.clipRadius, T.style.keyframeSize, T.style.showLayerNumbers, T.style.showTypeBadges,
+    theme, p, p.dur, p.fps, p.work?.[0], p.work?.[1], api.project.revision(),
+    api.anim.version(), api.uiState.timelineVersion()];
+  const [first, end] = visibleRowRange();
+  for (let i = first; i < end; i++) {
+    const row = T.rows[i];
+    if (row.kind !== 'layer') continue;
+    // Clip opacity itself can be animated; do not reuse those source pixels.
+    if (animatedTimelineFlag(row.L.on)) return null;
+    if (row.L.type === 'audio') {
+      const asset: any = api.media.assets.get(row.L.d?.asset);
+      // Decoding can finish between two time ticks, without a project edit.
+      key.push(asset?.peaks, asset?.peaks?.length, asset?.dur, asset?.audioDecodeError);
+    }
+  }
+  return key;
+}
+
+function rememberBackdrop(key: unknown[] | null) {
+  if (!key) { releaseBackdrop(); return; }
+  backdrop ??= document.createElement('canvas');
+  if (backdrop.width !== T.cv.width) backdrop.width = T.cv.width;
+  if (backdrop.height !== T.cv.height) backdrop.height = T.cv.height;
+  const context = backdrop.getContext('2d');
+  if (!context) { releaseBackdrop(); return; }
+  context.globalCompositeOperation = 'copy';
+  context.drawImage(T.cv, 0, 0);
+  backdropKey = key;
+  backdropDirty = false;
+}
+
 function drawInner(preview?: TimelinePreviewTarget) {
   if (!preview) refreshTimelineManifest();
   /* Re-resolve the live canvas every frame: workspace rebuilds can replace the
@@ -948,7 +1025,7 @@ function drawInner(preview?: TimelinePreviewTarget) {
     /* Unconditional size sync: measure the wrap every draw so the bitmap always
        matches the laid-out size, regardless of missed observer/RAF frames. */
     const host = T.cv && T.cv.parentElement;
-    if (host && (!api.transport.playing() || !T.w || !T.hgt)) {
+    if (host && ((!api.transport.playing() && scrubPresentationTime === null) || !T.w || !T.hgt)) {
       const r = host.getBoundingClientRect();
       if (r.width >= 8 && r.height >= 8) {
         const bw = Math.max(2, Math.round(r.width * T.dpr));
@@ -964,13 +1041,16 @@ function drawInner(preview?: TimelinePreviewTarget) {
   const p = api.project.get();
   const W = T.w, H = T.hgt;
   c.setTransform(T.dpr, 0, 0, T.dpr, 0, 0);
-  c.fillStyle = theme.panel; c.fillRect(0, 0, W, H);
   buildRows();
   // Column widths are based on full labels, never on the fluctuating values.
   // Keep enough room for both Scale dimensions even at narrow saved gutters.
-  c.font = '400 11px ' + fui();
-  if (propertyLabelWidth == null) propertyLabelWidth = Math.max(64, ...T.rows.filter((row: any) => row.kind === 'prop')
-    .map((row: any) => Math.ceil(c.measureText(row.label).width)));
+  if (propertyLabelWidth == null) {
+    // Setting a Canvas2D font can enter the browser's font/style machinery.
+    // Cached playback does not measure labels, so leave that state untouched.
+    c.font = '400 11px ' + fui();
+    propertyLabelWidth = Math.max(64, ...T.rows.filter((row: any) => row.kind === 'prop')
+      .map((row: any) => Math.ceil(c.measureText(row.label).width)));
+  }
   const labelWidth = propertyLabelWidth;
   T.propertyValueX = 100 + labelWidth + 12;
   T.gut = Math.max(T.gut, T.propertyValueX + 90);
@@ -983,37 +1063,64 @@ function drawInner(preview?: TimelinePreviewTarget) {
   const maxScroll = Math.max(0, T.rows.length * T.row - (H - T.ruler));
   T.scrollY = clamp(T.scrollY, 0, maxScroll);
 
-  /* keep playhead in view while playing (AE follow) */
-  if (api.transport.playing()) {
+  /* Keep the playhead visible by advancing a page at the edge. Pinning it to
+     the edge moved every clip, ruler label and waveform every display tick,
+     defeating retained artwork and making long playback continuously busy. */
+  if (api.transport.playing() && W > T.gut) {
     const px = t2x(api.transport.time());
-    if (px > W - 50) T.scrollT = api.transport.time() - (W - T.gut - 50) / T.pps;
-    else if (px < T.gut) T.scrollT = api.transport.time() - 60 / T.pps;
+    const visibleWidth = W - T.gut;
+    if (px > W - Math.min(50, visibleWidth * .1)) T.scrollT = api.transport.time() - visibleWidth * .2 / T.pps;
+    else if (px < T.gut) T.scrollT = api.transport.time() - visibleWidth * .8 / T.pps;
     T.scrollT = Math.max(-.4, T.scrollT);
   }
 
-  drawTracksBg(c, W, H);
-  if (T.graph) drawGraph(c, W, H);
-  else { drawClips(c, W, H); drawDropGhost(c, W, H); }
-  drawGutter(c, W, H);
-  if (T.graph) drawGraphReadout(c, W, H);
-  if (T.reorder) {
-    const d = T.reorder, y = rowY(d.row), left = 74 + Math.min(48, d.depth * 12);
-    c.save(); c.beginPath(); c.rect(0, T.ruler, W, H - T.ruler); c.clip();
-    c.strokeStyle = theme.accent; c.fillStyle = theme.accent; c.lineWidth = 2;
-    if (d.mode === 'inside') {
-      c.fillStyle = rgba(theme.accent, .16); c.fillRect(left - 12, y, W - left + 12, T.row);
-      c.strokeRect(left - 12, y + 1, W - left + 11, T.row - 2);
-    } else {
-      c.beginPath(); c.moveTo(left, y); c.lineTo(W, y); c.stroke();
-      c.beginPath(); c.arc(left, y, 3, 0, Math.PI * 2); c.fill();
+  const backgroundKey = preview ? null : timelineBackdropKey();
+  const reuseBackdrop = !backdropDirty && backdrop && backgroundKey && backdropKey
+    && backgroundKey.length === backdropKey.length && backgroundKey.every((value, i) => value === backdropKey![i]);
+  if (reuseBackdrop && backdrop) {
+    // Match backing pixels exactly even when flex layout has fractional CSS
+    // dimensions; scaling to W/H would soften the entire cached timeline.
+    c.drawImage(backdrop, 0, 0, backdrop.width / T.dpr, backdrop.height / T.dpr);
+    // Only property readouts and animated gutter indicators follow time.
+    if (drawGutter(c, W, H, true)) {
+      // Retain the latest readouts too. Otherwise restoring the backdrop on
+      // the next tick would replace unchanged values with their initial text.
+      const context = backdrop.getContext('2d');
+      const top = Math.max(0, Math.floor(T.ruler * T.dpr));
+      const width = Math.min(backdrop.width, Math.floor(T.gut * T.dpr));
+      const height = backdrop.height - top;
+      if (context && width > 0 && height > 0) {
+        context.globalCompositeOperation = 'source-over';
+        context.drawImage(T.cv, 0, top, width, height, 0, top, width, height);
+      }
     }
-    const label = `${d.mode === 'inside' ? 'Move into' : d.mode === 'before' ? 'Move before' : 'Move after'} ${d.name}`;
-    c.font = '11px system-ui';
-    const width = c.measureText(label).width + 16, top = Math.max(T.ruler + 2, Math.min(H - 24, y - 24));
-    c.fillStyle = theme.accent; c.fillRect(T.gut + 10, top, width, 20);
-    c.fillStyle = '#fff'; c.fillText(label, T.gut + 18, top + 14); c.restore();
+  } else {
+    c.fillStyle = theme.panel; c.fillRect(0, 0, W, H);
+    drawTracksBg(c, W, H);
+    if (T.graph) drawGraph(c, W, H);
+    else { drawClips(c, W, H); drawDropGhost(c, W, H); }
+    drawGutter(c, W, H);
+    if (T.graph) drawGraphReadout(c, W, H);
+    if (T.reorder) {
+      const d = T.reorder, y = rowY(d.row), left = 74 + Math.min(48, d.depth * 12);
+      c.save(); c.beginPath(); c.rect(0, T.ruler, W, H - T.ruler); c.clip();
+      c.strokeStyle = theme.accent; c.fillStyle = theme.accent; c.lineWidth = 2;
+      if (d.mode === 'inside') {
+        c.fillStyle = rgba(theme.accent, .16); c.fillRect(left - 12, y, W - left + 12, T.row);
+        c.strokeRect(left - 12, y + 1, W - left + 11, T.row - 2);
+      } else {
+        c.beginPath(); c.moveTo(left, y); c.lineTo(W, y); c.stroke();
+        c.beginPath(); c.arc(left, y, 3, 0, Math.PI * 2); c.fill();
+      }
+      const label = `${d.mode === 'inside' ? 'Move into' : d.mode === 'before' ? 'Move before' : 'Move after'} ${d.name}`;
+      c.font = '11px system-ui';
+      const width = c.measureText(label).width + 16, top = Math.max(T.ruler + 2, Math.min(H - 24, y - 24));
+      c.fillStyle = theme.accent; c.fillRect(T.gut + 10, top, width, 20);
+      c.fillStyle = '#fff'; c.fillText(label, T.gut + 18, top + 14); c.restore();
+    }
+    drawRuler(c, W, H);
+    if (!preview) rememberBackdrop(backgroundKey ? timelineBackdropKey() : null);
   }
-  drawRuler(c, W, H);
   drawPlayhead(c, W, H);
   drawQuickOffset(c, W, H);
   drawScrollThumb(c, W, H, maxScroll);
@@ -1040,6 +1147,11 @@ function drawInner(preview?: TimelinePreviewTarget) {
 }
 
 T.renderPreview = (canvas: HTMLCanvasElement, width: number, height: number) => {
+  // A library thumbnail shares the renderer, but must not consume the live
+  // canvas's pending row rebuild or claim that its readouts were painted.
+  const savedCache = { rowsDirty, rowsAnimationVersion, rowsUIVersion, rowsSearch, propertyLabelWidth, propertyReadouts };
+  const savedTrail = { ...trail };
+  propertyReadouts = new WeakMap();
   const saved = {
     cv: T.cv, ctx: T.ctx, w: T.w, hgt: T.hgt, dpr: T.dpr,
     gut: T.gut, row: T.row, ruler: T.ruler, pps: T.pps,
@@ -1066,6 +1178,8 @@ T.renderPreview = (canvas: HTMLCanvasElement, width: number, height: number) => 
     return drawInner({ canvas, width, height }) || { gutter: T.gut, ruler: T.ruler, pps: T.pps };
   } finally {
     Object.assign(T, saved);
+    ({ rowsDirty, rowsAnimationVersion, rowsUIVersion, rowsSearch, propertyLabelWidth, propertyReadouts } = savedCache);
+    Object.assign(trail, savedTrail);
   }
 };
 
@@ -1107,13 +1221,14 @@ function drawTracksBg(c: any, W: any, H: any) {
   c.strokeStyle = INK.grid; c.lineWidth = 1;
   c.beginPath();
   for (let t = Math.floor(T.scrollT / step) * step; t2x(t) < W; t += step) {
-    const x = Math.round(t2x(t)) + .5;
+    const x = t2x(t) + .5;
     if (x < T.gut) continue;
     c.moveTo(x, T.ruler); c.lineTo(x, H);
   }
   c.stroke();
   /* row stripes + lane hairlines */
-  for (let i = 0; i < T.rows.length; i++) {
+  const [first, end] = visibleRowRange();
+  for (let i = first; i < end; i++) {
     const y = rowY(i);
     if (y + T.row < T.ruler || y > H) continue;
     const r = T.rows[i];
@@ -1152,14 +1267,14 @@ function drawRuler(c: any, W: any, H: any) {
   c.strokeStyle = INK.tick;
   c.beginPath();
   for (let t = Math.floor(T.scrollT / step) * step; t2x(t) < W; t += step) {
-    const x = Math.round(t2x(t)) + .5;
+    const x = t2x(t) + .5;
     if (x >= T.gut - 1) {
       c.moveTo(x, T.ruler - 8); c.lineTo(x, T.ruler);
       c.fillText(fmtRuler(t, step, p.fps), x, WORK_BAR.height + 8);
     }
     /* minor ticks between labeled steps */
     for (let m = 1; m < 4; m++) {
-      const mx = Math.round(t2x(t + step * m / 4)) + .5;
+      const mx = t2x(t + step * m / 4) + .5;
       if (mx > T.gut && mx < W) { c.moveTo(mx, T.ruler - 3); c.lineTo(mx, T.ruler); }
     }
   }
@@ -1194,7 +1309,8 @@ const fmono = () => '"JetBrains Mono","SF Mono",ui-monospace,Menlo,monospace';
 
 function drawClips(c: any, W: any, H: any) {
   c.save(); c.beginPath(); c.rect(T.gut, T.ruler, W - T.gut, H - T.ruler); c.clip();
-  for (let i = 0; i < T.rows.length; i++) {
+  const [first, end] = visibleRowRange();
+  for (let i = first; i < end; i++) {
     const y = rowY(i);
     if (y + T.row < T.ruler || y > H) continue;
     const r = T.rows[i];
@@ -1276,7 +1392,7 @@ function drawAudioClipWaveform(c: any, L: any, { x, y, width, height, color }: a
   const top = 2;
   try {
     if (api.media.audio.drawWaveform(c, L, {
-      x, y: y + top, width, height: height - top - 2, clipLeft, color, placeholderColor: color,
+      x, y: y + top, width, height: height - top - 2, clipLeft, clipRight: T.w, color, placeholderColor: color,
       step: 1, anchor: 1,
     })) {
       c.restore();
@@ -1442,16 +1558,54 @@ function drawPropKeys(c: any, r: any, y: any) {
   }
 }
 
-function drawGutter(c: any, W: any, H: any) {
+type PropertyReadout = { dynamic: boolean; values: any[]; valueKeys: Array<number | string>; previous: boolean; next: boolean; current: boolean; animated: boolean };
+let propertyReadouts = new WeakMap<object, PropertyReadout>();
+function propertyReadout(row: any): PropertyReadout {
+  const channels = trackChannels(row), time = api.transport.time();
+  const values = channels.map(axis => api.anim.evP(row.L, axis.prop, time, axis.key));
+  return {
+    dynamic: channels.some(axis => animatedTimelineFlag(axis.prop)),
+    values,
+    // Snapshot array/object readouts too; evaluators may reuse their containers.
+    valueKeys: values.map(value => typeof value === 'number' ? value : String(value).slice(0, 20)),
+    previous: !!row.prop.kf.length && adjacentKeyframe(api, -1, row, space3d) != null,
+    next: !!row.prop.kf.length && adjacentKeyframe(api, 1, row, space3d) != null,
+    animated: channels.some(axis => axis.prop.kf.length > 0),
+    current: channels.some(axis => !!api.anim.hasKeyAt(row.L, axis.prop, time)),
+  };
+}
+function sameReadout(a: PropertyReadout, b: PropertyReadout): boolean {
+  return a.previous === b.previous && a.next === b.next && a.current === b.current
+    && a.valueKeys.length === b.valueKeys.length && a.valueKeys.every((value, i) => Object.is(value, b.valueKeys[i]));
+}
+function drawGutter(c: any, W: any, H: any, dynamicOnly = false): boolean {
+  let changed = false;
+  if (!dynamicOnly) {
   c.fillStyle = theme.panel;
   c.fillRect(0, T.ruler, T.gut, H - T.ruler);
   c.strokeStyle = theme.line; c.beginPath();
   c.moveTo(T.gut - .5, 0); c.lineTo(T.gut - .5, H); c.stroke();
+  }
   c.save(); c.beginPath(); c.rect(0, T.ruler, T.gut, H - T.ruler); c.clip();
-  for (let i = 0; i < T.rows.length; i++) {
+  c.textBaseline = 'middle';
+  const [first, end] = visibleRowRange();
+  for (let i = first; i < end; i++) {
     const y = rowY(i);
     if (y + T.row < T.ruler || y > H) continue;
     const r = T.rows[i];
+    let readout: PropertyReadout | undefined;
+    if (r.kind !== 'layer') {
+      const previous = propertyReadouts.get(r);
+      if (dynamicOnly && previous && !previous.dynamic) continue;
+      readout = propertyReadout(r);
+      if (dynamicOnly && previous && sameReadout(previous, readout)) continue;
+      propertyReadouts.set(r, readout);
+    }
+    if (dynamicOnly) {
+      if (r.kind === 'layer' && !animatedTimelineFlag(r.L.on) && !animatedTimelineFlag(r.L.mblur)) continue;
+      c.fillStyle = theme.panel; c.fillRect(0, y, T.gut - 1, T.row);
+    }
+    changed = true;
     if (r.kind === 'layer') {
       const L = r.L, sel = api.selection.layers().includes(L.id);
       if (sel) { c.fillStyle = INK.over2; c.fillRect(0, y, T.gut, T.row); }
@@ -1518,13 +1672,13 @@ function drawGutter(c: any, W: any, H: any) {
       c.fillStyle = selected ? theme.accent : theme.tx3;
       const labelX = 100, valueX = T.propertyValueX;
       if (r.prop.kf.length) {
-        drawKeyArrow(c, 28, y + T.row / 2, -1, adjacentKeyframe(api, -1, r, space3d) != null);
-        drawKeyArrow(c, 52, y + T.row / 2, 1, adjacentKeyframe(api, 1, r, space3d) != null);
+        drawKeyArrow(c, 28, y + T.row / 2, -1, readout!.previous);
+        drawKeyArrow(c, 52, y + T.row / 2, 1, readout!.next);
       }
-      icoAnimationDiamond(c, 85, y + T.row / 2, trackChannels(r).some(axis => axis.prop.kf.length > 0), trackChannels(r).some(axis => !!api.anim.hasKeyAt(r.L, axis.prop, api.transport.time())));
+      icoAnimationDiamond(c, 85, y + T.row / 2, readout!.animated, readout!.current);
       clipText(c, r.label, labelX, y + T.row / 2, valueX - labelX - 12);
       /* value at playhead */
-      const values = trackChannels(r).map(axis => api.anim.evP(L, axis.prop, api.transport.time(), axis.key));
+      const values = readout!.values;
       c.font = '400 10px ' + fmono();
       c.fillStyle = theme.accent;
       c.textAlign = 'right';
@@ -1562,6 +1716,7 @@ function drawGutter(c: any, W: any, H: any) {
     }
   }
   c.restore();
+  return changed;
 }
 const clippedLabels = new Map<string, string>();
 listen(document.fonts, 'loadingdone', () => { clippedLabels.clear(); invalidate('timeline'); });
@@ -1655,8 +1810,8 @@ const trail = { time: NaN, stamp: 0, width: 0, velocity: 0 };
 function stepTrail(): number {
   const now = performance.now() / 1000;
   const dt = trail.stamp ? Math.min(now - trail.stamp, .25) : 0;
-  const moved = Number.isFinite(trail.time) ? (api.transport.time() - trail.time) * T.pps : 0;
-  trail.time = api.transport.time(); trail.stamp = now;
+  const moved = Number.isFinite(trail.time) ? (playheadTime() - trail.time) * T.pps : 0;
+  trail.time = playheadTime(); trail.stamp = now;
   const target = dt > 0 ? clamp(TRAIL.pxPerVelocity * moved / dt, -TRAIL.maxWidth, TRAIL.maxWidth) : 0;
   if (dt > 0) {
     const omega = 2 / TRAIL.response, decay = Math.exp(-omega * dt);
@@ -1669,10 +1824,12 @@ function stepTrail(): number {
 }
 
 function drawPlayhead(c: any, W: any, H: any) {
-  const x = Math.round(t2x(api.transport.time())) + .5;
+  // Whole-pixel rounding visibly caps a slow-moving head to ~30 steps/second,
+  // even on a 120 Hz display. Canvas coverage handles fractional positions.
+  const x = t2x(playheadTime()) + .5;
   const width = stepTrail();
   /* Keep animating until the trail has fully settled. */
-  if (width !== 0) scheduleFrame(() => invalidate('timeline'));
+  if (width !== 0) invalidateTime();
   if (x < T.gut) return;
   c.save(); c.beginPath(); c.rect(T.gut, 0, W - T.gut, H); c.clip();
   /* glow trail behind the direction of travel */
@@ -2370,9 +2527,15 @@ function scrub(e: any) {
   let targets: number[] | undefined;
   let rawTime = 0;
   let lockedTarget: number | null = null;
+  const present = (time: number) => {
+    scrubPresentationTime = time;
+    api.transport.setTime(time);
+    // A pointer can move several times within one selected project frame.
+    invalidateTime();
+  };
   const apply = () => {
     const time = clamp(rawTime, 0, api.project.get().dur);
-    if (!shiftSnapping()) { lockedTarget = null; api.transport.setTime(time); return; }
+    if (!shiftSnapping()) { lockedTarget = null; present(time); return; }
     if (!targets) {
       targets = [];
       for (const L of api.project.get().layers) {
@@ -2385,7 +2548,7 @@ function scrub(e: any) {
     const tolerance = 10 / Math.max(1, T.pps);
     const resolved = resolveTimelineSnap(time, targets, tolerance, lockedTarget, 15 / Math.max(1, T.pps));
     lockedTarget = resolved.target;
-    api.transport.setTime(resolved.time);
+    present(resolved.time);
   };
   const set = (ev: any) => {
     const r = T.cv.getBoundingClientRect();
@@ -2394,7 +2557,11 @@ function scrub(e: any) {
     apply();
   };
   const refresh = () => apply();
-  const cleanup = () => { if (refreshActiveScrub === refresh) refreshActiveScrub = null; };
+  const cleanup = () => {
+    if (refreshActiveScrub === refresh) refreshActiveScrub = null;
+    scrubPresentationTime = null;
+    if (!disposed) invalidateTime();
+  };
   refreshActiveScrub = refresh;
   set(e);
   beginDrag(e, {
@@ -2542,9 +2709,12 @@ function gutterDown(e: any, x: any, y: any) {
     if (x >= T.propertyValueX - 4) dragPropertyValue(e, r, hr.i);
     return;
   }
+  const L = r.L;
+  // Clearing selected keys can reveal the selected child's ancestors. Toggle
+  // from the disclosure the user clicked, before that selection notification.
+  const wasCollapsed = L.type === 'group' ? api.uiState.getGroupCollapsed(L) : api.uiState.getLayerCollapsed(L);
   T.keySelectionActive = false;
   api.selection.set({ keys: [] });
-  const L = r.L;
   if (layerSupportsTransform(L.type) && x >= T.gut - 40) {
     const ids = api.selection.layers().includes(L.id) ? api.selection.layers() : [L.id];
     if (x < T.gut - 20) api.ui.beginParentPick(e, ids);
@@ -2555,7 +2725,7 @@ function gutterDown(e: any, x: any, y: any) {
   else if (x < 40) { api.edit.apply({ type: 'set_layer', target: L.id, patch: { visible: !evaluatedValue(L, L.on, api.transport.time(), 'l.on') } }, { label: 'Toggle visibility', origin: 'timeline' }); return; }
   else if (x < 58) { api.edit.apply({ type: 'set_layer', target: L.id, patch: { locked: !L.lock } }, { label: 'Toggle lock', origin: 'timeline' }); return; }
   else if (x >= 58 + Math.min(48, (r.depth || 0) * 12) && x < 74 + Math.min(48, (r.depth || 0) * 12)) {
-    const collapsed = toggleTimelineDisclosure(api, L);
+    const collapsed = toggleTimelineDisclosure(api, L, wasCollapsed);
     rowsDirty = true;
     if (!collapsed) {
       buildRows();

@@ -641,6 +641,8 @@ export interface ShaderMeta { [key: string]: unknown }
  * UI state stores non-project disclosure, graph-handle, reveal and shader metadata. Setters mutate only the backing UI-state caches and compatibility fields; they do not create project history entries or render output directly.
  */
 export interface UIStateAPI {
+  /** Changes when timeline disclosure, property reveal, or shader fields change. */
+  timelineVersion?(): number;
   getLayerCollapsed(layer: Layer): boolean;
   setLayerCollapsed(layer: Layer, collapsed: boolean): boolean;
   getGroupCollapsed(layer: Layer): boolean;

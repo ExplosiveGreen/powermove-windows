@@ -18,6 +18,17 @@ beforeEach(async () => {
 afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
 
 describe('real project files', () => {
+  it('preserves an external edit made while a save is being written', async () => {
+    const destination = path.join(directory, 'race.pmv');
+    await files.save('race', bytes('original'), destination);
+    async function* incoming() {
+      yield bytes('partial');
+      await writeFile(destination, bytes('external work'));
+      yield bytes('rest');
+    }
+    await expect(files.save('race', incoming())).rejects.toThrow('changed');
+    expect(await readFile(destination)).toEqual(bytes('external work'));
+  });
   it('opens media beyond 1 GiB using a bounded read token', async () => {
     const destination = path.join(directory, 'large.pmv');
     const length = 1024 * 1024 * 1024 + 17;

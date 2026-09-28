@@ -40,6 +40,8 @@ import {
   registerThemeIpc
 } from './theme';
 import { IPC, LIMITS, type FileSaveResult } from '../shared/ipc';
+import { ProjectFiles } from './project-files';
+import { decodeProjectContainer } from '../shared/project-container';
 
 type InvokeHandler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown;
 type OnHandler = (event: IpcMainEvent, ...args: unknown[]) => void;
@@ -73,6 +75,37 @@ afterEach(() => {
 });
 
 describe('save IPC', () => {
+  it('owns incremental transactions per sender and never publishes an incomplete upload', async () => {
+    const folder = await mkdtemp(path.join(tmpdir(), 'pm-save-ipc-'));
+    const output = path.join(folder, 'Project.pmv');
+    const projects = new ProjectFiles(path.join(folder, 'registry.json'), path.join(folder, 'backups'));
+    const { ipcMain, invokes } = fakeIpcMain();
+    const sender = { once: vi.fn(), isDestroyed: () => false }, other = { once: vi.fn(), isDestroyed: () => false };
+    const call = (channel: string, payload: unknown, owner = sender): Promise<any> => Promise.resolve(invokes.get(channel)!(invokeEvent(owner), payload));
+    electronMocks.browserWindowFromWebContents.mockReturnValue({ isDestroyed: () => false });
+    registerSaveIpc(ipcMain, { isTrustedSender: () => true, projects,
+      dialogs: { showSave: async () => ({ canceled: false, filePath: output }) } });
+    const json = Buffer.from(JSON.stringify({ proj: { w: 100, h: 100, layers: [] } }));
+    const request = { name: 'Project.pmv', projectId: 'one', documentBytes: json.length, media: [] };
+    try {
+      const first = await call(IPC.projectSaveBegin, request);
+      expect(first.ok).toBe(true);
+      await expect(call(IPC.projectSaveChunk, { token: first.token, assetId: null, data: json }, other)).rejects.toThrow('Invalid');
+      await expect(call(IPC.projectSaveFinish, first.token, other)).rejects.toThrow('token');
+      await expect(call(IPC.fileSaveUpload, 3)).rejects.toThrow('already');
+      expect(await call(IPC.projectSaveFinish, first.token)).toMatchObject({ ok: false, cancelled: false });
+      await expect(readFile(output)).rejects.toMatchObject({ code: 'ENOENT' });
+      const retry = await call(IPC.projectSaveBegin, request);
+      await call(IPC.projectSaveChunk, { token: retry.token, assetId: null, data: json });
+      expect(await call(IPC.projectSaveFinish, retry.token)).toEqual({ ok: true, path: output });
+      expect(decodeProjectContainer(await readFile(output)).document.proj.w).toBe(100);
+      const aborted = await call(IPC.projectSaveBegin, request);
+      await call(IPC.projectSaveAbort, aborted.token, other);
+      await call(IPC.projectSaveChunk, { token: aborted.token, assetId: null, data: json });
+      await call(IPC.projectSaveAbort, aborted.token);
+      expect((await readdir(folder)).some(name => name.endsWith('.tmp'))).toBe(false);
+    } finally { await rm(folder, { recursive: true, force: true }); }
+  });
   it.each([false, true])('writes to a previously selected export destination (directory: %s)', async directory => {
     const folder = await mkdtemp(path.join(tmpdir(), 'powermove-export-test-'));
     const output = path.join(folder, 'chosen.png');

@@ -32,6 +32,30 @@ function uiStateRegistry() {
 }
 
 describe('legacy ui-state install', () => {
+  it('versions timeline row changes without invalidating on read-only access or repeated values', () => {
+    const { PM, layer, key } = uiStateRegistry();
+    const initial = PM.UIState.timelineVersion();
+    PM.UIState.getLayerCollapsed(layer);
+    PM.UIState.getReveal(layer);
+    PM.UIState.getKeyHandles(key);
+    PM.UIState.setLayerCollapsed(layer, false);
+    expect(PM.UIState.timelineVersion()).toBe(initial);
+
+    PM.UIState.setLayerCollapsed(layer, true);
+    const collapsed = PM.UIState.timelineVersion();
+    expect(collapsed).toBeGreaterThan(initial);
+    PM.UIState.setLayerCollapsed(layer, true);
+    expect(PM.UIState.timelineVersion()).toBe(collapsed);
+
+    layer._reveal = ['opacity'];
+    const revealed = PM.UIState.timelineVersion();
+    expect(revealed).toBeGreaterThan(collapsed);
+    PM.UIState.setReveal(layer, ['opacity']);
+    expect(PM.UIState.timelineVersion()).toBe(revealed);
+    PM.UIState.setGroupCollapsed(layer, true);
+    expect(PM.UIState.timelineVersion()).toBeGreaterThan(revealed);
+  });
+
   it('keeps handle and shader metadata outside project JSON', () => {
     const { PM, key, layer } = uiStateRegistry();
     const udefs = [{ name: 'amount', label: 'Amount', control: 'slider', min: 0, max: 1 }];

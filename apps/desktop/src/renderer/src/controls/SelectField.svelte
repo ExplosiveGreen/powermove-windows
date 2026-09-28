@@ -1,7 +1,7 @@
 <script lang="ts">
   import { sel } from '../state/selection.svelte';
   import { doc } from '../state/document.svelte';
-  import { transport } from '../state/transport.svelte';
+  import { controlTime } from '../state/transport.svelte';
   import { EditGesture, type EditBinding } from './gesture';
   import { rowLabelId } from './context';
   import './controls.css';
@@ -31,8 +31,8 @@
   } = $props();
 
   const labelledBy = rowLabelId();
-  const value = $derived((doc.tick.values, doc.proj, transport.time, get()));
-  const isMixed=$derived((sel.layers,doc.tick.values,doc.proj,transport.time,mixed?.(edit,value)??false));
+  const value = $derived((doc.tick.values, doc.proj, controlTime(), get()));
+  const isMixed=$derived((sel.layers,doc.tick.values,doc.proj,controlTime(),mixed?.(edit,value)??false));
   const gesture = $derived(new EditGesture(api, edit));
   const optionValue = (option: SelectOption): unknown => typeof option === 'string' ? option : option.v;
   const optionLabel = (option: SelectOption): string => typeof option === 'string' ? option : option.label;

@@ -1,11 +1,13 @@
 <script lang="ts">
+  import type { Snippet } from 'svelte';
   import { agentState } from './agent-state.svelte';
   import Timeline from './Timeline.svelte';
   import WorkingTimer from './WorkingTimer.svelte';
   import Turn from './Turn.svelte';
   import ResultActions from './ResultActions.svelte';
 
-  let { PM }: { PM: Record<string, any> } = $props();
+  /* `welcome` replaces the default empty state, for hosts that already know what is being changed. */
+  let { PM, welcome }: { PM: Record<string, any>; welcome?: Snippet } = $props();
 
   const suggestions = $derived(agentState.context === 'app' ? [
     ['Create an extension', 'Help me design and build a new Powermove extension'],
@@ -29,7 +31,9 @@
     : -1);
 </script>
 
-{#if !agentState.conversation.length && !agentState.activity}
+{#if !agentState.conversation.length && !agentState.activity && welcome}
+  {@render welcome()}
+{:else if !agentState.conversation.length && !agentState.activity}
   <div class="agent-welcome">
     <div class="agent-welcome-heading">
       <div><b>Make your next move</b><span>{agentState.context === 'app'

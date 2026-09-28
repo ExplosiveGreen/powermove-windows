@@ -1,3 +1,4 @@
+import { decodeIncrementalProject, isIncrementalProject } from './project-incremental';
 export const MAGIC = new Uint8Array([0x50, 0x4d, 0x56, 0x33, 0x0a]); // PMV3\n
 export interface ProjectContainerMedia {
   id: string;
@@ -101,7 +102,7 @@ export function encodeProjectContainerBlob(document: Uint8Array[], media: Array<
   return new Blob([prefix, header, ...media.map(item => item.data)], { type: 'application/x-powermove' });
 }
 
-export interface ProjectMediaRange { id: string; type: string; offset: number; length: number }
+export interface ProjectMediaRange { id: string; type: string; offset: number; length: number; revision?: string; sha256?: string }
 
 /** Validate every range before any imported media can be persisted. */
 export function projectContainerIndex(header: any, bodyStart: number, fileSize: number): { document: any; media: ProjectMediaRange[] } {
@@ -126,6 +127,7 @@ export function projectContainerIndex(header: any, bodyStart: number, fileSize: 
 export function decodeProjectContainer(input: string | Uint8Array | ArrayBuffer): DecodedProjectContainer {
   if (typeof input === 'string') return { document: JSON.parse(input), media: [], binary: false };
   const data = bytes(input);
+  if (isIncrementalProject(data)) return decodeIncrementalProject(data);
   if (!isProjectContainer(data)) {
     return { document: JSON.parse(new TextDecoder().decode(data)), media: [], binary: false };
   }

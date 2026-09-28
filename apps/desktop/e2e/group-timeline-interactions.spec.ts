@@ -3,6 +3,40 @@ import { expect, test } from './helpers/app';
 test.beforeEach(async ({ session }) => { await session.openEditor(); });
 
 test.describe('@groups timeline selection and strip editing', () => {
+  test('M closes and reopens nested group layers with no selection', async ({ session }) => {
+    const { page } = session;
+    const ids = await page.evaluate(() => {
+      const PM = (window as any).PM;
+      const project = PM.mkProject({ w: 640, h: 360, dur: 8 });
+      const child = PM.mkLayer('shape', { name: 'Child' }, project);
+      const sibling = PM.mkLayer('shape', { name: 'Sibling' }, project);
+      project.layers = [child, sibling];
+      PM.replaceProject(project);
+      const inner = PM.groupLayers([child.id], 'Inner');
+      const outer = PM.groupLayers([inner.id, sibling.id], 'Outer');
+      PM.selectLayers([]);
+      for (const layer of PM.proj.layers) {
+        PM.UIState.setLayerCollapsed(layer, false);
+        if (layer.type === 'group') PM.UIState.setGroupCollapsed(layer, false);
+      }
+      PM.invalidate('timeline');
+      (document.activeElement as HTMLElement)?.blur();
+      return { outer: outer.id, all: PM.proj.layers.map((layer: any) => layer.id) };
+    });
+    const visibleLayers = () => page.evaluate(() => {
+      const timeline = (window as any).PM.Kernel.services.get('timeline');
+      return timeline.rows.filter((row: any) => row.kind === 'layer').map((row: any) => row.L.id);
+    });
+    await expect.poll(visibleLayers).toEqual(ids.all);
+    await page.keyboard.press('m');
+    await expect.poll(visibleLayers).toEqual([ids.outer]);
+    await page.keyboard.press('m');
+    await expect.poll(visibleLayers).toEqual(ids.all);
+    await page.keyboard.press('m');
+    await expect.poll(visibleLayers).toEqual([ids.outer]);
+    expect(session.diagnostics.pageErrors).toEqual([]);
+  });
+
   test('selecting grouped layers reveals ancestors without hiding siblings', async ({ session }) => {
     const { page } = session;
     const ids = await page.evaluate(() => {

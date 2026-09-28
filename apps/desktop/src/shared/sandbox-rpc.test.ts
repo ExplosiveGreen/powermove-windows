@@ -85,6 +85,43 @@ it('shares the message rate budget across an extension runtime and view', async 
   expect(results.filter(item => item.status === 'fulfilled')).toHaveLength(200);
   expect(results.filter(item => item.status === 'rejected')).toHaveLength(100);
 });
+it('delivers 120 Hz host ticks and callbacks to a trusted kernel port without metering them', async () => {
+  let now = 1000;
+  const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const channel = new MessageChannel();
+  const limited = vi.fn();
+  let tickedTime = 0;
+  const host = createRpc(channel.port1 as unknown as MessagePort, {}, 1000);
+  const child = createRpc(channel.port2 as unknown as MessagePort, { tick: (time: number) => { tickedTime = time; } }, 1000, { trusted: true, onSustainedLimit: limited });
+  close.push(() => { host.close(); child.close(); clock.mockRestore(); });
+  const callback = child.handle((time: number) => ({ time, tickedTime }));
+  for (let second = 0; second < 4; second++) {
+    const results: Promise<unknown>[] = [];
+    for (let tick = 1; tick <= 120; tick++) {
+      const time = second + tick / 120;
+      host.notify('tick', time);
+      results.push(host.invokeHandle(callback, time));
+    }
+    const settled = await Promise.allSettled(results);
+    expect(settled.filter(result => result.status === 'fulfilled')).toHaveLength(120);
+    for (const result of settled) if (result.status === 'fulfilled') {
+      expect((result.value as any).tickedTime).toBe((result.value as any).time);
+    }
+    now += 1000;
+  }
+  expect(limited).not.toHaveBeenCalled();
+});
+
+it('still meters what a trusted-port sandbox sends to the kernel', async () => {
+  const channel = new MessageChannel();
+  const hostTick = vi.fn();
+  const host = createRpc(channel.port1 as unknown as MessagePort, { tick: hostTick }, 1000);
+  const child = createRpc(channel.port2 as unknown as MessagePort, {}, 1000, { trusted: true });
+  close.push(() => { host.close(); child.close(); });
+  for (let tick = 0; tick < 201; tick++) child.notify('tick', tick);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  expect(hostTick).toHaveBeenCalledTimes(200);
+});
 it('reports a sustained over-rate sender after three seconds', async () => {
   let now = 1_000;
   const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);

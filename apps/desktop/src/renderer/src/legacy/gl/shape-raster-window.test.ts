@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { previewShapeRaster, rasterIntersectsViewport, shapeRasterGeometry } from './shape-raster-window';
+import { previewShapeRaster, previewTextRaster, rasterIntersectsViewport, shapeRasterGeometry } from './shape-raster-window';
 
 const rectangle = { shape: 'rect', w: 2000, h: 1000, radius: 40, stroke: 4, color: '#102030' };
 describe('visible primitive raster planning', () => {
@@ -47,6 +47,32 @@ describe('complete text source visibility', () => {
   it('keeps sampling support at the viewport boundary', () => {
     expect(rasterIntersectsViewport(source, [1, 0, 0, 1, -11, 0], 320, 240)).toBe(true);
     expect(rasterIntersectsViewport(source, [1, 0, 0, 1, -13, 0], 320, 240)).toBe(false);
+  });
+});
+
+describe('oversized text source windows', () => {
+  const source = { w: 1000, h: 1000, width: 8192, height: 8192, anchorX: 500, anchorY: 500 };
+  it.each([[8, 0, 0, 8, 320, 240], [-8, 0, 0, 8, 320, 240], [0, 8, -8, 0, 320, 240]])('keeps inverse-projected viewport corners and sampling margins inside %j', (...matrix) => {
+    const crop = previewTextRaster(source, matrix, 640, 480)!;
+    expect(crop).toBeDefined();
+    expect(crop.width * crop.height).toBeLessThan(source.width * source.height / 4);
+    const [a, b, c, d, tx, ty] = matrix, determinant = a! * d! - b! * c!;
+    for (const [x, y] of [[-2, -2], [642, -2], [-2, 482], [642, 482]]) {
+      const dx = x! - tx!, dy = y! - ty!;
+      const px = ((d! * dx - c! * dy) / determinant + source.anchorX) * source.width / source.w;
+      const py = ((-b! * dx + a! * dy) / determinant + source.anchorY) * source.height / source.h;
+      expect(px).toBeGreaterThanOrEqual(crop.x + 2);
+      expect(px).toBeLessThanOrEqual(crop.x + crop.width - 2);
+      expect(py).toBeGreaterThanOrEqual(crop.y + 2);
+      expect(py).toBeLessThanOrEqual(crop.y + crop.height - 2);
+    }
+  });
+  it('keeps small sources, tiny savings and invalid transforms on the complete-source path', () => {
+    expect(previewTextRaster({ ...source, width: 1000, height: 1000 }, [8, 0, 0, 8, 320, 240], 640, 480)).toBeUndefined();
+    expect(previewTextRaster(source, [1, 0, 0, 1, 500, 500], 1000, 1000)).toBeUndefined();
+    expect(previewTextRaster(source, [0, 0, 0, 0, 320, 240], 640, 480)).toBeUndefined();
+    expect(previewTextRaster(source, [NaN, 0, 0, 8, 320, 240], 640, 480)).toBeUndefined();
+    expect(previewTextRaster(source, [8, 2, -1, 8, 320, 240], 640, 480)).toBeUndefined();
   });
 });
 

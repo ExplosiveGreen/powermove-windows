@@ -1,4 +1,4 @@
-import { getContext, onDestroy, setContext } from 'svelte';
+import { getContext, onDestroy, setContext, untrack } from 'svelte';
 import type {
   ControlEditBinding,
   EditCommand,
@@ -75,6 +75,7 @@ export interface InspectorContext {
   doc: InspectorDocumentState;
   sel: InspectorSelectionState;
   transport: InspectorTransportState;
+  syncTime(): void;
   edit: InspectorEditAPI;
   mixed(binding: EditBinding, value: unknown): boolean;
   inspector(): InspectorRuntimeService | null;
@@ -83,7 +84,7 @@ export interface InspectorContext {
   viewer(): InspectorViewerState | null;
 }
 
-function createReactiveState(api: PowermoveAPI): Pick<InspectorContext, 'doc' | 'sel' | 'transport'> {
+function createReactiveState(api: PowermoveAPI): Pick<InspectorContext, 'doc' | 'sel' | 'transport' | 'syncTime'> {
   const counts: Record<TickKind, number> = {
     values: 0,
     structure: 0,
@@ -97,6 +98,14 @@ function createReactiveState(api: PowermoveAPI): Pick<InspectorContext, 'doc' | 
   // selection. Keep structural derivations (especially parenting choices)
   // asleep while the time-dependent controls continue updating every frame.
   const timeSignal = createInspectorSignal();
+  let lastTimeRefresh = -Infinity;
+  const refreshTime = (force = false) => {
+    const now = performance.now();
+    if (force || !api.transport.playing?.() || now - lastTimeRefresh >= 1000 / 15) {
+      lastTimeRefresh = now;
+      timeSignal.bump();
+    }
+  };
   const subscriptions = [
     api.events.on('project:changed', ({ kind }) => {
       if (kind === 'replace') for (const key of Object.keys(counts) as TickKind[]) counts[key]++;
@@ -104,8 +113,8 @@ function createReactiveState(api: PowermoveAPI): Pick<InspectorContext, 'doc' | 
       signal.bump();
     }),
     api.events.on('selection', () => signal.bump()),
-    api.events.on('time', () => timeSignal.bump()),
-    api.events.on('transport', () => signal.bump()),
+    api.events.on('time', () => refreshTime()),
+    api.events.on('transport', () => refreshTime(true)),
     // Host UI invalidation (stopwatch toggles, reveal, restores) repaints panels.
     api.events.on('invalidate', (what) => { if (what === 'ui') signal.bump(); })
   ];
@@ -117,6 +126,7 @@ function createReactiveState(api: PowermoveAPI): Pick<InspectorContext, 'doc' | 
     Object.defineProperty(tick, key, { enumerable: true, get: () => { signal.version; return counts[key]; } });
   }
   return {
+    syncTime: () => refreshTime(true),
     doc: {
       get proj() { signal.version; return api.project.get(); },
       tick,
@@ -131,7 +141,10 @@ function createReactiveState(api: PowermoveAPI): Pick<InspectorContext, 'doc' | 
       get chan() { signal.version; return api.selection.chan(); }
     },
     transport: {
-      get time() { signal.version; timeSignal.version; return api.transport.time(); }
+      get time() {
+        signal.version; timeSignal.version;
+        return api.transport.playing?.() ? untrack(() => api.transport.time()) : api.transport.time();
+      }
     }
   };
 }

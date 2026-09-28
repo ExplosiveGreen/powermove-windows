@@ -121,6 +121,64 @@ describe('viewer extension', () => {
     expect(harness.viewer()).toBeNull();
   });
 
+  it.each(['select', 'zoom', 'shape', 'text'])('paints the %s tool outline at display cadence without rerendering the composition', (tool) => {
+    const context = new Proxy({} as Record<string, any>, {
+      get: (target, key: string) => target[key] ??= vi.fn(),
+    });
+    vi.mocked(HTMLCanvasElement.prototype.getContext).mockReturnValue(context as never);
+    const frames = new Map<number, FrameRequestCallback>();
+    let frameId = 0;
+    vi.mocked(window.requestAnimationFrame).mockImplementation(callback => { frames.set(++frameId, callback); return frameId; });
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(id => { frames.delete(id); });
+    const harness = apiHarness();
+    activateExtension(harness.api);
+    const body = document.createElement('div');
+    harness.panel!.build!(body, { spec: {} });
+    const runtime = harness.viewer() as any;
+    const rect = { left: 0, top: 0, width: 1000, height: 700, right: 1000, bottom: 700, x: 0, y: 0, toJSON() {} };
+    runtime.stage.getBoundingClientRect = () => rect;
+    runtime.inner.getBoundingClientRect = vi.fn(() => rect);
+    runtime.layout();
+    for (const [id, callback] of [...frames]) { frames.delete(id); callback(0); }
+    frames.clear();
+    runtime.temporaryTool = tool;
+    let drag: any;
+    vi.mocked(harness.api.ui.drag).mockImplementation((_event, options) => { drag = options; return { cancel: () => drag.cancel() }; });
+    runtime.stage.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 100, clientY: 100 }));
+    vi.mocked(harness.api.transport.invalidate).mockClear();
+    context.clearRect.mockClear();
+    const positions = new Set<number>();
+    for (let frame = 0; frame < 120; frame++) {
+      drag.move(10 + frame / 4, 10, { clientX: 110 + frame / 4, clientY: 110 });
+      positions.add((runtime.zoomRect ?? runtime.toolRect.box).x1);
+      expect(frames.size).toBe(1);
+      for (const [id, callback] of [...frames]) { frames.delete(id); callback(frame * 1000 / 120); }
+    }
+    expect(positions.size).toBe(120);
+    expect(context.clearRect).toHaveBeenCalledTimes(120);
+    expect(harness.api.transport.invalidate).not.toHaveBeenCalled();
+    drag.cancel();
+    expect(runtime.zoomRect).toBeNull();
+    expect(runtime.toolRect).toBeNull();
+    harness.dispose();
+  });
+
+  it('does not repeat hover hit testing while a viewer drag owns the cursor', () => {
+    const harness = apiHarness();
+    activateExtension(harness.api);
+    const body = document.createElement('div');
+    harness.panel!.build!(body, { spec: {} });
+    const runtime = harness.viewer() as any;
+    vi.mocked(harness.api.ui.drag).mockReturnValue({ cancel: vi.fn() });
+    runtime.stage.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 100, clientY: 100 }));
+    const read = vi.spyOn(runtime.inner, 'getBoundingClientRect');
+    for (let frame = 0; frame < 120; frame++) {
+      runtime.stage.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 100 + frame / 4, clientY: 100 }));
+    }
+    expect(read).not.toHaveBeenCalled();
+    harness.dispose();
+  });
+
   it('keeps the original WebGL host when a panel rebuild attempts to attach a second stage', () => {
     const harness = apiHarness();
     activateExtension(harness.api);
@@ -180,7 +238,7 @@ describe('viewer extension', () => {
     const removeListener = vi.spyOn(stage, 'removeEventListener');
     first.dispose();
 
-    expect(first.eventDisposers).toHaveLength(7);
+    expect(first.eventDisposers).toHaveLength(8);
     expect(first.eventDisposers.every(dispose => dispose.mock.calls.length === 1)).toBe(true);
     expect(removeListener.mock.calls.some(([event]) => event === 'pointerdown')).toBe(true);
 
@@ -189,6 +247,6 @@ describe('viewer extension', () => {
     const replacementBody = document.createElement('div');
     replacement.panel?.build?.(replacementBody, { spec: {} });
     expect(replacement.viewer()?.stage).toBe(stage);
-    expect(replacement.eventDisposers).toHaveLength(7);
+    expect(replacement.eventDisposers).toHaveLength(8);
   });
 });

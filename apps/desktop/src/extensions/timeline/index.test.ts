@@ -134,6 +134,28 @@ describe('timeline extension', () => {
     expect(vi.mocked(value.api.keybindings.bind).mock.calls[0]?.[0]).not.toHaveProperty('inFields');
   });
 
+  it('uses the M command to close and reopen nested groups with every strip', () => {
+    const value = harness();
+    const layers = [
+      { id: 'outer', type: 'group', collapsed: false, groupCollapsed: false },
+      { id: 'inner', type: 'group', group: 'outer', collapsed: false, groupCollapsed: false },
+      { id: 'child', type: 'solid', group: 'inner', collapsed: false },
+    ] as any[];
+    value.state.project.layers = layers;
+    value.state.selection.layers = [];
+    activate(value);
+    const command = vi.mocked(value.api.commands.register).mock.calls
+      .find(([definition]) => definition.id === 'toggleLayerStrips')![0];
+
+    command.run();
+    expect(layers.map(layer => layer.collapsed)).toEqual([true, true, true]);
+    expect(layers.slice(0, 2).map(layer => layer.groupCollapsed)).toEqual([true, true]);
+
+    command.run();
+    expect(layers.map(layer => layer.collapsed)).toEqual([false, false, false]);
+    expect(layers.slice(0, 2).map(layer => layer.groupCollapsed)).toEqual([false, false]);
+  });
+
   it('owns the property-reveal and adjacent-keyframe command ids', () => {
     const value = harness();
     const layer = { id: 'layer-1', type: 'solid', from: 0, dur: 10, collapsed: true, reveal: null, d: {}, p: { 'position.x': { v: 0, kf: [{ i: 'key-1', t: 2, v: 10 }] } } } as any;
@@ -161,6 +183,27 @@ describe('timeline extension', () => {
     expect(layer.reveal).toEqual(['position.x']);
     commands.get('timeline.adjacentKeyframe:next')?.run();
     expect(value.api.transport.setTime).toHaveBeenCalledWith(2);
+  });
+
+  it.each([{ keys: [] }, { keys: ['selected-key'] }])('reopens a disclosed group while its child remains selected (keys: $keys)', ({ keys }) => {
+    const value = harness();
+    const group = { id: 'group', type: 'group', collapsed: true, groupCollapsed: false, from: 0, dur: 10, d: {}, p: {} };
+    const child = { id: 'child', type: 'solid', group: group.id, collapsed: true, from: 0, dur: 10, d: {}, p: {} };
+    value.state.project.layers = [group, child];
+    value.state.selection.layers = [child.id];
+    vi.mocked(value.api.groups.ancestors).mockImplementation((layer: any) => layer.id === child.id ? [group as any] : []);
+    activate(value);
+    const canvas = build(value).querySelector<HTMLCanvasElement>('#tl-canvas')!;
+    const timeline = value.state.timeline as any;
+    value.emit('selection', value.state.selection);
+    const click = () => pointer(canvas, 64, timeline.ruler + timeline.row / 2);
+    click();
+    expect(group.groupCollapsed).toBe(true);
+    value.state.selection.keys = keys;
+    click();
+    expect(group.groupCollapsed).toBe(false);
+    expect(value.state.selection.layers).toEqual([child.id]);
+    expect(value.state.selection.keys).toEqual([]);
   });
 
   it('builds the exact canvas skeleton and rebinds the runtime to replacement hosts', () => {

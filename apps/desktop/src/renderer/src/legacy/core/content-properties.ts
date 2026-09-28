@@ -21,8 +21,17 @@ export function canAnimateContent(layer: any, key: string): boolean {
 
 export function resolveContent(PM: any, layer: any, time: number): any {
   const content = { ...layer.d };
-  for (const [key, value] of Object.entries(content)) {
-    if (canAnimateContent(layer, key) && isProperty(value)) content[key] = PM.evP ? PM.evP(layer, value, time, `c.${key}`) : (value as any).v;
+  // Most content includes unanimated geometry, text styling or media metadata.
+  // Visit the small declared channel set without allocating entry pairs for
+  // every field on every layer and every motion-blur sample.
+  for (const key of contentFields[layer.type] || []) {
+    const value = content[key];
+    if (isProperty(value)) content[key] = PM.evP ? PM.evP(layer, value, time, `c.${key}`) : value.v;
+  }
+  if (layer.type === 'text') for (const key in content) {
+    if (!/^fontAxis\.[\x20-\x7e]{4}$/.test(key)) continue;
+    const value = content[key];
+    if (isProperty(value)) content[key] = PM.evP ? PM.evP(layer, value, time, `c.${key}`) : value.v;
   }
   return content;
 }

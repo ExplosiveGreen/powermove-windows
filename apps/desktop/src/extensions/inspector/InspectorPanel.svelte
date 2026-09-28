@@ -19,7 +19,7 @@
   import { inspectorRefresh } from './refresh.svelte.js';
 
   let { panelId, api }: PanelProps & { api: PowermoveAPI } = $props();
-  const { doc, sel } = provideInspectorContext(untrack(() => api));
+  const { doc, sel, syncTime } = provideInspectorContext(untrack(() => api));
   let fontsVersion = $state(0);
 
   const selectedLayers = $derived<any[]>(
@@ -34,7 +34,8 @@
   });
 </script>
 
-<div class="insp" data-svelte-panel={panelId} data-inspector-refresh={inspectorRefresh.version}>
+<div class="insp" data-svelte-panel={panelId} data-inspector-refresh={inspectorRefresh.version}
+  onpointerdowncapture={syncTime} onkeydowncapture={syncTime} onwheelcapture={syncTime}>
   {#if firstLayer}<InspectorHeader layer={firstLayer} />{/if}
   {#if firstLayer && selectedLayers.every((layer: any) => layer.type !== 'audio')}<AlignmentStrip layers={selectedLayers} />{/if}
 

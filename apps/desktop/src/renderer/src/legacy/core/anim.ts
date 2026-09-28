@@ -12,12 +12,14 @@ try { defaultHandles = Ease.handles('power') || defaultHandles; } catch (e) { }
 
 let version = 0;
 let parentIndexes = new WeakMap<object, any>();
+let staticTransforms = new WeakMap<object, { values: any[]; matrix: number[] }>();
 PM.touch = () => {
   version++;
   PM.ProjectIndex?.invalidateKeyframes?.();
   /* hierarchy memos must never outlive an edit */
   woMemo.clear(); wmMemo.clear(); lmMemo.clear(); memoT = null;
   parentIndexes = new WeakMap();
+  staticTransforms = new WeakMap();
 };
 PM.animVersion = () => version;
 let memoT: any = null;
@@ -213,8 +215,23 @@ function mul(m: any, n: any) {
 }
 PM.mul = mul;
 
+const transformChannels = ['position.x', 'position.y', 'anchor.x', 'anchor.y', 'scale.x', 'scale.y', 'rotation', 'skew'];
 PM.localMatrix = (L: any, T: any) => {
   if (Object.is(memoT, T)) { const cached = lmMemo.get(L); if (cached) return cached; }
+  const previous = staticTransforms.get(L);
+  let isStatic = true, unchanged = !!previous;
+  // Static artwork does not need new trigonometry or matrix allocations every
+  // frame. Check actual values as well as animation flags so direct inspector
+  // writes and property replacement cannot reuse a stale transform.
+  for (let i = 0; i < transformChannels.length; i++) {
+    const prop = L.p[transformChannels[i]!];
+    if (prop?.expr || prop?.kf?.length) { isStatic = false; break; }
+    if (previous && !Object.is(previous.values[i], prop ? prop.v : 0)) unchanged = false;
+  }
+  if (isStatic && unchanged) {
+    if (Object.is(memoT, T)) lmMemo.set(L, previous!.matrix);
+    return previous!.matrix;
+  }
   const px = PM.ev(L, 'position.x', T), py = PM.ev(L, 'position.y', T);
   const ax = PM.ev(L, 'anchor.x', T), ay = PM.ev(L, 'anchor.y', T);
   const sx = PM.ev(L, 'scale.x', T) / 100, sy = PM.ev(L, 'scale.y', T) / 100;
@@ -224,6 +241,8 @@ PM.localMatrix = (L: any, T: any) => {
   // Compose the affine transform directly, without three intermediate matrices per layer.
   const a=c*sx,b=s*sx,cc=(c*sk-s)*sy,d=(s*sk+c)*sy;
   const matrix = [a,b,cc,d,px-a*ax-cc*ay,py-b*ax-d*ay];
+  if (isStatic) staticTransforms.set(L, { matrix, values: transformChannels.map(key => L.p[key] ? L.p[key].v : 0) });
+  else if (previous) staticTransforms.delete(L);
   if (Object.is(memoT, T)) lmMemo.set(L, matrix);
   return matrix;
 };
@@ -299,6 +318,11 @@ PM.transformParentMatrix = (L: any, T: any, parent = parentOf(L)) => {
 
 PM.worldMatrix = (L: any, T: any) => {
   if (Object.is(memoT, T)) { const c = wmMemo.get(L); if (c) return c; }
+  if (!L.parent && !L.group) {
+    const matrix = PM.localMatrix(L, T);
+    if (Object.is(memoT, T)) wmMemo.set(L, matrix);
+    return matrix;
+  }
   const chain: any[] = [];
   let cur = L, hit = false;
   while (cur && chain.length < 256) {

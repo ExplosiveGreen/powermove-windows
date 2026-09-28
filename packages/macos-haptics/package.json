@@ -9,5 +9,6 @@
     "install": "node scripts/build.cjs"
   },
   "gypfile": true,
+  "devDependencies": { "node-gyp": "12.4.0" },
   "license": "AGPL-3.0-or-later"
 }

@@ -342,6 +342,46 @@ describe('legacy raster install', () => {
     now.mockRestore();
   });
 
+  it('does not read GPU pixels for loaded fonts on a healthy canvas', () => {
+    const PM = rasterRegistry();
+    const context = window.document.createElement('canvas').getContext('2d') as any;
+    context.isContextLost = () => false;
+    context.drawImage = vi.fn();
+    context.getImageData = vi.fn(() => { throw new Error('Unexpected synchronous readback'); });
+    const check = vi.fn(() => true);
+    (window.document as any).fonts = { check };
+    for (const text of ['Healthy font', '世界', 'New text at another density']) {
+      const layer = { type: 'text', d: { text, font: 'sans-serif', size: 18, color: '#fff' } };
+      for (const scale of [1, 2, 8]) expect(PM.raster(layer, scale).blank).toBe(false);
+      expect(check).toHaveBeenCalledWith(context.font, text);
+    }
+    expect(context.getImageData).not.toHaveBeenCalled();
+    expect(context.drawImage).not.toHaveBeenCalled();
+  });
+
+  it.each(['loading font', 'lost backing store'])('retains retry and GPU-stub rejection for a %s', failure => {
+    vi.useFakeTimers();
+    const invalidate = vi.fn(), PM = rasterRegistry({ invalidate });
+    const context = window.document.createElement('canvas').getContext('2d') as any;
+    let recovered = false;
+    context.isContextLost = () => failure === 'lost backing store' && !recovered;
+    context.drawImage = vi.fn();
+    context.getImageData = vi.fn(() => ({ data: new Uint8ClampedArray(24 * 24 * 4) }));
+    (window.document as any).fonts = { check: () => failure !== 'loading font' || recovered };
+    (window as any).setTimeout = setTimeout;
+    const layer = { type: 'text', d: { text: 'Recover me', font: 'sans-serif', size: 24, color: '#fff' } };
+    const first = PM.raster(layer);
+    expect(first.blank).toBe(true);
+    expect(context.getImageData).toHaveBeenCalledTimes(failure === 'loading font' ? 1 : 0);
+    vi.advanceTimersByTime(300);
+    expect(invalidate).toHaveBeenCalledWith('render');
+    recovered = true;
+    const next = PM.raster(layer, 1, 0, () => ({ ...first, blank: true }));
+    expect(next).not.toBe(first);
+    expect(next.blank).toBe(false);
+    expect(PM.raster(layer)).toBe(next);
+  });
+
   it('atomically replaces media in place and restores metadata plus runtime with one Undo and Redo', async () => {
     const disposed: any[] = [];
     const oldRuntime = { id: 'asset-1', name: 'old.wav', kind: 'audio', marker: 'old' };

@@ -7,7 +7,7 @@ import { canAnimateContent, isProperty } from './core/content-properties';
 import { normalizeExportDefaults, type ExportDefaults } from '../core/export-defaults';
 import { compactEditLog } from '../core/edit-log';
 import type { PMRegistry } from './registry';
-import { packProjectFileBlob, restoreProjectFileMedia, restoreProjectFileStream, unpackProjectFileBlob, unpackProjectFile } from './core/project-file';
+import { packProjectFileBlob, saveIncrementalProject, restoreProjectFileMedia, restoreProjectFileStream, unpackProjectFileBlob, unpackProjectFile } from './core/project-file';
 import { projectFingerprint } from './core/project-fingerprint';
 import { stringifyAsync } from './core/serialize-async';
 import { createNewProjectForm } from './ui/project-settings';
@@ -643,6 +643,7 @@ async function saveProject({ saveAs = false, projectId = PM.proj.id }: any = {})
     const project = projectId === PM.proj.id ? PM.proj : PM.Projects.get(projectId);
     if (!project) throw new Error('This project is no longer available.');
     let projectJSON: string, snapshot: any, serialized: string;
+    let capturedGeneration = 0, capturedEditVersion: unknown;
     // Edits can arrive between serialization slices. Retry a changed snapshot
     // instead of writing a mixture of two document revisions to disk.
     for (;;) {
@@ -655,25 +656,45 @@ async function saveProject({ saveAs = false, projectId = PM.proj.id }: any = {})
       projectJSON = await stringifyAsync(current);
       const historyJSON = await stringifyAsync(snapshot.history ?? null);
       serialized = `{"v":${JSON.stringify(PM.version ?? null)},"proj":${projectJSON},"history":${historyJSON},"ws":${JSON.stringify(snapshot.ws ?? null)}}`;
-      if (editVersion === PM.animVersion?.() && generation === (comparisonVersions.get(projectId) || 0) && (projectId !== PM.proj.id || current === PM.proj)) break;
+      if (editVersion === PM.animVersion?.() && generation === (comparisonVersions.get(projectId) || 0) && (projectId !== PM.proj.id || current === PM.proj)) {
+        capturedGeneration = generation; capturedEditVersion = editVersion; break;
+      }
     }
     const state = fileState(projectId);
     const suggestedName = safeName(project.name) + '.pmv';
     progress(0.25);
-    const data = await packProjectFileBlob(snapshot, PM.MediaStore, serialized, value => progress(0.25 + value * 0.4));
-    progress(0.65);
     const finish = async (path?: string) => {
       progress(0.95);
       state.path = path || state.path;
       state.savedHash = await projectFingerprint(projectJSON);
-      rememberFile(projectId, state);
-      await refreshFileDirty(projectId === PM.proj.id ? PM.proj : PM.Projects.get(projectId) || project);
-      if (projectId === PM.proj.id) captureProjectSession();
-      await PM.store.flush?.();
+      if (projectId === PM.proj.id && snapshot.proj === PM.proj && capturedEditVersion === PM.animVersion?.()
+        && capturedGeneration === (comparisonVersions.get(projectId) || 0)) {
+        state.dirty = false; fileUI();
+      } else await refreshFileDirty(projectId === PM.proj.id ? PM.proj : PM.Projects.get(projectId) || project);
+      let recoveryFailed = false;
+      try {
+        rememberFile(projectId, state);
+        if (projectId === PM.proj.id && !captureProjectSession()) throw new Error('Local recovery is unavailable');
+        await PM.store.flush?.();
+      } catch (error) {
+        recoveryFailed = true;
+        console.warn('Project file saved, but local recovery could not be updated.', error);
+      }
       PM.bus.emit('project:saved');
       PM.toast('Saved ' + (state.path?.split(/[\\/]/).pop() || suggestedName), 2200, { key: toastKey, icon: 'export', error: false, progress: 1, completed: true });
+      if (recoveryFailed) PM.toast('Your project file is saved, but local recovery could not be updated. Check available disk space.', 6000, { key: 'project-recovery', error: true });
       return true;
     };
+    const incremental = hostBridge()?.projectSave;
+    if (incremental) {
+      const result = await saveIncrementalProject(snapshot, serialized, PM.MediaStore, incremental,
+        { name: suggestedName, projectId, saveAs }, progress);
+      if (result.ok) return await finish(result.path);
+      if (!result.cancelled) throw new Error(result.error || 'Save failed');
+      PM.dismissToast?.(toastKey); return false;
+    }
+    const data = await packProjectFileBlob(snapshot, PM.MediaStore, serialized, value => progress(0.25 + value * 0.4));
+    progress(0.65);
     if (typeof hostBridge()?.saveFile === 'function') {
       const metadata = { name: suggestedName, projectId, saveAs };
       const upload = hostBridge()!.fileUpload;

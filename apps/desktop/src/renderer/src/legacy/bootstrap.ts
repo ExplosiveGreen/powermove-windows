@@ -70,8 +70,9 @@ const INSTALLS: Array<[string, (PM: PMRegistry) => void]> = [
      for `PM.bus` and `PM.store`. */
   ['kernel', (PM) => void installKernel(PM)],
   ['core/ui-state', installUiState],
-  ['core/memory', installMemory],
   ['host/electron-shim', installElectronShim],
+  // Restore memory preferences from the native store before caches register.
+  ['core/memory', installMemory],
   ['core/fonts', installFonts],
   ['core/easing', installEasing],
   ['core/model', installModel],

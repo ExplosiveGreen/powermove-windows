@@ -32,7 +32,9 @@ test(`prepares a dense ${threeD ? '3D' : '2D'} group entrance while ${paused ? '
     PM.pause(); PM.agentFrameCapture = true;
     const gl = PM.GL.gl, upload = gl.texImage2D.bind(gl);
     let uploads = 0;
-    gl.texImage2D = (...args: any[]) => { uploads++; return upload(...args); };
+    // Source uploads use the DOM-source overload. Nine-argument calls reserve
+    // empty render-target storage, which is separate from source preparation.
+    gl.texImage2D = (...args: any[]) => { if (args.length === 6) uploads++; return upload(...args); };
     PM.GL.render(4, { mblur: false });
     const first = new Uint8Array(gl.drawingBufferWidth * gl.drawingBufferHeight * 4);
     gl.readPixels(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight, gl.RGBA, gl.UNSIGNED_BYTE, first);
@@ -54,6 +56,63 @@ test(`prepares a dense ${threeD ? '3D' : '2D'} group entrance while ${paused ? '
 }
 
 }
+
+test('prepares zero-start text and shapes before their own or nested group opacity entrance', async ({ session }) => {
+  const { page } = session;
+  await page.waitForFunction(() => Boolean((window as any).PM.GL.gl));
+  await page.evaluate(() => {
+    const PM = (window as any).PM;
+    const p = PM.mkProject({ name: 'Opacity entrance', w: 640, h: 360, dur: 10, fps: 30 });
+    const outer = PM.mkLayer('group', {}, p), inner = PM.mkLayer('group', {}, p);
+    inner.group = outer.id;
+    const opacity = (layer: any) => layer.p.opacity.kf = [PM.KF(4, 0, 'linear'), PM.KF(4.5, 100, 'linear')];
+    opacity(outer);
+    p.layers = [outer, inner, ...Array.from({ length: 80 }, (_, i) => {
+      const layer = PM.mkLayer(i % 2 ? 'shape' : 'text', {
+        from: 0, dur: 10,
+        d: i % 2 ? { w: 18, h: 18, color: '#' + (0x100000 + i * 151).toString(16) }
+          : { text: String(i), size: 18, color: '#ffffff' },
+        p: { 'position.x': 20 + i % 16 * 38, 'position.y': 30 + Math.floor(i / 16) * 60 },
+      }, p);
+      if (i < 40) layer.group = inner.id; else opacity(layer);
+      return layer;
+    })];
+    window.dispatchEvent(new CustomEvent('pm-open-project', { detail: p }));
+    PM.ProjectsScreen.hide(); PM.perf.auto = false; PM.quality = 1; PM.pause();
+    (window as any).warmLayers = new Set();
+    const raster = PM.raster;
+    PM.raster = (...args: any[]) => {
+      if (args[2] > 4 && args[2] < 4.5 && PM.time < 4) (window as any).warmLayers.add(args[0].id);
+      return raster(...args);
+    };
+    PM.setTime(119 / 30);
+  });
+  await expect.poll(() => page.evaluate(() => (window as any).warmLayers.size), { timeout: 1800 }).toBe(80);
+  const result = await page.evaluate(() => {
+    const PM = (window as any).PM, timeBefore = PM.time;
+    PM.agentFrameCapture = true;
+    const gl = PM.GL.gl, upload = gl.texImage2D.bind(gl);
+    let sourceUploads = 0;
+    gl.texImage2D = (...args: any[]) => { if (args.length === 6) sourceUploads++; return upload(...args); };
+    PM.GL.render(121 / 30, { mblur: false });
+    const first = new Uint8Array(gl.drawingBufferWidth * gl.drawingBufferHeight * 4);
+    gl.readPixels(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight, gl.RGBA, gl.UNSIGNED_BYTE, first);
+    gl.texImage2D = upload;
+    PM.rasterClear();
+    PM.GL.render(121 / 30, { mblur: false, sourceClipping: false });
+    const reference = new Uint8Array(first.length);
+    gl.readPixels(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight, gl.RGBA, gl.UNSIGNED_BYTE, reference);
+    let maxDifference = 0;
+    for (let i = 0; i < first.length; i++) maxDifference = Math.max(maxDifference, Math.abs(first[i]! - reference[i]!));
+    return { sourceUploads, maxDifference, timeBefore, timeAfter: PM.time, draws: PM.GL.stats.draws };
+  });
+  expect(result.sourceUploads).toBe(0);
+  expect(result.maxDifference).toBeLessThanOrEqual(1);
+  expect(result.timeBefore).toBe(119 / 30);
+  expect(result.timeAfter).toBe(result.timeBefore);
+  expect(result.draws).toBeGreaterThanOrEqual(80);
+  expect(session.diagnostics.pageErrors).toEqual([]);
+});
 
 test('fitted previews skip offscreen oversized sources and keep the rendered pixels', async ({ session }) => {
   await session.page.waitForFunction(() => Boolean((window as any).PM.GL.gl));

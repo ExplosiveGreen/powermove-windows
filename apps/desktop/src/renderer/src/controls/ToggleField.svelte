@@ -1,7 +1,7 @@
 <script lang="ts">
   import { sel } from '../state/selection.svelte';
   import { doc } from '../state/document.svelte';
-  import { transport } from '../state/transport.svelte';
+  import { controlTime } from '../state/transport.svelte';
   import { EditGesture, type EditBinding } from './gesture';
   import { rowLabelId } from './context';
   import './controls.css';
@@ -27,12 +27,13 @@
   } = $props();
 
   const labelledBy = rowLabelId();
-  const value = $derived((doc.tick.values, doc.proj, transport.time, !!get()));
-  const isMixed = $derived((sel.layers, doc.tick.values, doc.proj, transport.time, mixed?.(edit, value) ?? false));
+  const value = $derived((doc.tick.values, doc.proj, controlTime(), !!get()));
+  const isMixed = $derived((sel.layers, doc.tick.values, doc.proj, controlTime(), mixed?.(edit, value) ?? false));
   const gesture = $derived(new EditGesture(api, edit));
 
   function set(next: boolean): void {
-    if (!isMixed && next === value) return;
+    const current = !!get();
+    if (!(mixed?.(edit, current) ?? false) && next === current) return;
     gesture.once(next);
     api.transport.invalidate();
   }
@@ -40,7 +41,11 @@
   function onKey(event: KeyboardEvent): void {
     if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') { event.preventDefault(); set(false); }
     else if (event.key === 'ArrowRight' || event.key === 'ArrowDown') { event.preventDefault(); set(true); }
-    else if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); set(isMixed ? true : !value); }
+    else if (event.key === ' ' || event.key === 'Enter') {
+      event.preventDefault();
+      const current = !!get();
+      set((mixed?.(edit, current) ?? false) ? true : !current);
+    }
   }
 </script>
 

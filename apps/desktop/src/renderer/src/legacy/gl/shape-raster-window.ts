@@ -68,6 +68,31 @@ export function rasterIntersectsViewport(g: { w: number; h: number; anchorX: num
   return !(x1 < 0 || y1 < 0 || x0 > g.w || y0 > g.h);
 }
 
+/** Preserve the full text bitmap's pixel grid and UV mapping while retaining
+ * only the visible window. Small sources keep their ordinary shared cache. */
+export function previewTextRaster(g: { w: number; h: number; width: number; height: number; anchorX: number; anchorY: number }, m: readonly number[], width: number, height: number): RasterWindow | undefined {
+  if (g.width * g.height < 4 * 1024 * 1024 || !(g.w > 0 && g.h > 0)
+      || m.length < 6 || !m.every(Number.isFinite)) return;
+  const [a, b, c, d, tx, ty] = m as [number, number, number, number, number, number];
+  // Arbitrary rotation/skew changes hardware filtering rounding after a crop.
+  // Preserve the established glyph-edge path unless the axes stay aligned.
+  if (!((Math.abs(b) < 1e-9 && Math.abs(c) < 1e-9) || (Math.abs(a) < 1e-9 && Math.abs(d) < 1e-9))) return;
+  const det = a * d - b * c;
+  if (Math.abs(det) < 1e-12) return;
+  const points = [[-2, -2], [width + 2, -2], [-2, height + 2], [width + 2, height + 2]].map(([x, y]) => {
+    const dx = x! - tx, dy = y! - ty;
+    return { x: ((d * dx - c * dy) / det + g.anchorX) * g.width / g.w,
+      y: ((-b * dx + a * dy) / det + g.anchorY) * g.height / g.h };
+  });
+  const step = 256;
+  const x = Math.max(0, Math.floor((Math.min(...points.map(p => p.x)) - 2) / step) * step);
+  const y = Math.max(0, Math.floor((Math.min(...points.map(p => p.y)) - 2) / step) * step);
+  const right = Math.min(g.width, Math.ceil((Math.max(...points.map(p => p.x)) + 2) / step) * step);
+  const bottom = Math.min(g.height, Math.ceil((Math.max(...points.map(p => p.y)) + 2) / step) * step);
+  if (right <= x || bottom <= y || (right - x) * (bottom - y) > g.width * g.height / 2) return;
+  return { x, y, width: right - x, height: bottom - y };
+}
+
 /** Integer scissor regions outside a guaranteed opaque rectangle. Round the
  * occluder inward so partially covered edge pixels always retain their source. */
 export function uncoveredRasterRegions(width: number, height: number, cover: RasterWindow): RasterWindow[] {
