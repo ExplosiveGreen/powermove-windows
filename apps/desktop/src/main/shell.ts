@@ -1,4 +1,4 @@
-import { shell, type IpcMain, type IpcMainInvokeEvent } from 'electron';
+import { BrowserWindow, shell, type IpcMain, type IpcMainInvokeEvent } from 'electron';
 import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,6 +11,8 @@ import { IPC } from '../shared/ipc';
 export interface ShellIpcContext {
   isTrustedSender(event: IpcMainInvokeEvent): boolean;
   attachmentCacheDirectory?: string;
+  /** Test seam; defaults to the sender's BrowserWindow. */
+  windowFor?: (event: IpcMainInvokeEvent) => Pick<BrowserWindow, 'isDestroyed' | 'isFocused'> | null;
 }
 
 function attachmentName(value: unknown): string | null {
@@ -48,6 +50,7 @@ export function parseExternalUrl(value: unknown): URL | null {
 }
 
 export function registerShellIpc(ipcMain: Pick<IpcMain, 'handle'>, ctx: ShellIpcContext): void {
+  const windowFor = ctx.windowFor ?? ((event: IpcMainInvokeEvent) => BrowserWindow.fromWebContents(event.sender));
   ipcMain.handle(IPC.openExternal, async (event, value: unknown): Promise<void> => {
     if (!ctx.isTrustedSender(event)) throw new Error('Unauthorized IPC sender');
 
@@ -58,11 +61,14 @@ export function registerShellIpc(ipcMain: Pick<IpcMain, 'handle'>, ctx: ShellIpc
 
   /* The renderer already applied the extension's policy (links, prompt,
      rate); what reaches the browser is still only an https URL it could
-     have typed, whatever the renderer sent. */
+     have typed, whatever the renderer sent, and only from the window the
+     person is using: an extension never opens a tab from the background. */
   ipcMain.handle(IPC.extensionOpenExternal, async (event, value: unknown): Promise<void> => {
     if (!ctx.isTrustedSender(event)) throw new Error('Unauthorized IPC sender');
     const url = parseExtensionUrl(value);
     if (url === null) throw new IpcValidationError(IPC.extensionOpenExternal, 'expected an https URL of at most 2 KB without credentials');
+    const window = windowFor(event);
+    if (!window || window.isDestroyed() || !window.isFocused()) throw new Error('Extension links open only from the focused window');
     await shell.openExternal(url.href);
   });
 

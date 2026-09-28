@@ -18,7 +18,7 @@ const MiB = 1024 * 1024;
 const chunk = new NodeBlob([new Uint8Array(MiB)]);
 const fileOf = (mebibytes: number, name = 'photo.png') => new NodeFile(Array(mebibytes).fill(chunk), name, { type: 'image/png' });
 
-async function runtime(permissions: string[]) {
+async function runtime(permissions: string[], links?: string[]) {
   vi.stubGlobal('File', NodeFile);
   vi.stubGlobal('Blob', NodeBlob);
   const kernel = createKernel();
@@ -26,13 +26,13 @@ async function runtime(permissions: string[]) {
   const project = { get: () => ({ id: 'test' }), revision: () => 1, selection: () => ({ layers: [], keys: [], chan: null }), time: () => 0, playing: () => false,
     apply: vi.fn(), select: vi.fn(), setTime: vi.fn(), play: vi.fn(), pause: vi.fn(), undo: vi.fn(), redo: vi.fn(), snapshot: async () => '' } as unknown as ProjectAPI;
   const deps = { pm: { dismissToast: vi.fn() }, state: { doc: {}, sel: {}, transport: {}, perf: {} }, project,
-    ui: { controls: {}, toast: vi.fn(), confirm: async () => true, menu: vi.fn(), modal: vi.fn(), icon: () => '' },
+    ui: { controls: {}, toast: vi.fn(), confirm: vi.fn(async () => true), openExternal: vi.fn(async () => true), menu: vi.fn(), modal: vi.fn(), icon: () => '' },
     assets: { pick: async () => [], import: imported, get: () => undefined, readText: async () => '' },
     storage: () => ({ get: () => undefined, set: vi.fn(), delete: vi.fn() }),
     extensions: { list: () => [], setEnabled: vi.fn(), remove: vi.fn(), reload: vi.fn(), reveal: vi.fn(), requestFix: vi.fn(), rebase: vi.fn() },
     panelsBackend: { open: vi.fn(), close: vi.fn(), isOpen: () => false, refresh: vi.fn(), list: () => [] }, paletteOpen: vi.fn(), reportRuntimeError: vi.fn()
   } as unknown as HostDeps;
-  const record = { id: 'importer', trust: 'store', scope: 'user', manifest: { id: 'importer', name: 'Importer', version: '1.0.0', apiVersion: 3, permissions }, dir: '/tmp/importer', enabled: true, bundleUrl: '/ext/importer/bundle.js', bundleHash: 'x', health: { state: 'ok' }, updatedAt: 0 } as ExtensionRecord;
+  const record = { id: 'importer', trust: 'store', scope: 'user', manifest: { id: 'importer', name: 'Importer', version: '1.0.0', apiVersion: 3, permissions, ...(links ? { links } : {}) }, dir: '/tmp/importer', enabled: true, bundleUrl: '/ext/importer/bundle.js', bundleHash: 'x', health: { state: 'ok' }, updatedAt: 0 } as ExtensionRecord;
   const frame = document.createElement('iframe');
   let client!: ReturnType<typeof createRpc>;
   const views: Array<{ frame: HTMLIFrameElement; rpc: ReturnType<typeof createRpc> }> = [];
@@ -205,4 +205,28 @@ it('refuses ui.copy from a focused panel nobody just clicked or typed in (focus 
   activation(true);
   await view.rpc.call('invoke', 'ui', 'copy', ['x']);
   expect(clipboardWriteText).toHaveBeenCalledWith('x');
+});
+
+it('opens a listed link without a sheet only from a focused panel right after a real click or key press', async () => {
+  let clock = 1_000_000;
+  vi.spyOn(performance, 'now').mockImplementation(() => clock);
+  const { openView, deps } = await runtime(['network'], ['https://docs.example']);
+  const view = await openView();
+  view.frame.tabIndex = 0;
+  const confirm = vi.mocked(deps.ui.confirm);
+  const open = () => { clock += 2_000; return view.rpc.call('invoke', 'ui', 'openExternal', ['https://docs.example/guide']); };
+  // Focused, but nobody acted: focus came back with Command-Tab.
+  view.frame.focus();
+  activation(false);
+  await open();
+  expect(confirm).toHaveBeenCalledTimes(1);
+  // Acted, but somewhere else: another panel or the canvas has focus.
+  view.frame.blur();
+  activation(true);
+  await open();
+  expect(confirm).toHaveBeenCalledTimes(2);
+  view.frame.focus();
+  await open();
+  expect(confirm).toHaveBeenCalledTimes(2);
+  expect(deps.ui.openExternal).toHaveBeenCalledTimes(3);
 });

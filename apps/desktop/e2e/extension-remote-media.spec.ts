@@ -83,10 +83,12 @@ test('a sandboxed extension without network cannot import by URL', async ({ sess
 
 test('a sandboxed extension opens its listed origin directly and asks, showing the URL, for any other', async ({ session }) => {
   await start(session);
-  await session.app.evaluate(({ dialog, shell }) => {
+  await session.app.evaluate(({ BrowserWindow, dialog, shell }) => {
     const seen = { opened: [] as string[], asked: [] as Array<{ message: string; detail?: string }> };
     (globalThis as any).__links = seen;
     shell.openExternal = async (url: string) => { seen.opened.push(url); };
+    // The hidden harness's windows cannot take focus; main opens links only from a focused one.
+    for (const window of BrowserWindow.getAllWindows()) window.isFocused = () => true;
     dialog.showMessageBox = (async (_window: unknown, options: { message: string; detail?: string }) => {
       seen.asked.push({ message: options.message, detail: options.detail });
       return { response: seen.asked.length === 1 ? 0 : 1, checkboxChecked: false };
@@ -94,6 +96,8 @@ test('a sandboxed extension opens its listed origin directly and asks, showing t
   });
   const seen = () => session.app.evaluate(() => (globalThis as any).__links);
 
+  /* Playwright evaluates with a user gesture, so each run below is a command
+     a person just started (the unit tests cover calls with none). */
   expect(await run(session, 'sandbox-links.open', 'https://links.example.com/docs')).toEqual({ ok: true });
   expect(await seen()).toEqual({ opened: ['https://links.example.com/docs'], asked: [] });
 

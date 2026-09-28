@@ -460,7 +460,7 @@ describe('external URL IPC', () => {
   it('opens an extension URL only when it is https, credential-free and at most 2 KB', async () => {
     electronMocks.shellOpenExternal.mockClear().mockResolvedValue(undefined);
     const { ipcMain, invokes } = fakeIpcMain();
-    registerShellIpc(ipcMain, { isTrustedSender: () => true });
+    registerShellIpc(ipcMain, { isTrustedSender: () => true, windowFor: () => ({ isDestroyed: () => false, isFocused: () => true }) });
     await invokes.get(IPC.extensionOpenExternal)?.(invokeEvent(), 'https://replicate.com/account/api-tokens');
     expect(electronMocks.shellOpenExternal).toHaveBeenCalledWith('https://replicate.com/account/api-tokens');
     for (const url of ['http://example.com', 'https://user:pass@example.com', `https://example.com/${'a'.repeat(2048)}`, 'file:///etc/passwd', 42]) {
@@ -472,6 +472,23 @@ describe('external URL IPC', () => {
     registerShellIpc(untrusted.ipcMain, { isTrustedSender: () => false });
     await expect(untrusted.invokes.get(IPC.extensionOpenExternal)?.(invokeEvent(), 'https://example.com')).rejects.toThrow('Unauthorized IPC sender');
     expect(electronMocks.shellOpenExternal).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens an extension URL only from the focused window, never from the background', async () => {
+    electronMocks.shellOpenExternal.mockClear().mockResolvedValue(undefined);
+    const focused = { isDestroyed: () => false, isFocused: () => false };
+    const sender = {};
+    electronMocks.browserWindowFromWebContents.mockImplementation((contents: unknown) => contents === sender ? focused : null);
+    const { ipcMain, invokes } = fakeIpcMain();
+    registerShellIpc(ipcMain, { isTrustedSender: () => true });
+    const open = (from: object) => invokes.get(IPC.extensionOpenExternal)!(invokeEvent(from), 'https://replicate.com/');
+    await expect(open(sender)).rejects.toThrow('focused window');
+    await expect(open({})).rejects.toThrow('focused window');
+    expect(electronMocks.shellOpenExternal).not.toHaveBeenCalled();
+    focused.isFocused = () => true;
+    await open(sender);
+    expect(electronMocks.shellOpenExternal).toHaveBeenCalledWith('https://replicate.com/');
+    electronMocks.browserWindowFromWebContents.mockReset();
   });
 
   it('rejects an untrusted sender before opening an external URL', async () => {

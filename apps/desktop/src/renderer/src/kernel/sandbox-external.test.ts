@@ -52,7 +52,8 @@ async function sandbox(permissions: ExtensionPermission[], links?: string[]) {
   const frame = document.createElement('iframe');
   let api!: PowermoveAPI;
   let client!: ReturnType<typeof createRpc>;
-  const pending = createSandboxRuntime(createKernel(), record, deps, {}, { frame, onPostInit(port, init) {
+  const kernel = createKernel();
+  const pending = createSandboxRuntime(kernel, record, deps, {}, { frame, onPostInit(port, init) {
     client = createRpc(port, {});
     api = createSandboxAPI(client, init);
     client.notify('activated');
@@ -60,15 +61,57 @@ async function sandbox(permissions: ExtensionPermission[], links?: string[]) {
   frame.dispatchEvent(new Event('load'));
   const runtime = await pending;
   close.push(() => { runtime.dispose(); client.close(); });
-  return { api, client, record, deps, confirm, openExternal };
+  return { api, client, record, deps, confirm, openExternal, kernel };
 }
 
+/** The app document's transient user activation, which only the browser sets. */
+function activation(isActive: boolean): void {
+  Object.defineProperty(navigator, 'userActivation', { configurable: true, value: { isActive, hasBeenActive: isActive } });
+}
+afterEach(() => { delete (navigator as { userActivation?: unknown }).userActivation; });
+
 describe('ui.openExternal', () => {
-  it('opens a listed origin from the sandbox without a prompt when the extension has network', async () => {
-    const { api, confirm, openExternal } = await sandbox(['network'], ['https://replicate.com']);
-    await expect(api.ui.openExternal('https://replicate.com/account/api-tokens')).resolves.toBe(true);
+  it('opens a listed origin without a prompt from a command the person just ran, when the extension has network', async () => {
+    const { api, kernel, confirm, openExternal } = await sandbox(['network'], ['https://replicate.com']);
+    api.commands.register({ id: 'link-ext.docs', label: 'Docs', run: () => api.ui.openExternal('https://replicate.com/account/api-tokens') });
+    await vi.waitFor(() => expect(kernel.commands.get('link-ext.docs')).toBeTruthy());
+    activation(true);
+    await kernel.commands.get('link-ext.docs')!.run();
     expect(confirm).not.toHaveBeenCalled();
     expect(openExternal).toHaveBeenCalledWith('https://replicate.com/account/api-tokens');
+  });
+
+  it('asks for a listed origin with no person behind it: from a timer, a command run with no activation, or its own commands.run', async () => {
+    let clock = 1_000_000;
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    const { api, kernel, confirm, openExternal } = await sandbox(['network'], ['https://replicate.com']);
+    // A loop in activate: every call asks, and a declined sheet stops the asking.
+    await expect(api.ui.openExternal('https://replicate.com/?from=timer')).resolves.toBe(true);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    api.commands.register({ id: 'link-ext.docs', label: 'Docs', run: () => api.ui.openExternal('https://replicate.com/?from=command') });
+    await vi.waitFor(() => expect(kernel.commands.get('link-ext.docs')).toBeTruthy());
+    clock += 2_000;
+    activation(false);
+    await kernel.commands.get('link-ext.docs')!.run();
+    expect(confirm).toHaveBeenCalledTimes(2);
+    // The app holds a person's activation, but the extension ran its own command.
+    clock += 2_000;
+    activation(true);
+    await api.commands.run('link-ext.docs');
+    await vi.waitFor(() => expect(confirm).toHaveBeenCalledTimes(3));
+    expect(openExternal).toHaveBeenCalledTimes(3);
+    // A run the person started stops counting 5 s after they acted.
+    clock += 2_000;
+    let finish!: () => void;
+    api.commands.register({ id: 'link-ext.slow', label: 'Slow', run: async () => { await new Promise<void>(resolve => { finish = resolve; }); return api.ui.openExternal('https://replicate.com/?from=slow'); } });
+    await vi.waitFor(() => expect(kernel.commands.get('link-ext.slow')).toBeTruthy());
+    const slow = kernel.commands.get('link-ext.slow')!.run() as Promise<unknown>;
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    clock += 5_000;
+    finish();
+    await slow;
+    expect(confirm).toHaveBeenCalledTimes(4);
+    vi.mocked(performance.now).mockRestore();
   });
 
   it('asks first, on the host, for an unlisted URL and for every URL without network', async () => {

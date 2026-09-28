@@ -80,7 +80,7 @@ reloaded, or removed. Return a `Disposable` or use `api.onDispose` for anything 
 | `forkedFrom` | no | `"<id>@<version>"` for a built-in or `"<handle>/<id>@<version>"` for a Store fork |
 | `vars` | no | `apiVersion: 2`; up to 32 declarations `{ key, label, secret?, hint? }`. Keys use uppercase letters, digits and underscores, starting with a letter. Read values through `api.vars`; never put credentials in source. |
 | `permissions` | no | `apiVersion: 3`; see [Permissions and the sandbox](#permissions-and-the-sandbox) |
-| `links` | no | `apiVersion: 3`; up to 5 https origins, written exactly as `"https://example.com"`, that `ui.openExternal` opens without asking when the extension also declares `network`. The Store lists them. See [Opening links and importing from a URL](#opening-links-and-importing-from-a-url). |
+| `links` | no | `apiVersion: 3`; up to 5 https origins, written exactly as `"https://example.com"`, that `ui.openExternal` opens without asking, when the extension also declares `network` and the person just acted. The Store lists them. See [Opening links and importing from a URL](#opening-links-and-importing-from-a-url). |
 | `author` | no | `powermove` \| `user` \| `agent` |
 
 Imports allowed: `powermove` (types only), the client-side Svelte modules listed in
@@ -137,15 +137,23 @@ Store extensions supply simple event names; the kernel publishes them as `ext:<e
 `await api.ui.openExternal(url)` opens an https URL in the person's browser and
 resolves `true`, or `false` when they decline. The URL must be https, at most 2
 KB, and carry no user name or password. One call may be pending and at most one
-runs every 2 s; others reject with `code: 'resource_limit'`.
+runs every 2 s; others reject with `code: 'resource_limit'`. Nothing opens
+while Powermove's window is in the background.
 
-- An origin listed in the manifest's `links` opens without asking, but only when
-  the extension also declares `network`. Origins match exactly: listing
+- An origin listed in the manifest's `links` opens without asking only when the
+  extension also declares `network` and the call answers something the person
+  just did: from one of the extension's panels while it has focus, within 5
+  seconds of a click or key press, or from a command, status item, palette,
+  menu or toast item the person started, within 5 seconds of starting it (not
+  from the extension's own `commands.run`, a timer or an event). At most 3
+  links a minute open this way. Origins match exactly: listing
   `https://example.com` covers neither `https://www.example.com` nor another port.
-- Every other URL, and every URL when the extension lacks `network`, opens only
-  after the person confirms a Powermove sheet that names the extension by its id
-  (not its display name) and shows the whole URL. Without `network`, a link is the one way data could leave, so
-  it always asks.
+- Every other call, and every call when the extension lacks `network`, opens
+  only after the person confirms a Powermove sheet that names the extension by
+  its id (not its display name) and shows the whole URL. Without `network`, a
+  link is the one way data could leave, so it always asks.
+- After the person declines, calls that would ask reject with
+  `code: 'resource_limit'` for 30 seconds.
 
 ```json
 "permissions": ["network"],
