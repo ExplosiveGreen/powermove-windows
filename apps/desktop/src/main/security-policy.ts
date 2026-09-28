@@ -31,8 +31,9 @@ export function extensionSandboxCsp(id: string, permissions: readonly string[], 
   return [
     "default-src 'none'",
     `script-src ${origin}/host/ ${origin}/ext/${id}/ 'wasm-unsafe-eval'${devScript}`,
-    `style-src 'unsafe-inline' ${origin}/${devScript}`,
-    `font-src ${origin}/`,
+    // Bundled fonts are data: URLs; remote fonts and stylesheets need network. CSS cannot run script.
+    `style-src 'unsafe-inline' ${origin}/${remote}${devScript}`,
+    `font-src ${origin}/ data: blob:${remote}`,
     `img-src data: blob:${remote}`,
     `media-src data: blob:${remote}`,
     `connect-src ${connect}`,
