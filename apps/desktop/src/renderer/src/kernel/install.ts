@@ -103,6 +103,7 @@ import {
 } from '../layout/model';
 import { bridge as hostBridge } from './bridge';
 import { parseExtensionUrl } from '../../../shared/extension-url';
+import { fetchRemoteMedia } from './remote-media';
 
 type LegacyPM = Record<string, any>;
 type ExtensionsHostBridge = ExtensionsBridge & Partial<Pick<PowermoveExtensionsBridge, 'fork'>>;
@@ -539,7 +540,7 @@ function makeStorage(PM: LegacyPM): (id: string) => StorageAPI {
 }
 
 function makeAssets(PM: LegacyPM): AssetsAPI {
-  return {
+  const assets: AssetsAPI = {
     pick: (options = {}) => new Promise<File[]>((resolve, reject) => {
       const input = window.document.createElement('input');
       input.type = 'file';
@@ -576,8 +577,10 @@ function makeAssets(PM: LegacyPM): AssetsAPI {
       const blob = live?.blob instanceof Blob ? live.blob : await PM?.MediaStore?.get?.(meta);
       if (!(blob instanceof Blob)) throw new Error(`Asset data is missing: ${meta.name || id}`);
       return blob.text();
-    }
+    },
+    importUrl: async (url) => (await assets.import(await fetchRemoteMedia(url))).id
   };
+  return assets;
 }
 
 /**

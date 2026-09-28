@@ -13,13 +13,14 @@ import { sandboxBundleUrl, sandboxDocumentUrl, sandboxOrigin } from '../../../sh
 import { watchSandbox } from './sandbox-watchdog';
 import { menuEntriesSchema, paletteEntriesSchema, parseHostEvent, parseInvoke, parseRegistration } from './sandbox-schemas';
 import { sandboxOpenExternal } from './sandbox-links';
+import { sandboxImportUrl } from './sandbox-import-url';
 
 /** Kernel events that can change a document's SandboxState. */
 const STATE_EVENTS = ['project:changed', 'selection', 'time', 'transport'] as const;
 export interface SandboxRuntime { handle: ExtensionHandle; dispose(): void }
 const SAFE_INVOKE: Record<string, Set<string>> = {
   commands: new Set(['run']), project: new Set(['apply', 'select', 'setTime', 'play', 'pause', 'undo', 'redo', 'snapshot']),
-  transport: new Set(['step']), assets: new Set(['pick', 'import', 'get', 'readText']),
+  transport: new Set(['step']), assets: new Set(['pick', 'import', 'get', 'readText', 'importUrl']),
   storage: new Set(['get', 'set', 'delete']), ui: new Set(['toast', 'confirm', 'icon', 'openExternal']),
   panels: new Set(['open', 'close', 'refresh']), keybindings: new Set(['unbind']),
   theme: new Set(['activate']), palette: new Set(['open']),
@@ -166,6 +167,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   const storageValues = new Map<string, unknown>(persistedStorage && typeof persistedStorage === 'object' && !Array.isArray(persistedStorage)
     ? Object.entries(persistedStorage) : []);
   const openExternal = sandboxOpenExternal({ manifest: () => manifest, ui: host.api.ui });
+  const importUrl = sandboxImportUrl({ manifest: () => manifest, assets: host.api.assets });
   const invoke = (namespace: string, method: string, args: unknown): unknown => {
     if (!SAFE_INVOKE[namespace]?.has(method)) throw new Error(`Sandbox method unavailable: ${namespace}.${method}`);
     const parsed = parseInvoke(namespace, method, args);
@@ -185,6 +187,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     }
     if (namespace === 'keybindings') { reg.unbind(record.id, String(parsed[0]), false); return; }
     if (namespace === 'ui' && method === 'openExternal') return openExternal(parsed[0]);
+    if (namespace === 'assets' && method === 'importUrl') return importUrl(parsed[0]);
     if (namespace === 'panels' && !ownId(record.id, String(parsed[0]))) denied('panels may act only on your own ids');
     if (namespace === 'theme' && method === 'activate' && !ownId(record.id, String(parsed[0]))) denied('theme.activate accepts only your themes');
     if (namespace === 'assets' && method !== 'get' && !permissions.includes('assets')) {

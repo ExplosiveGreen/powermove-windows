@@ -43,7 +43,7 @@ export const invokeSchemas: Record<string, z.ZodType> = {
   'project.apply': anyArgs, 'project.select': anyArgs, 'project.setTime': z.tuple([z.number().finite()]),
   'project.play': z.tuple([]), 'project.pause': z.tuple([]), 'project.undo': z.tuple([]), 'project.redo': z.tuple([]), 'project.snapshot': anyArgs,
   'transport.step': z.tuple([z.number().finite()]),
-  'assets.pick': anyArgs, 'assets.import': z.tuple([z.custom<File>(value => typeof File !== 'undefined' && value instanceof File), data.optional()]), 'assets.get': oneId, 'assets.readText': oneId,
+  'assets.pick': anyArgs, 'assets.import': z.tuple([z.custom<File>(value => typeof File !== 'undefined' && value instanceof File), data.optional()]), 'assets.get': oneId, 'assets.readText': oneId, 'assets.importUrl': z.tuple([z.string().max(EXTENSION_URL_MAX)]),
   'storage.get': z.tuple([storageKey]), 'storage.set': z.tuple([storageKey, data]), 'storage.delete': z.tuple([storageKey]),
   'ui.toast': anyArgs, 'ui.confirm': anyArgs, 'ui.icon': anyArgs, 'ui.openExternal': z.tuple([z.string().max(EXTENSION_URL_MAX)]),
   'panels.open': anyArgs, 'panels.close': oneId, 'panels.refresh': oneId,

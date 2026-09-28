@@ -68,7 +68,8 @@ function harness(kernel: Kernel = createKernel()) {
       pick: async () => [],
       import: async (file) => ({ id: 'asset-1', name: file.name, kind: 'model' }),
       get: () => undefined,
-      readText: async () => ''
+      readText: async () => '',
+      importUrl: async () => 'asset-1'
     },
     storage,
     extensions: { list: () => [], setEnabled: async () => {}, remove: async () => {}, reload: async () => {}, reveal: async () => {}, requestFix: vi.fn(), rebase: vi.fn() },

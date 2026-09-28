@@ -110,3 +110,61 @@ describe('ui.openExternal', () => {
     expect(openExternal).not.toHaveBeenCalled();
   });
 });
+
+describe('assets.importUrl', () => {
+  it('imports through the host when the record grants assets and network, one download at a time', async () => {
+    const { api, deps } = await sandbox(['assets', 'network']);
+    let finish!: (id: string) => void;
+    const importUrl = vi.fn((_url: string) => new Promise<string>(resolve => { finish = resolve; }));
+    (deps.assets as { importUrl?: unknown }).importUrl = importUrl;
+    const first = api.assets.importUrl('https://cdn.example/photo.png');
+    await vi.waitFor(() => expect(importUrl).toHaveBeenCalledWith('https://cdn.example/photo.png'));
+    await expect(api.assets.importUrl('https://cdn.example/other.png')).rejects.toMatchObject({ code: 'resource_limit' });
+    finish('asset-7');
+    await expect(first).resolves.toBe('asset-7');
+    importUrl.mockResolvedValueOnce('asset-8');
+    await expect(api.assets.importUrl('https://cdn.example/other.png')).resolves.toBe('asset-8');
+  });
+
+  it('needs both permissions from the kernel’s record, and a short URL', async () => {
+    for (const permissions of [['assets'], ['network'], []] as ExtensionPermission[][]) {
+      const { client, deps } = await sandbox(permissions);
+      const importUrl = vi.fn(async () => 'asset');
+      (deps.assets as { importUrl?: unknown }).importUrl = importUrl;
+      await expect(client.call('invoke', 'assets', 'importUrl', ['https://cdn.example/a.png'])).rejects.toMatchObject({ name: 'PermissionError' });
+      expect(importUrl).not.toHaveBeenCalled();
+    }
+    const { client } = await sandbox(['assets', 'network']);
+    await expect(client.call('invoke', 'assets', 'importUrl', [`https://cdn.example/${'a'.repeat(2048)}`])).rejects.toMatchObject({ name: 'ZodError' });
+    await expect(client.call('invoke', 'assets', 'importUrl', [{ href: 'https://cdn.example/a.png' }])).rejects.toMatchObject({ name: 'ZodError' });
+  });
+
+  it('downloads nothing during a sandbox check', async () => {
+    const { quietDeps } = await import('./sandbox-check');
+    const { deps } = makeDeps();
+    const importUrl = vi.fn(async () => 'asset');
+    (deps.assets as { importUrl?: unknown }).importUrl = importUrl;
+    await expect(quietDeps(deps, () => {}).assets.importUrl('https://cdn.example/a.png')).rejects.toThrow('sandbox check');
+    expect(importUrl).not.toHaveBeenCalled();
+  });
+
+  it('in-realm, downloads through main, decodes, imports through the normal asset path and returns the id', async () => {
+    const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+    const remoteMedia = {
+      fetch: vi.fn(async () => ({ token: 't', size: png.byteLength, name: 'photo.png', type: 'image/png', kind: 'image' as const })),
+      read: vi.fn(async (_token: string, offset: number, length: number) => png.slice(offset, offset + length)),
+      release: vi.fn(async () => undefined)
+    };
+    installBridgeForTests({ remoteMedia } as unknown as PowermoveBridge);
+    const close = vi.fn();
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ close })));
+    try {
+      const PM = fakePM();
+      installed = installKernel(PM);
+      await expect(installed.api('trusted-ext').assets.importUrl('https://cdn.example/photo.png')).resolves.toBe('asset-1');
+      expect(PM.assets.add).toHaveBeenCalledWith(expect.objectContaining({ name: 'photo.png', type: 'image/png', size: png.byteLength }), expect.anything());
+      expect(close).toHaveBeenCalled();
+      expect(remoteMedia.release).toHaveBeenCalledWith('t');
+    } finally { vi.unstubAllGlobals(); }
+  });
+});

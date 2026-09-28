@@ -292,6 +292,14 @@ export interface AssetsAPI {
   pick(options?: { accept?: string; multiple?: boolean }): Promise<File[]>;
   /** Import into Powermove's durable project media store. The file remains after layer Undo. */
   import(file: File, options?: { layerDefinition?: string }): Promise<AssetRecord>;
+  /**
+   * Download an https image, video or audio file (at most 512 MiB) and import it
+   * like `import`; resolves to the new asset's id. Sandboxed, it needs `assets`
+   * and `network` and runs one download at a time. Powermove fetches it without
+   * credentials or cookies, from public addresses only, following at most 5
+   * https redirects, and imports it only if it decodes as media.
+   */
+  importUrl(url: string): Promise<string>;
   /** Returns a Promise when the extension runs sandboxed (Store installs). */
   get(id: string): AssetRecord | undefined;
   /** Read a text asset from the live cache or durable media store. */

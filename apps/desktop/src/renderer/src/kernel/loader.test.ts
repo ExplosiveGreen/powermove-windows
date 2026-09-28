@@ -91,7 +91,7 @@ function fakeDeps(): { deps: Omit<HostDeps, 'reportRuntimeError'>; toasts: strin
         icon: () => ''
       },
       project,
-      assets: { pick: async () => [], import: async (file) => ({ id: 'a', name: file.name, kind: 'model' }), get: () => undefined, readText: async () => '' },
+      assets: { pick: async () => [], import: async (file) => ({ id: 'a', name: file.name, kind: 'model' }), get: () => undefined, readText: async () => '', importUrl: async () => 'a' },
       storage: () => ({ get: () => undefined, set: () => {}, delete: () => {} }),
       extensions: { list: () => [], setEnabled: async () => {}, remove: async () => {}, reload: async () => {}, reveal: async () => {}, requestFix: () => {}, rebase: () => {} },
       panelsBackend: { open: () => {}, close: () => {}, isOpen: () => false, refresh: () => {}, list: () => [] },

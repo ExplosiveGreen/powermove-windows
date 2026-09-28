@@ -100,6 +100,7 @@ export function quietDeps(deps: Omit<HostDeps, 'reportRuntimeError'>, onError: (
     assets: {
       pick: async () => [],
       import: async () => { throw new Error('Importing is off during a sandbox check'); },
+      importUrl: async () => { throw new Error('Importing is off during a sandbox check'); },
       get: (id) => deps.assets.get(id),
       readText: (id) => deps.assets.readText(id)
     },
