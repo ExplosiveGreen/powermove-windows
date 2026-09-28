@@ -219,6 +219,8 @@ export class CompatibleProvider {
       return { ok: false, cancelled: controller.signal.aborted, error: controller.signal.aborted ? 'Stopped.' : signal.aborted ? 'The model took too long. Your conversation is kept; try again.' : error instanceof Error ? error.message : 'The model connection failed.' };
     } finally {
       if (workspace) {
+        // No command or background job outlives its run.
+        await workspace.stopCommands().catch(() => undefined);
         if (signal.aborted && !finished) {
           await mkdir(path.dirname(workspace.layout.sessionPath), { recursive: true })
             .then(() => preserveCancelledRun(workspace!.layout)).catch(() => undefined);

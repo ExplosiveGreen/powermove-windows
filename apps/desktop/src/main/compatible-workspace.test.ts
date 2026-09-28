@@ -2,7 +2,7 @@ import { afterEach, expect, it } from 'vitest';
 import { mkdtemp, readFile, readdir, realpath, rm, symlink, access, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { CompatibleWorkspace, runWorkspaceCommand } from './compatible-workspace';
+import { COMPATIBLE_WORKSPACE_TOOLS, CompatibleWorkspace, runWorkspaceCommand } from './compatible-workspace';
 import { prepareAgentWorkspace } from './codex/workspace';
 import { agentResultSchema } from './codex/instructions';
 
@@ -141,6 +141,53 @@ it.runIf(process.platform === 'darwin')('stops what a command leaves running and
   const escaped = Number(/(\d+)/.exec(String(timedOut))?.[1]);
   expect(escaped).toBeGreaterThan(1);
   await expect.poll(() => alive(escaped)).toBe(false);
+});
+
+it('allows up to ten minutes per command and keeps the thirty second default', async () => {
+  const ws = await workspace();
+  await expect(ws.call('run_command', { command: 'true', timeoutMs: 600_001 }, signal())).rejects.toThrow('between 1 and 600000');
+  await expect(ws.call('run_command', { command: 'true', background: 'yes' }, signal())).rejects.toThrow('background');
+  const spec = COMPATIBLE_WORKSPACE_TOOLS.find(tool => tool.name === 'run_command')!;
+  expect((spec.inputSchema as any).properties.timeoutMs.maximum).toBe(600_000);
+  expect(spec.description).toContain('30 seconds');
+});
+
+it.runIf(process.platform === 'darwin')('runs background jobs, reports them and stops them with everything they started', async () => {
+  const ws = await workspace();
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const json = async (name: string, args: Record<string, unknown>) => JSON.parse(((await ws.call(name, args, signal()))[0] as any).text);
+  expect(await json('run_command', { command: 'sleep 0.2; printf done', background: true })).toEqual({ jobId: 'job-1', state: 'running' });
+  expect(await json('command_status', { jobId: 'job-1', waitMs: 10_000 })).toMatchObject({ jobId: 'job-1', state: 'exited', exitCode: 0, output: 'done' });
+  await ws.call('run_command', { command: 'printf "%s " $$; sleep 30 & printf "%s" $!; wait', background: true }, signal());
+  await expect.poll(async () => (await json('command_status', { jobId: 'job-2' })).output).toMatch(/^\d+ \d+$/);
+  const pids = (await json('command_status', { jobId: 'job-2' })).output.split(' ').map(Number) as number[];
+  expect(pids.every(alive)).toBe(true);
+  expect(await json('command_status', { jobId: 'job-2', stop: true })).toMatchObject({ state: 'stopped' });
+  for (const pid of pids) await expect.poll(() => alive(pid)).toBe(false);
+  await expect(ws.call('command_status', { jobId: 'job-9' }, signal())).rejects.toThrow('Unknown background job');
+  for (let index = 0; index < 4; index++) await ws.call('run_command', { command: 'sleep 30', background: true }, signal());
+  await expect(ws.call('run_command', { command: 'sleep 30', background: true }, signal())).rejects.toThrow('At most 4');
+  await ws.stopCommands();
+  expect((await json('command_status', { jobId: 'job-6' })).state).toBe('stopped');
+});
+
+it.runIf(process.platform === 'darwin')('stops background jobs before complete_task validates and when the run is stopped', async () => {
+  const ws = await workspace();
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const pidOf = async (file: string) => {
+    await expect.poll(() => readFile(path.join(ws.layout.root, file), 'utf8').then(text => /^\d+\n$/.test(text), () => false)).toBe(true);
+    return Number(await readFile(path.join(ws.layout.root, file), 'utf8'));
+  };
+  await ws.call('run_command', { command: 'echo $$ > a.pid; exec sleep 30', background: true }, signal());
+  const first = await pidOf('a.pid');
+  // Validation fails, but the job is already gone.
+  await expect(ws.finish({ summary: 'x' }, signal())).rejects.toThrow('complete_task requires');
+  expect(alive(first)).toBe(false);
+  const controller = new AbortController();
+  await ws.call('run_command', { command: 'echo $$ > b.pid; exec sleep 30', background: true }, controller.signal);
+  const second = await pidOf('b.pid');
+  controller.abort(new Error('Stopped by test'));
+  await expect.poll(() => alive(second)).toBe(false);
 });
 
 it.runIf(process.platform === 'darwin')('lets Project commands write to their inherited stdio but not other devices', async () => {
