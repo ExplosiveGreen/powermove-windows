@@ -143,3 +143,51 @@ test('a store extension’s Svelte panel renders in its own view iframe with hos
   await writeFile(testInfo.outputPath('sandbox-panel-library.png'), libraryShot);
   expect(session.diagnostics.pageErrors).toEqual([]);
 });
+
+test('a sandboxed Svelte panel follows the playhead and the project through reactive api reads', async ({ session }) => {
+  const extensions = path.join(session.userData, 'extensions');
+  await mkdir(extensions, { recursive: true });
+  await cp(path.resolve('test/fixtures/sandboxed-ext'), path.join(extensions, 'sandboxed-ext'), { recursive: true });
+  await writeFile(path.join(session.userData, 'extensions-provenance.json'), JSON.stringify({
+    'sandboxed-ext': { localId: 'sandboxed-ext', envKey: 'external-repo', origin }
+  }));
+  await session.relaunch();
+  await session.openEditor();
+  const { page } = session;
+  const panelId = 'sandboxed-ext.panel';
+  // Health first, so a build error (e.g. an unresolved svelte/transition) names itself.
+  await expect.poll(() => page.evaluate(() => {
+    const record = ((window as any).PM?.Kernel?.loader?.records?.() ?? []).find((r: any) => r.id === 'sandboxed-ext');
+    return record?.health?.error ?? record?.health?.state ?? null;
+  }), { timeout: 15_000 }).toBe('ok');
+  await page.waitForFunction((id) => (window as any).PM?.Kernel?.panels?.has(id), panelId);
+  // The fixture's Panel.svelte has no events.on: it reads api.project.revision/time/latest
+  // in $derived and reports what it rendered as `readout` (Playwright cannot look inside the frame).
+  await page.evaluate((id) => {
+    const PM = (window as any).PM;
+    (window as any).__readouts = [];
+    PM.Kernel.api('e2e-readout').events.on('ext:sandboxed-ext:readout', (value: unknown) => (window as any).__readouts.push(value));
+    PM.WS.mutate((workspace: any) => PM.Layout.addPanel(workspace, id, 'right'));
+  }, panelId);
+  const frame = page.locator(`[id="panel-${panelId}"] iframe.ext-panel-frame`);
+  await expect(frame).toHaveAttribute('data-state', 'ready', { timeout: 15_000 }); // svelte/transition compiled and mounted
+  const readout = () => page.evaluate(() => (window as any).__readouts.at(-1));
+  const host = () => page.evaluate(() => {
+    const api = (window as any).PM.Kernel.api('e2e-readout');
+    return { revision: String(api.project.revision()), time: api.project.time().toFixed(2), layers: String(api.project.get().layers.length) };
+  });
+  // The first reactive latest() read pulled the snapshot and its row faded in.
+  await expect.poll(readout).toEqual({ ...await host(), faded: true });
+
+  await page.evaluate(() => (window as any).PM.setTime(1.5, { force: true }));
+  const moved = await host();
+  expect(moved.time).toBe('1.50');
+  await expect.poll(readout).toEqual({ ...moved, faded: true });
+
+  await page.evaluate(() => (window as any).PM.Edit.apply({ type: 'add_layer', id: 'reactive-proof', layerType: 'text', name: 'Reactive proof' }));
+  const changed = await host();
+  expect(Number(changed.revision)).toBeGreaterThan(Number(moved.revision));
+  expect(Number(changed.layers)).toBe(Number(moved.layers) + 1);
+  await expect.poll(readout).toEqual({ ...changed, faded: true });
+  expect(session.diagnostics.pageErrors).toEqual([]);
+});
