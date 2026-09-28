@@ -2,6 +2,7 @@
 import { flushSync, mount, tick, unmount } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { doc } from '../state/document.svelte';
+import { transport, updateControlTime } from '../state/transport.svelte';
 import ColorField from './ColorField.svelte';
 import FillField from './FillField.svelte';
 import FontField from './FontField.svelte';
@@ -17,6 +18,7 @@ const mounted: object[] = [];
 afterEach(async () => {
   for (const component of mounted.splice(0)) await unmount(component);
   document.body.replaceChildren();
+  transport.playing = false;
   delete (window as Window & { EyeDropper?: unknown }).EyeDropper;
 });
 
@@ -89,6 +91,40 @@ function render(component: any, props: Record<string, unknown>): HTMLElement {
 const pointer = (type: string, init: PointerEventInit = {}) => new PointerEvent(type, { bubbles: true, button: 0, ...init });
 
 describe('NumField', () => {
+  it('refreshes playback readouts at 15 Hz while edits and paused scrubs use live values', () => {
+    const { api, Edit, drag } = fakeAPI();
+    let time = 0;
+    transport.playing = true;
+    updateControlTime(time, true, 0, true);
+    const get = vi.fn(() => time * 100);
+    const target = render(NumField, { api, get, edit: commandEdit(), step: 1 });
+    const input = target.querySelector<HTMLInputElement>('input')!;
+    get.mockClear();
+    for (let frame = 1; frame <= 120; frame++) {
+      time = frame / 120;
+      transport.time = time;
+      updateControlTime(time, true, frame * 1000 / 120);
+      flushSync();
+    }
+    expect(get.mock.calls.length).toBeGreaterThanOrEqual(12);
+    expect(get.mock.calls.length).toBeLessThanOrEqual(16);
+    // Editing starts from the actual value even between readout refreshes.
+    time = 1.123;
+    input.dispatchEvent(pointer('pointerdown'));
+    drag().move(4, 0, pointer('pointermove'));
+    expect(Edit.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ value: 114.3 }));
+    drag().up();
+    transport.time = .375;
+    time = .375;
+    transport.playing = false;
+    flushSync();
+    expect(input.value).toBe('38');
+    time = .125;
+    transport.time = time;
+    flushSync();
+    expect(input.value).toBe('13');
+  });
+
   it('adjusts from horizontal trackpad movement and commits one gesture', () => {
     vi.useFakeTimers();
     const { api, Edit } = fakeAPI();
@@ -269,6 +305,33 @@ describe('NumField', () => {
 });
 
 describe('one-shot fields', () => {
+  it('ToggleField uses the live animated value between playback readout ticks', () => {
+    const { api, Edit } = fakeAPI();
+    transport.playing = true;
+    updateControlTime(0, true, 0, true);
+    let current = false;
+    const target = render(ToggleField, { api, get: () => current, edit: commandEdit('Enabled') });
+    current = true;
+    target.querySelectorAll<HTMLButtonElement>('button')[0]!.click();
+    expect(Edit.apply).toHaveBeenLastCalledWith(expect.objectContaining({ value: false }), expect.anything());
+    Edit.apply.mockClear();
+    target.querySelector('.onoff')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(Edit.apply).toHaveBeenLastCalledWith(expect.objectContaining({ value: false }), expect.anything());
+  });
+
+  it('FontField applies a choice matching the stale readout when the live font has changed', async () => {
+    const { api, Edit } = fakeAPI();
+    transport.playing = true;
+    updateControlTime(0, true, 0, true);
+    let current = 'Inter';
+    const target = render(FontField, { api, get: () => current, edit: commandEdit('Font') });
+    current = 'Avenir Next';
+    target.querySelector<HTMLButtonElement>('button')!.click();
+    await tick();
+    document.body.querySelectorAll<HTMLButtonElement>('.font-menu-row')[0]!.click();
+    expect(Edit.apply).toHaveBeenCalledWith(expect.objectContaining({ value: 'Inter' }), expect.anything());
+  });
+
   it('ToggleField applies the inverted getter value once', () => {
     const { api, Edit, invalidate } = fakeAPI();
     const target = render(ToggleField, { api, get: () => false, edit: commandEdit('Enabled'), label: 'Enabled' });
@@ -341,6 +404,19 @@ describe('one-shot fields', () => {
 });
 
 describe('TextField', () => {
+  it('starts typing from the live value between playback readout ticks', () => {
+    const { api } = fakeAPI();
+    transport.playing = true;
+    updateControlTime(0, true, 0, true);
+    let current = 'Old';
+    const target = render(TextField, { api, get: () => current, edit: commandEdit('Text') });
+    current = 'Current';
+    const input = target.querySelector<HTMLInputElement>('input')!;
+    input.focus();
+    flushSync();
+    expect(input.value).toBe('Current');
+  });
+
   it('uses begin/write/commit and cancels an Escape edit', () => {
     const { api, Edit } = fakeAPI();
     const target = render(TextField, { api, get: () => 'Hello', edit: commandEdit('Text'), label: 'Text' });
@@ -360,6 +436,18 @@ describe('TextField', () => {
 });
 
 describe('picker drafts', () => {
+  it.each([ColorField, FillField])('opens the picker from its live value between playback readout ticks', async (component) => {
+    const { api } = fakeAPI();
+    transport.playing = true;
+    updateControlTime(0, true, 0, true);
+    let current = '#FF0000';
+    const target = render(component, { api, get: () => component === ColorField ? current : { type: 'solid', stops: [{ id: 'stop', color: current, position: 0 }] }, edit: commandEdit('Color') });
+    current = '#00FF00';
+    target.querySelector<HTMLButtonElement>('button.color-field')!.click();
+    await tick();
+    expect(document.body.querySelector<HTMLInputElement>('.cp-value')!.value).toContain('00FF00');
+  });
+
   it('ColorField previews saturation and brightness continuously, then cancels the preview', async () => {
     const { api, Edit, invalidate } = fakeAPI();
     const target = render(ColorField, { api, get: () => '#FF0000', edit: commandEdit('Color'), label: 'Color' });

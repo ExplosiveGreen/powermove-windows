@@ -396,6 +396,36 @@ afterEach(async () => {
 });
 
 describe('InspectorPanel', () => {
+  it('limits playback property evaluation and shows the exact stopped value immediately', () => {
+    const { api } = setup([layer('L0')], ['L0']);
+    let playing = true, time = 0, now = 0;
+    api.transport.playing = () => playing;
+    api.transport.time = () => time;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const evaluate = vi.spyOn(api.anim, 'ev').mockImplementation((candidate, channel, at) =>
+      channel === 'rotation' ? at * 10 : ((candidate as TestLayer).p[channel]?.v ?? null));
+    for (let frame = 1; frame <= 120; frame++) {
+      time = frame / 120; now = frame * 1000 / 120;
+      api.events.emit('time', time);
+      flushSync();
+    }
+    const rotationEvaluations = evaluate.mock.calls.filter(call => call[1] === 'rotation').length;
+    expect(rotationEvaluations).toBeGreaterThanOrEqual(12);
+    expect(rotationEvaluations).toBeLessThanOrEqual(16);
+    // Pointer editing must start from the live value between readout ticks.
+    time = 2;
+    labelledSpinbutton('Rotation').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }));
+    expect(evaluate.mock.calls.filter(call => call[1] === 'rotation').at(-1)?.[2]).toBe(2);
+    playing = false; time = .975;
+    api.events.emit('transport', { playing });
+    flushSync();
+    expect(labelledSpinbutton('Rotation').value).toBe('9.8');
+    time = .2;
+    api.events.emit('time', time);
+    flushSync();
+    expect(labelledSpinbutton('Rotation').value).toBe('2');
+  });
+
   it('updates animated values on time events without rebuilding parenting choices', () => {
     const candidates = Array.from({ length: 40 }, (_, i) => layer(`L${i}`));
     const { api, runtime } = setup(candidates, ['L0']);

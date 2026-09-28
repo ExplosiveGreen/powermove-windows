@@ -420,6 +420,36 @@ describe('Svelte DockLayout panel pool', () => {
     expect(PM.WS.save).not.toHaveBeenCalled();
   });
 
+  it('keeps subpixel horizontal resize motion through commit and restores the exact size on cancel', () => {
+    register(PM, 'alpha');
+    register(PM, 'viewer', { headless: true, hideMoveHandle: true });
+    register(PM, 'beta', { size: 140 });
+    installSvelteLayout(PM);
+    PM.Layout.apply(PM.WS.current);
+    const viewer = document.getElementById('panel-viewer')!;
+    const beta = document.getElementById('panel-beta')!;
+    viewer.getBoundingClientRect = () => ({ width: 500, height: 380, left: 0, right: 500, top: 0, bottom: 380, x: 0, y: 0, toJSON() {} });
+    beta.getBoundingClientRect = () => ({ width: 500, height: 140, left: 0, right: 500, top: 388, bottom: 528, x: 0, y: 388, toJSON() {} });
+    const splitter = document.querySelector<HTMLElement>('#dock-center [aria-orientation="horizontal"]')!;
+    let handlers: any;
+    vi.mocked(PM.drag).mockImplementation(((_event: PointerEvent, options: any) => { handlers = options; return { cancel: vi.fn() }; }) as any);
+    splitter.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
+    const positions = new Set<string>();
+    for (let frame = 0; frame < 120; frame++) {
+      handlers.move(0, 3 + frame / 4, new MouseEvent('pointermove'));
+      positions.add(beta.style.flex);
+    }
+    expect(positions.size).toBe(120);
+    expect(beta.style.flex).toBe('0 0 107.25px');
+    handlers.up();
+    expect(PM.WS.current.layout.docks[1].panels[1].size).toBe(107.25);
+    expect(beta.style.flex).toBe('0 0 107.25px');
+    splitter.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
+    handlers.move(0, 10.5, new MouseEvent('pointermove'));
+    handlers.cancel();
+    expect(beta.style.flex).toBe('0 0 107.25px');
+  });
+
   it('lerps splitter hover glow and throttles drag layout emissions to animation frames', () => {
     register(PM, 'alpha');
     register(PM, 'viewer', { headless: true, hideMoveHandle: true });

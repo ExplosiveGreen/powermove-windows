@@ -57,6 +57,39 @@ describe('panel layout FLIP', () => {
 });
 
 describe('drop preview retargeting', () => {
+  it('moves the floating panel on every subpixel display frame and consumes the latest pointer', () => {
+    const callbacks = new Map<number, FrameRequestCallback>();
+    let id = 0;
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => { callbacks.set(++id, callback); return id; });
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(id => { callbacks.delete(id); });
+    let handlers: any;
+    const PM = {
+      PANELS: {},
+      clamp: (value: number, min: number, max: number) => Math.max(min, Math.min(max, value)),
+      Layout: { buildDockDropTargets: () => [], hitTestDockPlacement: () => null },
+      drag: (_event: unknown, options: unknown) => { handlers = options; return { cancel: () => handlers.cancel() }; },
+      toast: vi.fn(),
+    } as unknown as PMRegistry;
+    const element = document.createElement('div');
+    const spec = { id: 'alpha' };
+    const pointer = (x: number) => ({ clientX: x, clientY: 100.25 }) as PointerEvent;
+    beginPanelDrag(PM, pointer(0), spec, { id: 'center', panels: [spec] }, element);
+    const positions = new Set<string>();
+    for (let frame = 0; frame < 120; frame++) {
+      handlers.move(10 + frame / 4, 0, pointer(100 + frame / 4));
+      handlers.move(10 + frame / 4, 0, pointer(100.125 + frame / 4));
+      expect(callbacks.size).toBe(1);
+      const [frameId, callback] = [...callbacks][0]!;
+      callbacks.delete(frameId);
+      callback(frame * 1000 / 120);
+      positions.add(document.querySelector<HTMLElement>('.panel-ghost')!.style.transform);
+    }
+    expect(positions.size).toBe(120);
+    expect([...positions][0]).toBe('translate3d(112.125px,112.25px,0)');
+    handlers.cancel();
+    expect(document.querySelector('.panel-ghost')).toBeNull();
+  });
+
   it('restarts the on transition when the target key changes', () => {
     const callbacks: FrameRequestCallback[] = [];
     vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {

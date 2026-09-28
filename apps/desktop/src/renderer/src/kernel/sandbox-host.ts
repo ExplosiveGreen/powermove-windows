@@ -1,6 +1,6 @@
 import type { ExtensionRecord } from '../../../shared/extensions';
 import { createRpc, createRpcBudget, rpcTransfers, type Rpc } from '../../../shared/sandbox-rpc';
-import { panelInfo, type SandboxInit, type SandboxKey, type SandboxMirror, type SandboxViewInit } from '../../sandbox/shim-api';
+import { panelInfo, type SandboxInit, type SandboxKey, type SandboxMirror, type SandboxMirrorUpdate, type SandboxViewInit } from '../../sandbox/shim-api';
 import type { Disposable } from './api';
 import { createExtensionAPI, type ExtensionHandle, type HostDeps } from './host';
 import type { Kernel } from './registries';
@@ -85,6 +85,51 @@ export function projectMirror(api: ExtensionHandle['api']): SandboxMirror {
   return mirror;
 }
 let lastCloneLog = 0;
+
+/** Cache only sanitized data. Clock updates never traverse the document. */
+export function createProjectMirrorCache(api: ExtensionHandle['api']) {
+  let current: SandboxMirror | undefined;
+  let animationVersion: number | undefined;
+  let projectBytes = 0, selectionBytes = 0;
+  const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
+  const snapshot = (): SandboxMirror => {
+    current = projectMirror(api);
+    animationVersion = api.anim?.version?.();
+    projectBytes = bytes(current.project);
+    selectionBytes = bytes(current.selection);
+    return current;
+  };
+  const update = (documentChanged: boolean, selectionChanged: boolean): SandboxMirror => {
+    const revision = api.project.revision();
+    // A new document may have the same revision. The explicit changed event
+    // also refreshes content edits made within the current revision.
+    if (!current || documentChanged || current.revision !== revision || animationVersion !== api.anim?.version?.()
+      || selectionChanged && (current.project as { tooLarge?: boolean } | null)?.tooLarge) return snapshot();
+    let selection = current.selection;
+    let selectionTooLarge = false;
+    if (selectionChanged) {
+      try { selection = plain(api.project.selection(), new WeakMap(), undefined, { bytes: 0 }); }
+      catch (error) { if (!(error instanceof MirrorTooLargeError)) throw error; selection = null; selectionTooLarge = true; }
+      selectionBytes = bytes(selection);
+    }
+    current = { ...current, selection, revision, time: api.project.time(), playing: api.project.playing() };
+    // The complete mirror still fits the same 8 MiB budget, even though its
+    // document and selection now travel in separate messages. Only the tiny
+    // envelope needs serializing on clock ticks.
+    const overhead = bytes({ ...current, project: null, selection: null }) - 8;
+    if (selectionTooLarge || projectBytes + selectionBytes + overhead > MIRROR_LIMIT) {
+      current.project = { tooLarge: true, revision };
+      projectBytes = bytes(current.project);
+      if (projectBytes + selectionBytes + overhead > MIRROR_LIMIT) {
+        current.selection = null;
+        selectionBytes = 4;
+      }
+    }
+    return current;
+  };
+  return { snapshot, update };
+}
+
 export function cached<T>(rpc: Rpc, id: number, fallback: T, map: (value: unknown) => T = value => value as T): (...args: unknown[]) => T {
   let last = fallback;
   let pending = false;
@@ -337,10 +382,19 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     'activation-error': (error: { message: string }) => rejected(new Error(error.message))
   }, 10_000, { budget, onSustainedLimit: () => stopForBudget(), onRemoteHandleRelease: id => remoteHandles.delete(id) });
   runtimeLink.rpc = rpc;
+  const mirrorCache = createProjectMirrorCache(host.api);
+  let lastMirror: SandboxMirror | undefined;
+  const initialMirror = () => {
+    const mirror = mirrorCache.snapshot();
+    // New panel mounts get a fresh full snapshot without consuming the
+    // pending document update owed to the runtime and existing views.
+    lastMirror ??= mirror;
+    return mirror;
+  };
   const snapshot = (): SandboxInit => ({
     id: record.id, apiVersion: manifest.apiVersion ?? 1, manifest, vars,
     theme: themeSnapshot(kernel), activeTheme: kernel.theme.activeId,
-    project: projectMirror(host.api), bundleUrl: record.bundleUrl ?? `${base}/ext/${encodeURIComponent(record.id)}/bundle.js`,
+    project: initialMirror(), bundleUrl: record.bundleUrl ?? `${base}/ext/${encodeURIComponent(record.id)}/bundle.js`,
     catalog: {
       effects: plain(reg.effects.list()) as Array<Record<string, unknown>>,
       transitions: plain(reg.transitions.list()) as Array<Record<string, unknown>>,
@@ -412,13 +466,19 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   stopForBudget = () => { deps.reportRuntimeError(record.id, new Error('exceeded the sandbox message budget')); dispose(); };
   /* One mirror push per frame to the runtime and every open view. */
   let dirty = false;
+  let documentChanged = false, selectionChanged = false;
   let scheduled = false;
   function flushMirror(): void {
     if (!dirty || disposed) return; dirty = false;
     try {
-      const mirror = projectMirror(host.api);
-      rpc.notify('mirror', mirror);
-      broadcast('mirror', mirror);
+      const mirror = mirrorCache.update(documentChanged, selectionChanged);
+      documentChanged = selectionChanged = false;
+      const update: SandboxMirrorUpdate = { revision: mirror.revision, time: mirror.time, playing: mirror.playing };
+      if (!lastMirror || mirror.project !== lastMirror.project) update.project = mirror.project;
+      if (!lastMirror || mirror.selection !== lastMirror.selection) update.selection = mirror.selection;
+      rpc.notify('mirror', update);
+      broadcast('mirror', update);
+      lastMirror = mirror;
     } catch (error) { deps.reportRuntimeError(record.id, error); }
   }
   const push = (): void => {
@@ -426,7 +486,11 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     if (scheduled) return; scheduled = true;
     requestAnimationFrame(() => { scheduled = false; flushMirror(); });
   };
-  for (const event of MIRROR_EVENTS) host.api.events.on(event as 'project:changed', push);
+  for (const event of MIRROR_EVENTS) host.api.events.on(event as 'project:changed', () => {
+    if (event === 'project:changed') documentChanged = true;
+    if (event === 'selection') selectionChanged = true;
+    push();
+  });
   host.api.events.on('theme:changed', () => { try { rpc.notify('theme', themeSnapshot(kernel)); } catch { /* disposed */ } });
   try {
     host.setActivating(true);

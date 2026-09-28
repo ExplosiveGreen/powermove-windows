@@ -351,6 +351,7 @@ function makeRender(PM: LegacyPM): RenderAPI {
 
 function makeUIState(PM: LegacyPM): UIStateAPI {
   return {
+    timelineVersion: () => Number(PM?.UIState?.timelineVersion?.() ?? 0),
     getLayerCollapsed: (layer) => !!PM?.UIState?.getLayerCollapsed?.(layer),
     setLayerCollapsed: (layer, collapsed) => !!PM?.UIState?.setLayerCollapsed?.(layer, collapsed),
     getGroupCollapsed: (layer) => !!PM?.UIState?.getGroupCollapsed?.(layer),

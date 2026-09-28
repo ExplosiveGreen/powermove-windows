@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { makePM } from './make-pm';
 import { sanitizeProject } from '../../core/validate/project';
 import { contentFields, resolveContent } from '../core/content-properties';
@@ -11,6 +11,23 @@ function editor() {
 }
 
 describe('editable content animation', () => {
+  it('evaluates only declared content channels and valid font axes without changing source metadata', () => {
+    const width = { v: 200, kf: [], expr: null };
+    const axis = { v: 75, kf: [], expr: null };
+    const metadata = { v: 'metadata', kf: [], expr: null };
+    const layer = { type: 'text', d: { boxWidth: width, 'fontAxis.wdth': axis,
+      'fontAxis.invalid': metadata, metadata, text: 'Hello', custom: 42 } };
+    const PM = { evP: vi.fn((_layer: any, prop: any, _time: number, _key: string) => typeof prop.v === 'number' ? prop.v + 10 : prop.v) };
+    const result = resolveContent(PM, layer, 1);
+    expect(result).toEqual({ ...layer.d, boxWidth: 210, 'fontAxis.wdth': 85 });
+    expect(PM.evP.mock.calls.map(call => call[3])).toEqual(['c.boxWidth', 'c.fontAxis.wdth']);
+    expect(layer.d.boxWidth).toBe(width);
+    expect(result.metadata).toBe(metadata);
+    expect(result).not.toBe(layer.d);
+    expect(resolveContent({}, layer, 1).boxWidth).toBe(200);
+    expect(resolveContent({}, { type: 'custom', d: { boxWidth: width } }, 1).boxWidth).toBe(width);
+  });
+
   for (const [type, fields] of Object.entries(contentFields)) {
     it(`animates and persists each ${type} content field`, () => {
       const PM = editor();

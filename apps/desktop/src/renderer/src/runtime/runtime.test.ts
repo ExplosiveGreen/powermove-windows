@@ -4,7 +4,7 @@ import { flushSync } from 'svelte';
 
 import { doc } from '../state/document.svelte';
 import { sel } from '../state/selection.svelte';
-import { perf, transport } from '../state/transport.svelte';
+import { controlTime, perf, transport } from '../state/transport.svelte';
 import { frameBus } from './frame-bus';
 import { installLegacyRuntime } from './install-legacy';
 import { frame, invalidate, invalidateView, mutationSequence, onInvalidate } from './invalidate';
@@ -134,5 +134,29 @@ describe('legacy → runes bridge', () => {
     PM.bus.emit('layers');
     expect(doc.tick).toEqual(after);
     flushSync();
+  });
+
+  it('limits playback control refreshes without slowing the playhead or losing the final paused value', () => {
+    const PM = fakePM();
+    let now = 0;
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const off = installLegacyRuntime(PM);
+    PM.playing = true;
+    PM.bus.emit('transport');
+    const times = new Set<number>();
+    for (let frame = 1; frame <= 120; frame++) {
+      now = frame * 1000 / 120;
+      PM.setTime(frame / 120);
+      expect(transport.time).toBe(frame / 120);
+      times.add(controlTime());
+    }
+    expect(times.size).toBeLessThanOrEqual(16);
+    PM.setTime(.975);
+    PM.playing = false;
+    PM.bus.emit('transport');
+    expect(controlTime()).toBe(.975);
+    PM.setTime(.25);
+    expect(controlTime()).toBe(.25);
+    off(); clock.mockRestore();
   });
 });

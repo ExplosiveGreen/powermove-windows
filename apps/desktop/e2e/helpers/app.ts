@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -39,6 +39,8 @@ export type RendererDiagnostics = {
 export type LaunchOptions = {
   userData?: string;
   env?: Record<string, string>;
+  /** Use production window preferences while retaining an isolated test profile. */
+  normalWindow?: boolean;
 };
 
 export type LaunchedApp = {
@@ -79,7 +81,8 @@ export function ensureBuilt(force = false): Promise<void> {
 async function startElectron(
   userData: string,
   env: Record<string, string>,
-  diagnostics: RendererDiagnostics
+  diagnostics: RendererDiagnostics,
+  normalWindow = false,
 ): Promise<{ app: ElectronApplication; page: Page }> {
   await ensureBuilt();
   const launchEnv = {
@@ -93,7 +96,7 @@ async function startElectron(
     ...env,
     POWERMOVE_USER_DATA: userData,
     POWERMOVE_DEVTOOLS: '0',
-    POWERMOVE_BACKGROUND_TEST: '1',
+    POWERMOVE_BACKGROUND_TEST: normalWindow ? '0' : '1',
   };
   // Codex and some Node launchers set this for their own Electron subprocesses.
   // Passing it through makes Electron run as plain Node, which rejects the
@@ -145,8 +148,20 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchedAp
     ? path.resolve(options.userData)
     : await mkdtemp(path.join(os.tmpdir(), 'powermove-e2e-'));
   const env = { ...(options.env ?? {}) };
+  if (options.normalWindow) {
+    const temporaryRoots = [os.tmpdir(), '/tmp', '/private/tmp'];
+    const isolated = temporaryRoots.some(root => {
+      const relative = path.relative(root, userData);
+      return !!relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+    });
+    if (!isolated) throw new Error('Normal-window tests require a copied profile in a temporary directory.');
+    // Start directly in the editor with ordinary BrowserWindow preferences;
+    // no post-launch mutation of throttling/focus can reproduce this path.
+    await mkdir(userData, { recursive: true });
+    await writeFile(path.join(userData, 'onboarding-v1.json'), '{"version":1}\n', { mode: 0o600 });
+  }
   const diagnostics: RendererDiagnostics = { console: [], pageErrors: [] };
-  let active = await startElectron(userData, env, diagnostics);
+  let active = await startElectron(userData, env, diagnostics, options.normalWindow);
   let closed = false;
 
   const session: LaunchedApp = {
@@ -156,7 +171,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchedAp
     diagnostics,
     async relaunch() {
       await active.app.close();
-      active = await startElectron(userData, env, diagnostics);
+      active = await startElectron(userData, env, diagnostics, options.normalWindow);
       session.app = active.app;
       session.page = active.page;
     },

@@ -93,6 +93,18 @@ void main(){
   o = c * u_alpha;
 }`;
 
+// Keep interpolation in the original bitmap's UV space. Remapping in the
+// vertex shader amplifies rounding at large zooms and changes glyph edges.
+PM.FRAG_DRAW_WINDOW = PRE + `
+uniform float u_alpha;
+uniform vec4 u_sourceWindow;
+void main(){
+  vec2 uv = (v_uv * u_sourceWindow.zw - u_sourceWindow.xy) / vec2(textureSize(u_tex, 0));
+  vec4 c = texture(u_tex, uv);
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) c = vec4(0.);
+  o = c * u_alpha;
+}`;
+
 PM.FRAG_COPY = PRE + `void main(){ o = texture(u_tex, v_st); }`;
 
 // Fuse row orientation and opaque alpha into the existing RGBA8 capture pass.

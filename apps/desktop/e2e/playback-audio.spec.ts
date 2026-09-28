@@ -17,20 +17,55 @@ test('adaptive preview quality keeps the soundtrack playing', async ({ session }
   await openAudioProject(page);
   await page.evaluate(() => {
     const PM = (window as any).PM;
+    const render = PM.GL.render;
+    const budget = PM.Memory.budget('preview');
+    const pressure = { frames: 0, renderMs: 0, restore() {
+      PM.GL.render = render;
+      PM.Memory.setBudget('preview', budget);
+    } };
+    (window as any).__audioQualityPressure = pressure;
+    // Exercise the real timing/adaptation path. Prepared frame reuse would
+    // correctly exclude these samples, and play() resets prior measurements.
+    PM.Memory.setBudget('preview', 0);
+    PM.GL.render = function (this: any, ...args: any[]) {
+      const started = performance.now();
+      const result = render.apply(this, args);
+      if (PM.playing && PM.quality === 1) {
+        while (performance.now() - started < 45) { /* controlled render pressure */ }
+        pressure.frames++;
+        pressure.renderMs += performance.now() - started;
+      }
+      return result;
+    };
     PM.setTime(0);
-    PM.perf.auto = true; PM.perf.ms = 100; PM.quality = 1;
+    PM.perf.auto = true; PM.quality = 1;
     PM.play();
   });
-  await page.waitForFunction(() => (window as any).PM.quality < 1);
-  const playing = await page.evaluate(() => {
-    const PM = (window as any).PM;
-    return { playing: PM.playing, previewActive: PM.Preview.active, ...PM.Audio.inspect() };
-  });
-  expect(playing.playing).toBe(true);
-  expect(playing.previewActive).toBe(false);
-  expect(playing.running).toBe(true);
-  expect(playing.voices.length).toBeGreaterThan(0);
-  await page.evaluate(() => (window as any).PM.pause());
+  try {
+    await page.waitForFunction(() => (window as any).PM.quality < 1);
+    const playing = await page.evaluate(() => {
+      const PM = (window as any).PM;
+      const pressure = (window as any).__audioQualityPressure;
+      return {
+        playing: PM.playing, previewActive: PM.Preview.active,
+        pressureFrames: pressure.frames, averageRenderMs: pressure.renderMs / pressure.frames,
+        ...PM.Audio.inspect(),
+      };
+    });
+    expect(playing.pressureFrames).toBeGreaterThan(5);
+    expect(playing.averageRenderMs).toBeGreaterThanOrEqual(45);
+    expect(playing.playing).toBe(true);
+    expect(playing.previewActive).toBe(false);
+    expect(playing.running).toBe(true);
+    expect(playing.voices.length).toBeGreaterThan(0);
+  } finally {
+    await page.evaluate(() => {
+      const PM = (window as any).PM;
+      PM.pause();
+      (window as any).__audioQualityPressure.restore();
+      delete (window as any).__audioQualityPressure;
+    });
+  }
   expect(session.diagnostics.pageErrors).toEqual([]);
 });
 

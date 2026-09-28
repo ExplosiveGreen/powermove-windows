@@ -591,7 +591,10 @@ function drawWaveform(ctx: any, layer: any, options: any = {}) {
   const clipLeft: any = finite(options.clipLeft, x);
   const asset: any = layer && layer.d && PM.assets && PM.assets.get(layer.d.asset);
   const left: any = Math.max(x, clipLeft);
-  const right: any = x + width;
+  // Canvas clipping hides pixels but still submits every offscreen bar. At
+  // high zoom a long clip can span millions of columns; bound the iteration
+  // without changing width, which defines the source-time mapping below.
+  const right: any = Math.min(x + width, finite(options.clipRight, x + width));
   if (!(right > left && height > 2)) return false;
   if (!asset || !asset.peaks || !asset.peaks.length) {
     if (asset && asset.audioBlob && !asset.audioDecoding && !(asset.audioRetryAt > Date.now())) {

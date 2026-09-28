@@ -64,6 +64,7 @@
      the opt-out, so an untouched profile needs no migration. */
   let restoreWindows = $state(true);
   let autoDownloadCloudMedia = $state(false);
+  let previewMemoryMiB = $state(256);
   const multiWindow = $derived(!!PM.windows?.supported);
   let controls = $state.raw<Controls | null>(null);
   let rootEl = $state<HTMLElement | null>(null);
@@ -139,6 +140,7 @@
     agentPresentation = PM.AgentShell?.getPreference?.() ?? 'docked';
     restoreWindows = PM.store?.get?.('restoreWindows', true) !== false;
     autoDownloadCloudMedia = PM.store?.get?.('autoDownloadCloudMedia', false) === true;
+    previewMemoryMiB = (PM.Memory?.budget?.('preview') ?? 256 * 1024 * 1024) / (1024 * 1024);
     const wanted = target ?? (controls?.project ? 'project' : 'general');
     const destination = wanted === 'project' && !controls?.project ? 'general' : wanted;
     page = destination;
@@ -417,7 +419,7 @@
             {#if item.id === 'general'}
               <header class="sg-heading">
                 <h2>General</h2>
-                <p>How Powermove looks on this Mac.</p>
+                <p>How Powermove looks and works on this Mac.</p>
               </header>
               <section class="sg-section">
                 <h3 class="sg-section-title">Appearance</h3>
@@ -431,6 +433,30 @@
                       {#each APPEARANCE as [value, label] (value)}
                         <option {value}>{label}</option>
                       {/each}
+                    </select>
+                  </div>
+                </div>
+              </section>
+              <section class="sg-section">
+                <h3 class="sg-section-title">Playback</h3>
+                <div class="sg-group">
+                  <div class="settings-row">
+                    <div class="settings-copy">
+                      <b>Preview memory limit</b>
+                      <span>Remember played sections for smoother replay. A higher limit remembers more in this window.</span>
+                    </div>
+                    <select class="settings-select" aria-label="Preview memory limit" value={previewMemoryMiB}
+                      onchange={(event) => {
+                        previewMemoryMiB = Number(event.currentTarget.value);
+                        PM.Memory.setBudget('preview', previewMemoryMiB * 1024 * 1024);
+                        PM.store?.set?.('previewMemoryMiB', previewMemoryMiB);
+                      }}>
+                      <option value={0}>Off</option>
+                      <option value={128}>128 MB</option>
+                      <option value={256}>256 MB</option>
+                      <option value={512}>512 MB</option>
+                      <option value={1024}>1 GB</option>
+                      <option value={2048}>2 GB</option>
                     </select>
                   </div>
                 </div>

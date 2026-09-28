@@ -19,7 +19,7 @@ export class ProjectWritePermissionError extends Error {
   }
 }
 export interface SandboxControl {
-  update(next: SandboxMirror): void;
+  update(next: SandboxMirrorUpdate): void;
   ready(): Promise<unknown>;
   dispose(): void;
   setQuiet(on: boolean): void;
@@ -29,6 +29,8 @@ export interface SandboxControl {
 }
 export const sandboxControl = (api: PowermoveAPI): SandboxControl => (api as unknown as { __sandbox: SandboxControl }).__sandbox;
 export interface SandboxMirror { project: unknown; revision: number; selection: unknown; time: number; playing: boolean }
+/** A clock/selection update retains the last sanitized document snapshot. */
+export type SandboxMirrorUpdate = Pick<SandboxMirror, 'revision' | 'time' | 'playing'> & Partial<Pick<SandboxMirror, 'project' | 'selection'>>;
 export interface SandboxInit {
   id: string; apiVersion: number; manifest: PowermoveAPI['manifest']; vars: Record<string, string>;
   theme: { scheme: string; tokens: Record<string, string> }; project: SandboxMirror; bundleUrl: string;
@@ -320,7 +322,7 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     planeContains: restricted('space3d.planeContains') };
   api.on = api.events.on;
   const control: SandboxControl = {
-    update(next: SandboxMirror) { mirror = next; },
+    update(next: SandboxMirrorUpdate) { mirror = { ...mirror, ...next }; },
     ready: async () => { await Promise.all([...registrations]); if (registrationFailure) throw registrationFailure; },
     dispose() {
       for (const port of panelPorts.values()) port.close();

@@ -2,7 +2,7 @@
   import { sel } from '../state/selection.svelte';
   import { tick, onDestroy } from 'svelte';
   import { doc } from '../state/document.svelte';
-  import { transport } from '../state/transport.svelte';
+  import { controlTime } from '../state/transport.svelte';
   import { parseArithmetic } from './arith';
   import { EditGesture, type EditBinding } from './gesture';
   import { rowLabelId } from './context';
@@ -47,7 +47,7 @@
   } = $props();
 
   const labelledBy = rowLabelId();
-  const value = $derived((doc.tick.values, doc.proj, transport.time, get()));
+  const value = $derived((doc.tick.values, doc.proj, controlTime(), get()));
   const numeric = $derived(typeof value === 'number' ? value : Number(value));
   const gesture = $derived(new EditGesture(api, edit));
   let input: HTMLInputElement;
@@ -64,7 +64,7 @@
     return result + unit;
   };
 
-  const isMixed = $derived((sel.layers,doc.tick.values, doc.tick.structure, doc.proj, transport.time, mixed?.(edit,value) ?? false));
+  const isMixed = $derived((sel.layers,doc.tick.values, doc.tick.structure, doc.proj, controlTime(), mixed?.(edit,value) ?? false));
   const shown = $derived(editing ? draft : isMixed ? 'Mixed' : format(value));
 
   let initialDraft = '';

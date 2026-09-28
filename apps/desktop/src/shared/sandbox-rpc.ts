@@ -16,7 +16,11 @@ export class SandboxTimeoutError extends Error {
 }
 export interface RpcBudget { windowStart: number; received: number; excessSince: number; reported: boolean; handles: Set<number> }
 export const createRpcBudget = (): RpcBudget => ({ windowStart: Date.now(), received: 0, excessSince: 0, reported: false, handles: new Set() });
-export interface RpcLimits { maxIncomingBytes?: number; maxMirrorBytes?: number; maxIncomingPerSecond?: number; maxHandles?: number; budget?: RpcBudget; onSustainedLimit?(): void; onRemoteHandleRelease?(id: number): void }
+export interface RpcLimits { maxIncomingBytes?: number; maxMirrorBytes?: number; maxIncomingPerSecond?: number; maxHandles?: number; budget?: RpcBudget; onSustainedLimit?(): void; onRemoteHandleRelease?(id: number): void;
+  /** Sandbox receivers only: host mirror delivery is separate from extension
+   * callback traffic. Never enable this on a host receiving extension calls. */
+  trustedHostMirrors?: true;
+}
 function messageBytes(value: unknown, limit: number, depth = 0, seen = new WeakSet<object>()): number {
   if (depth > 64) return Infinity;
   if (typeof value === 'string') return value.length * 2;
@@ -82,7 +86,8 @@ export function createRpc(port: MessagePort, handlers: Record<string, (...args: 
     const tooLarge = messageBytes(message, byteLimit) > byteLimit;
     // Replies to our own requests are already bounded by `pending`; unknown
     // replies consume the same budget as calls and notifications.
-    const unsolicited = message.t !== 'reply' || !pending.has(message.id);
+    const trustedMirror = limits.trustedHostMirrors === true && message.t === 'notify' && message.m === 'mirror';
+    const unsolicited = !trustedMirror && (message.t !== 'reply' || !pending.has(message.id));
     const tooFast = unsolicited && ++budget.received > (limits.maxIncomingPerSecond ?? 200);
     if (tooLarge || tooFast) {
       if (tooFast) { if (!budget.excessSince) budget.excessSince = now; if (!budget.reported && now - budget.excessSince >= 3000) { budget.reported = true; limits.onSustainedLimit?.(); } }

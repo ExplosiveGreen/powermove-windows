@@ -17,7 +17,7 @@ import * as svelteInternalClient from 'svelte/internal/client';
 import * as svelteStore from 'svelte/store';
 import type { Component } from 'svelte';
 import { createRpc, serializeRpcError } from '../../shared/sandbox-rpc';
-import { createSandboxAPI, sandboxControl, sandboxReporter, type SandboxReporter, type SandboxInit, type SandboxKey, type SandboxKeyEvent, type SandboxMirror, type SandboxViewInit } from './shim-api';
+import { createSandboxAPI, sandboxControl, sandboxReporter, type SandboxReporter, type SandboxInit, type SandboxKey, type SandboxKeyEvent, type SandboxMirrorUpdate, type SandboxViewInit } from './shim-api';
 import { isProperty, canAnimateContent, contentLabel } from '../src/legacy/core/content-properties';
 import { structuredProperties, pathTargets } from '../src/legacy/core/vector-paths';
 import { validMatteSource, MATTE_MODES } from '../src/legacy/core/matte';
@@ -85,12 +85,12 @@ export async function bootRuntime(init: SandboxInit, port: MessagePort, load: Bu
   const apply = themeApplier();
   let control: ReturnType<typeof sandboxControl> | undefined;
   const live = createRpc(port, {
-    mirror: (snapshot: SandboxMirror) => control?.update(snapshot),
+    mirror: (snapshot: SandboxMirrorUpdate) => control?.update(snapshot),
     theme: (theme: SandboxInit['theme']) => apply(theme),
     mountPanel: (panelId: string, token: string, viewPort: MessagePort) => control?.mountPanel(panelId, token, viewPort),
     unmountPanel: (token: string) => control?.unmountPanel(token),
     dispose: () => control?.dispose()
-  }, 10_000, { maxMirrorBytes: 16 * 1024 * 1024 + 8192, maxHandles: 1000 });
+  }, 10_000, { maxMirrorBytes: 16 * 1024 * 1024 + 8192, maxHandles: 1000, trustedHostMirrors: true });
   const liveApi = createSandboxAPI(live, init);
   control = sandboxControl(liveApi);
   helperReport = sandboxReporter(live);
@@ -168,12 +168,12 @@ export async function bootView(init: SandboxViewInit, kernelPort: MessagePort, r
     runtime.close();
   };
   const kernel = createRpc(kernelPort, {
-    mirror: (snapshot: SandboxMirror) => control?.update(snapshot),
+    mirror: (snapshot: SandboxMirrorUpdate) => control?.update(snapshot),
     theme: (theme: SandboxInit['theme']) => apply(theme),
     size: setSize,
     keys: (next: SandboxKey[]) => { keys = next; },
     dispose: teardown
-  }, 10_000, { maxMirrorBytes: 16 * 1024 * 1024 + 8192, maxHandles: 20 });
+  }, 10_000, { maxMirrorBytes: 16 * 1024 * 1024 + 8192, maxHandles: 20, trustedHostMirrors: true });
   const runtime = createRpc(runtimePort, {});
   helperReport = sandboxReporter(kernel);
   const onKey = (event: KeyboardEvent): void => {

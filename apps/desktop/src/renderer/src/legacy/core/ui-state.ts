@@ -11,10 +11,12 @@ const layerCollapsed: any = new Map();
 const layerCollapsedBase: any = new Map();
 const groupCollapsed: any = new Map();
 let activeProject: any = null;
+let timelineVersion = 0;
 
 const idOf = (value: any) => typeof value === 'string' ? value : value && (value.i || value.id);
 const emptyShaderMeta = () => ({ udefs: [], shaderKey: null });
 const clear = () => {
+  timelineVersion++;
   keyHandles.clear();
   reveal.clear();
   shaderMeta.clear();
@@ -34,9 +36,11 @@ function setKeyPatch(id: any, patch: any) {
 function setRevealValue(id: any, keys: any) {
   if (!id) return null;
   if (!Array.isArray(keys)) {
-    reveal.delete(id);
+    if (reveal.delete(id)) timelineVersion++;
     return null;
   }
+  const previous = reveal.get(id);
+  if (!previous || previous.length !== keys.length || previous.some((key: string, i: number) => key !== keys[i])) timelineVersion++;
   const next = [...keys];
   reveal.set(id, next);
   return next;
@@ -44,6 +48,7 @@ function setRevealValue(id: any, keys: any) {
 
 function setShaderPatch(id: any, patch: any) {
   if (!id) return null;
+  timelineVersion++;
   const next = { ...(shaderMeta.get(id) || emptyShaderMeta()), ...(patch || {}) };
   shaderMeta.set(id, next);
   return next;
@@ -87,9 +92,11 @@ function syncLayerCollapsed(layer: any) {
      as a request to expose its transform properties. */
   const persistent = layer.type === 'group' ? true : layer.collapsed !== false;
   if (!layerCollapsedBase.has(id)) {
+    timelineVersion++;
     layerCollapsedBase.set(id, persistent);
     if (!layerCollapsed.has(id)) layerCollapsed.set(id, persistent);
   } else if (layerCollapsedBase.get(id) !== persistent) {
+    timelineVersion++;
     layerCollapsedBase.set(id, persistent);
     layerCollapsed.set(id, persistent);
   }
@@ -149,6 +156,7 @@ function collectProject(proj: any) {
 }
 
 function prune(proj: any) {
+  timelineVersion++;
   if (activeProject && activeProject !== proj) clear();
   activeProject = proj || null;
   const ids = collectProject(proj);
@@ -167,6 +175,7 @@ function current() {
 }
 
 const UIState = PM.UIState = {
+  timelineVersion() { current(); return timelineVersion; },
   keyHandles,
   reveal,
   shaderMeta,
@@ -240,6 +249,7 @@ const UIState = PM.UIState = {
       if (!layerCollapsedBase.has(id)) layerCollapsedBase.set(id, persistent);
       if (persistent === next) layerCollapsedBase.set(id, next);
     }
+    if (layerCollapsed.get(id) !== next) timelineVersion++;
     layerCollapsed.set(id, next);
     return next;
   },
@@ -252,6 +262,7 @@ const UIState = PM.UIState = {
     const id = idOf(layer);
     if (!id) return true;
     if (!groupCollapsed.has(id)) {
+      timelineVersion++;
       /* Preserve the old hierarchy state during the one-time split from the
          legacy shared disclosure field. */
       groupCollapsed.set(id, layer && typeof layer === 'object' ? layer.collapsed !== false : true);
@@ -263,6 +274,7 @@ const UIState = PM.UIState = {
     const id = idOf(layer);
     if (!id) return true;
     const next = !!collapsed;
+    if (groupCollapsed.get(id) !== next) timelineVersion++;
     groupCollapsed.set(id, next);
     return next;
   },

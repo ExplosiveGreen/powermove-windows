@@ -19,7 +19,7 @@
   import { sel } from '../state/selection.svelte';
   import { tick, onMount, onDestroy, untrack } from 'svelte';
   import { doc } from '../state/document.svelte';
-  import { transport } from '../state/transport.svelte';
+  import { controlTime } from '../state/transport.svelte';
   import { EditGesture, type EditBinding } from './gesture';
   import { rowLabelId } from './context';
   import {
@@ -56,10 +56,10 @@
   const grey: Color = { r: 0.5, g: 0.5, b: 0.5, a: 1 };
 
   const labelledBy = rowLabelId();
-  const raw = $derived((doc.tick.values, doc.proj, transport.time, get()));
+  const raw = $derived((doc.tick.values, doc.proj, controlTime(), get()));
   const value = $derived(typeof raw === 'string' && /^#[0-9a-f]{3,8}$/i.test(raw) ? raw : '#808080');
   const shown = $derived(parseColor(value) ?? grey);
-  const isMixed = $derived((sel.layers, doc.tick.values, doc.proj, transport.time, mixed?.(edit, value) ?? false));
+  const isMixed = $derived((sel.layers, doc.tick.values, doc.proj, controlTime(), mixed?.(edit, value) ?? false));
   const gesture = $derived(new EditGesture(api, edit));
 
   let trigger = $state<HTMLButtonElement>();
@@ -382,7 +382,8 @@
     window.clearTimeout(closeTimer);
     previewing = false;
     phase = 'open';
-    previous = parseColor(value) ?? grey;
+    const current = get();
+    previous = typeof current === 'string' && /^#[0-9a-f]{3,8}$/i.test(current) ? parseColor(current) ?? grey : grey;
     setColor(previous, false, false);
     open = true;
     void tick().then(() => {

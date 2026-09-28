@@ -139,7 +139,7 @@ export function beginPanelDrag(PM: PMRegistry, event: PointerEvent, spec: PanelS
     }
     const x = PM.clamp(next.clientX + 12, 8, window.innerWidth - ghost.offsetWidth - 8);
     const y = PM.clamp(next.clientY + 12, 8, window.innerHeight - ghost.offsetHeight - 8);
-    ghost.style.transform = `translate3d(${Math.round(x)}px,${Math.round(y)}px,0)`;
+    ghost.style.transform = `translate3d(${x}px,${y}px,0)`;
   };
   const queue = (next: PointerEvent): void => {
     pending = next;

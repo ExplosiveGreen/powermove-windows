@@ -415,22 +415,42 @@ function rasterLooksBlank(cv: HTMLCanvasElement): boolean {
   } catch { return false; }
 }
 
-function rasterText(d: any, scale: number) {
+function rasterText(d: any, scale: number, crop?: RasterWindow) {
   const g = textRasterGeometry(d, scale);
-  const cv = getCanvas(g.width, g.height);
-  const c = cv.getContext('2d') as any;
+  const source = getCanvas(g.width, g.height);
+  let cv = source;
+  const c = source.getContext('2d') as any;
   c.scale(g.density, g.density);
   c.font = fontStr(d);
   if ('letterSpacing' in c) c.letterSpacing = (d.tracking || 0) + 'px';
   c.textBaseline = 'alphabetic'; c.textAlign = g.align; c.fillStyle = d.color || '#fff';
   g.lines.forEach((line: string, i: number) => c.fillText(line, g.x, g.pad + g.lh * i + g.size * .82));
+  if (crop) {
+    // Paint at the original coordinates first: translating or clipping glyph
+    // drawing changes Canvas antialiasing. A 1:1 copy preserves those pixels
+    // while the caches and compositor retain only the visible source window.
+    const clipped = getCanvas(crop.width, crop.height);
+    clipped.getContext('2d')!.drawImage(cv, crop.x, crop.y, crop.width, crop.height, 0, 0, crop.width, crop.height);
+    cv = clipped;
+  }
   const visible = g.lines.some((line: string) => line.trim().length) && !/^(transparent|rgba?\(.*,\s*0\s*\)|#[0-9a-f]{6}00)$/i.test(String(d.color || ''));
-  const blank = visible && rasterLooksBlank(cv);
+  // Font readiness and context loss are available without reading GPU pixels.
+  // A readback here serializes every fresh text source with the GPU, even when
+  // its font is already loaded. Keep pixel probing for older canvas APIs and
+  // loading fonts, and retain retries for a lost backing store.
+  const fonts = window.document.fonts;
+  const target = cv.getContext('2d') as any;
+  const lost = typeof c.isContextLost === 'function' && typeof target.isContextLost === 'function'
+    ? c.isContextLost() || target.isContextLost() : undefined;
+  const ready = lost === false && typeof fonts?.check === 'function' && fonts.check(c.font, String(d.text || ''));
+  const blank = visible && (lost === true || (!ready && rasterLooksBlank(cv)));
   if (blank && !warnedBlank.has(c.font)) {
     warnedBlank.add(c.font);
     console.warn('[raster] text painted nothing; retrying shortly', { font: c.font, size: g.width + 'x' + g.height, text: String(d.text).slice(0, 40) });
   }
-  return { cv, w: g.w, h: g.h, anchorX: g.anchorX, anchorY: g.anchorY, selection: g.selection, blank };
+  if (source !== cv) source.width = source.height = 0;
+  const sourceWindow = crop ? [crop.x, crop.y, g.width, g.height] : undefined;
+  return { cv, w: g.w, h: g.h, anchorX: g.anchorX, anchorY: g.anchorY, selection: g.selection, blank, sourceWindow };
 }
 
 function rasterAnimatedText(layer:any,d:any,time:number,scale:number) {
@@ -518,7 +538,7 @@ PM.raster = (L: any, scale: any = 1, time: any = PM.time, uploaded?: (key: strin
   }
   if (!e && !L.d.fontAnchorBounds) { const stub = uploaded?.(key); if (stub && !stub.blank) e = stub; }
   if (!e) {
-    e = L.d.paths?.length ? rasterPaths(PM,L,time,scale) : L.type === 'text' ? (L.d.animators?.length||L.d.styles?.length ? rasterAnimatedText(L,d,time,scale) : rasterText(d, scale)) : rasterShape(d, scale, crop);
+    e = L.d.paths?.length ? rasterPaths(PM,L,time,scale) : L.type === 'text' ? (L.d.animators?.length||L.d.styles?.length ? rasterAnimatedText(L,d,time,scale) : rasterText(d, scale, crop)) : rasterShape(d, scale, crop);
     e.dirty = true;
     e.used = ++tick;
     e.bytes = Math.max(0, Number(e.cv?.width || 0) * Number(e.cv?.height || 0) * 4);

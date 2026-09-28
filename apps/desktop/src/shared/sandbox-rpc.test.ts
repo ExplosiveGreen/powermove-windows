@@ -85,6 +85,52 @@ it('shares the message rate budget across an extension runtime and view', async 
   expect(results.filter(item => item.status === 'fulfilled')).toHaveLength(200);
   expect(results.filter(item => item.status === 'rejected')).toHaveLength(100);
 });
+it('delivers 120 Hz host mirrors and callbacks without spending the callback budget on mirrors', async () => {
+  let now = 1000;
+  const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const channel = new MessageChannel();
+  const limited = vi.fn();
+  let mirroredTime = 0;
+  const host = createRpc(channel.port1 as unknown as MessagePort, {}, 1000);
+  const child = createRpc(channel.port2 as unknown as MessagePort, { mirror: (time: number) => { mirroredTime = time; } }, 1000, {
+    trustedHostMirrors: true, onSustainedLimit: limited,
+  } as Parameters<typeof createRpc>[3]);
+  close.push(() => { host.close(); child.close(); clock.mockRestore(); });
+  const callback = child.handle((time: number) => ({ time, mirroredTime }));
+  for (let second = 0; second < 4; second++) {
+    const results: Promise<unknown>[] = [];
+    for (let tick = 1; tick <= 120; tick++) {
+      const time = second + tick / 120;
+      host.notify('mirror', time);
+      results.push(host.invokeHandle(callback, time));
+    }
+    const settled = await Promise.allSettled(results);
+    expect(settled.filter(result => result.status === 'fulfilled')).toHaveLength(120);
+    for (const result of settled) if (result.status === 'fulfilled') {
+      expect((result.value as any).mirroredTime).toBe((result.value as any).time);
+    }
+    now += 1000;
+  }
+  expect(limited).not.toHaveBeenCalled();
+});
+
+it('keeps mirror size/depth checks and the host inbound rate limit with trusted child mirrors', async () => {
+  const channel = new MessageChannel();
+  const hostMirror = vi.fn(), childMirror = vi.fn();
+  const host = createRpc(channel.port1 as unknown as MessagePort, { mirror: hostMirror }, 1000);
+  const child = createRpc(channel.port2 as unknown as MessagePort, { mirror: childMirror }, 1000, {
+    trustedHostMirrors: true, maxMirrorBytes: 1024,
+  } as Parameters<typeof createRpc>[3]);
+  close.push(() => { host.close(); child.close(); });
+  host.notify('mirror', 'x'.repeat(1024));
+  let nested: unknown = 'leaf';
+  for (let depth = 0; depth < 70; depth++) nested = { next: nested };
+  host.notify('mirror', nested);
+  for (let tick = 0; tick < 201; tick++) child.notify('mirror', tick);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  expect(childMirror).not.toHaveBeenCalled();
+  expect(hostMirror).toHaveBeenCalledTimes(200);
+});
 it('reports a sustained over-rate sender after three seconds', async () => {
   let now = 1_000;
   const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);

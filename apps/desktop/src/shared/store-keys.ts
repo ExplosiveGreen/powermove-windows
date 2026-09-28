@@ -16,6 +16,7 @@ export const STATIC_KEYS = [
   'openTabs',
   'restoreWindows',
   'autoDownloadCloudMedia',
+  'previewMemoryMiB',
   'projectTrash',
   'takes',
   'workspaces',

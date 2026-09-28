@@ -38,12 +38,13 @@ interface Harness {
   kernel: Kernel; runtime: SandboxRuntime; panelId: string;
   views: Array<{ frame: HTMLIFrameElement; message: SandboxViewInit; target: HTMLElement; port: MessagePort; view: Promise<SandboxView> }>;
   pm: Record<string, any>;
+  project: ProjectAPI;
 }
 
 async function start(): Promise<Harness> {
   vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('network mocked'))));
   const kernel = createKernel();
-  const project = { get: () => ({ id: 'test' }), revision: () => 7, selection: () => ({ layers: [], keys: [], chan: null }), time: () => 0, playing: () => false, apply: vi.fn(() => ({ ok: true })), select: vi.fn(), setTime: vi.fn(), play: vi.fn(), pause: vi.fn(), undo: vi.fn(), redo: vi.fn(), snapshot: async () => '' } as unknown as ProjectAPI;
+  const project = { get: vi.fn(() => ({ id: 'test' })), revision: () => 7, selection: () => ({ layers: [], keys: [], chan: null }), time: vi.fn(() => 0), playing: () => false, apply: vi.fn(() => ({ ok: true })), select: vi.fn(), setTime: vi.fn(), play: vi.fn(), pause: vi.fn(), undo: vi.fn(), redo: vi.fn(), snapshot: async () => '' } as unknown as ProjectAPI;
   const deps = { pm: {}, state: { doc: {}, sel: {}, transport: {}, perf: {} }, project,
     ui: { controls: {}, toast: vi.fn(), confirm: async () => true, menu: vi.fn(), modal: vi.fn(), icon: () => '' },
     assets: { pick: async () => [], import: async () => ({ id: 'x', name: 'x', kind: 'image' }), get: () => undefined, readText: async () => '' },
@@ -71,7 +72,7 @@ async function start(): Promise<Harness> {
   const panelId = 'sandboxed-ext.panel';
   await until(() => kernel.panels.has(panelId), 'panel registration');
   const pm: Record<string, any> = { PANELS: { [panelId]: kernel.panels.get(panelId) }, panelInst: {}, icon: () => null, Layout: { ws: null } };
-  return { kernel, runtime, panelId, views, pm };
+  return { kernel, runtime, panelId, views, pm, project };
 }
 
 /* happy-dom fires `load` for an inserted iframe, as Chromium does for the
@@ -135,6 +136,24 @@ it('docks a sandboxed Svelte panel as a frame panel with host chrome, refreshes 
   expect(h.kernel.panels.has(h.panelId)).toBe(false);
   expect(second.isConnected).toBe(false);
   await until(() => h.views[1]!.target.childElementCount === 0, 'view released on dispose');
+});
+
+it('initializes a new panel from the current document while a mirror update is still queued', async () => {
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.push(callback); return frames.length; });
+  const h = await start();
+  const replacement = { id: 'replacement', layers: [{ id: 'synthetic' }] };
+  vi.mocked(h.project.get).mockReturnValue(replacement as never);
+  vi.mocked(h.project.time).mockReturnValue(2.5);
+  h.kernel.events.emit('project:changed', { kind: 'replace' } as never);
+  await openPanel(h);
+  const first = h.views[0]!;
+  expect(first.message.project.project).toEqual(replacement);
+  expect(first.message.project.time).toBe(2.5);
+  await first.view;
+  for (const callback of frames.splice(0)) callback(100);
+  await tick();
+  (await first.view).dispose();
 });
 
 it('ignores forged host shortcuts and dispatches only the extension’s own binding', async () => {

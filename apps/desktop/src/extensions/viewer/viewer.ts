@@ -700,16 +700,36 @@ let visibleRegion: { x: number; y: number; right: number; bottom: number } | nul
 let zoomGestureUntil = 0;
 let navigationUntil = 0;
 let presentationFrame = 0;
+let stageGeometry: DOMRect | null = null;
+let viewportPlan: { project: any; layers: any[]; count: number; version: number; time: number; safe: boolean; padding: number } | null = null;
+let pendingResize: { width: number; height: number; viewport: PreviewViewport | null } | null = null;
+/* Stage-relative geometry is owned by layout. Reading DOM bounds while the
+   playhead updates can force layout of the entire timeline every frame. */
+let overlayGeometry: { width: number; height: number; x: number; y: number } | null = null;
 V.isNavigating = () => !disposed && (!!activeDrag || window.performance.now() < navigationUntil);
-let presentation: { time: number; version: number | undefined; project: any; quality: number } | null = null;
-V.deferNavigationRender = (now: number) => {
-  if (disposed || now >= zoomGestureUntil || api.transport.playing() || !requestedViewport || !presentedViewport
-      || requestedViewport === presentedViewport || !visibleRegion || !presentation
-      || presentation.version === undefined || presentation.version !== api.anim.version()
-      || presentation.time !== api.transport.time() || presentation.project !== api.project.get() || presentation.quality !== api.transport.quality) return false;
+let presentation: { time: number; version: number | undefined; project: any; quality: number; width: number; height: number } | null = null;
+const presentationIsCurrent = () => {
+  const project = api.project.get();
+  return !!presentation && presentation.version !== undefined && presentation.version === api.anim.version()
+    && presentation.time === api.transport.time() && presentation.project === project
+    && presentation.width === project.w && presentation.height === project.h
+    && presentation.quality === api.transport.quality;
+};
+const canRetainNavigation = (now: number) => {
+  if (disposed || now >= zoomGestureUntil || api.transport.playing() || !visibleRegion || !presentationIsCurrent()) return false;
+  if (!presentedViewport) return true;
   return visibleRegion.x >= presentedViewport.x && visibleRegion.y >= presentedViewport.y
     && visibleRegion.right <= presentedViewport.x + presentedViewport.width
     && visibleRegion.bottom <= presentedViewport.y + presentedViewport.height;
+};
+const commitPendingResize = () => {
+  const pending = pendingResize; pendingResize = null;
+  if (pending) api.render.gl.resize(pending.width, pending.height, pending.viewport);
+};
+V.deferNavigationRender = (now: number) => {
+  if (pendingResize && canRetainNavigation(now)) return true;
+  commitPendingResize();
+  return false;
 };
 const displayViewport = (viewport: PreviewViewport, zoom = viewport.cssWidth / viewport.width) => {
   const gl = V.el as HTMLCanvasElement;
@@ -728,6 +748,7 @@ const disposeRuntime = () => {
   V.finishCanvasText?.();
   if (presentationFrame) window.cancelAnimationFrame(presentationFrame);
   presentationFrame = 0;
+  pendingResize = null;
   eventOffs.splice(0).forEach((off) => off());
   window.removeEventListener('resize', onWindowResize);
   setStageCursor('');
@@ -817,12 +838,14 @@ V.attach = (stage: HTMLElement) => {
 };
 
 /* ── layout / sizing ───────────────────────────────────── */
-V.layout = (panOnly = false) => {
-  if (panOnly === true) navigationUntil = window.performance.now() + 250;
+V.layout = (panOnly = false, gesture = panOnly === true) => {
+  const now = window.performance.now();
+  if (gesture) { navigationUntil = now + 250; zoomGestureUntil = now + 100; }
   if (!V.el || !V.stage) return;
   const gl = V.el as HTMLCanvasElement;
   const p = api.project.get();
-  const r = V.stage.getBoundingClientRect();
+  const r = gesture && stageGeometry ? stageGeometry : V.stage.getBoundingClientRect();
+  stageGeometry = r;
   if (r.width < 8 || r.height < 8) return;
   V._sw = r.width; V._sh = r.height;
   const pad = 8;
@@ -845,6 +868,7 @@ V.layout = (panOnly = false) => {
     { width: r.width, height: r.height }, { width: p.w, height: p.h }, z,
     { x: V.fit ? 0 : V.pan[0], y: V.fit ? 0 : V.pan[1] },
   );
+  overlayGeometry = { width: r.width, height: r.height, x: position.x, y: position.y };
   V.inner.style.left = position.x + 'px';
   V.inner.style.top = position.y + 'px';
   V.inner.style.transform = '';
@@ -853,30 +877,39 @@ V.layout = (panOnly = false) => {
      effects that opt into the viewport coordinate contract. Keep complex
      full-frame/3D pipelines on the established full-composition path. */
   const time = api.transport.time();
-  const viewportSafe = p.layers.every((layer: any) => !layer.threeD
-    && effectViewportSafe(api, layer, time)
-    && !(layer.masks || []).length && !layer.matteSource && !layer.transitionIn && !layer.transitionOut
-    && !['adjustment', 'shader', 'extension', 'precomp'].includes(layer.type));
-  const effectPadding = viewportSafe ? effectViewportPadding(api, p, time) : 0;
+  const version = api.anim.version();
+  if (!viewportPlan || viewportPlan.project !== p || viewportPlan.layers !== p.layers
+      || viewportPlan.count !== p.layers.length || viewportPlan.version !== version || viewportPlan.time !== time) {
+    const safe = p.layers.every((layer: any) => !layer.threeD
+      && effectViewportSafe(api, layer, time)
+      && !(layer.masks || []).length && !layer.matteSource && !layer.transitionIn && !layer.transitionOut
+      && !['adjustment', 'shader', 'extension', 'precomp'].includes(layer.type));
+    viewportPlan = { project: p, layers: p.layers, count: p.layers.length, version, time,
+      safe, padding: safe ? effectViewportPadding(api, p, time) : 0 };
+  }
+  const viewportSafe = viewportPlan.safe, effectPadding = viewportPlan.padding;
   const renderDensity = Math.min(2, Math.max(1, dpr)) * Math.max(.25, Math.min(1, api.transport.quality));
   const viewport = viewportSafe
     ? previewRenderViewport(p.w, p.h, z, r.width, r.height, position.x, position.y, dpr, api.transport.quality, 128 + effectPadding / renderDensity, api.render.gl.previewViewport as PreviewViewport | null)
     : null;
   requestedViewport = viewport;
-  visibleRegion = viewport ? { x: Math.max(0, -position.x) / z, y: Math.max(0, -position.y) / z,
-    right: Math.min(p.w, (r.width - position.x) / z), bottom: Math.min(p.h, (r.height - position.y) / z) } : null;
+  visibleRegion = { x: Math.max(0, -position.x) / z, y: Math.max(0, -position.y) / z,
+    right: Math.min(p.w, (r.width - position.x) / z), bottom: Math.min(p.h, (r.height - position.y) / z) };
+  let renderSize: { width: number; height: number };
   if (viewport) {
     // While a new crop is pending, keep the old pixels in their own source
     // coordinates. Commit the new CSS placement with its GL presentation.
     const retain = presentedViewport && presentedViewport.compWidth === p.w && presentedViewport.compHeight === p.h;
-    displayViewport(retain ? presentedViewport! : viewport, z);
-    api.render.gl.resize(viewport.renderWidth, viewport.renderHeight, viewport);
+    if (retain) displayViewport(presentedViewport!, z);
+    else if (!presentationIsCurrent()) displayViewport(viewport, z);
+    renderSize = { width: viewport.renderWidth, height: viewport.renderHeight };
   } else {
-    presentedViewport = null;
-    gl.style.position = ''; gl.style.left = ''; gl.style.top = ''; gl.style.width = '100%'; gl.style.height = '100%';
-    const renderSize = api.transport.previewResolution && api.transport.previewResolution!=='auto' ? {width:Math.max(2,Math.round(p.w*api.transport.quality)),height:Math.max(2,Math.round(p.h*api.transport.quality))} : previewRenderSize(p.w, p.h, z, dpr, api.transport.quality);
-    api.render.gl.resize(renderSize.width, renderSize.height, null);
+    if (presentedViewport && presentationIsCurrent()) displayViewport(presentedViewport, z);
+    else { gl.style.position = ''; gl.style.left = ''; gl.style.top = ''; gl.style.width = '100%'; gl.style.height = '100%'; }
+    renderSize = api.transport.previewResolution && api.transport.previewResolution!=='auto' ? {width:Math.max(2,Math.round(p.w*api.transport.quality)),height:Math.max(2,Math.round(p.h*api.transport.quality))} : previewRenderSize(p.w, p.h, z, dpr, api.transport.quality);
   }
+  pendingResize = { ...renderSize, viewport };
+  if (!gesture || !canRetainNavigation(now)) commitPendingResize();
   const overlayWidth = Math.round(r.width * dpr);
   const overlayHeight = Math.round(r.height * dpr);
   /* Assigning either canvas dimension clears the bitmap even when the value is
@@ -895,10 +928,9 @@ V.layout = (panOnly = false) => {
   // Do not submit the entire layer stack again. This is deliberately scoped
   // to pan input: independent draw requests (assets, fonts, edits, context
   // recovery, etc.) remain pending and are never swallowed here.
-  const reusePan = panOnly === true && !api.transport.playing() && viewport && viewport === presentedViewport
-    && presentation && presentation.version !== undefined && presentation.version === api.anim.version()
-    && presentation.time === api.transport.time() && presentation.project === p && presentation.quality === api.transport.quality;
-  if (!reusePan) invalidate('render');
+  const reusePan = panOnly === true && !api.transport.playing() && viewport === presentedViewport && presentationIsCurrent();
+  if (reusePan) pendingResize = null;
+  else invalidate('render');
   schedulePresentation();
 };
 V.setZoom = (zoom: number) => {
@@ -915,8 +947,10 @@ V.returnToComposition = () => {
 V.updateRecovery = () => {
   if (!V.recovery || !V.stage || !V.inner) return false;
   const hiddenBySourcePreview = !!V.preview?.activeId;
+  const geometry = overlayGeometry, p = api.project.get();
   const out = !V.fit && !hiddenBySourcePreview
-    && compositionIsOutOfView(V.stage.getBoundingClientRect(), V.inner.getBoundingClientRect());
+    && !!geometry && (geometry.x + p.w * V.shown <= 0 || geometry.x >= geometry.width
+      || geometry.y + p.h * V.shown <= 0 || geometry.y >= geometry.height);
   V.recovery.hidden = !out;
   return out;
 };
@@ -926,7 +960,8 @@ const listen = <K extends Parameters<PowermoveAPI['events']['on']>[0]>(event: K,
   const disposable = api.events.on(event, handler);
   eventOffs.push(() => disposable.dispose());
 };
-listen('project:changed', () => V.layout());
+listen('project:changed', () => { viewportPlan = null; V.layout(); });
+listen('extensions:changed', () => { viewportPlan = null; V.layout(); });
 listen('layout', () => V.layout());
 listen('selection', () => { invalidate('render'); drawOverlay(); });
 let observedQuality = api.transport.quality;
@@ -934,21 +969,26 @@ listen('time', () => {
   if (observedQuality !== api.transport.quality) { observedQuality = api.transport.quality; V.layout(); }
   schedulePresentation();
 });
-listen('transport', () => schedulePresentation());
+listen('transport', () => { if (api.transport.playing()) commitPendingResize(); schedulePresentation(); });
 
 /* comp px <-> screen px */
 const toComp = (e: any): [number, number] => {
+  if (stageGeometry && overlayGeometry && window.performance.now() < navigationUntil) {
+    return [(e.clientX - stageGeometry.left - overlayGeometry.x) / V.shown,
+      (e.clientY - stageGeometry.top - overlayGeometry.y) / V.shown];
+  }
   const r = V.inner.getBoundingClientRect();
   return [(e.clientX - r.left) / V.shown, (e.clientY - r.top) / V.shown];
 };
 
 const stagePoint = (e: any): Point => {
-  const r = V.stage.getBoundingClientRect();
+  const r = stageGeometry && window.performance.now() < navigationUntil ? stageGeometry : V.stage.getBoundingClientRect();
   return { x: e.clientX - r.left, y: e.clientY - r.top };
 };
 
 function setZoomAtPoint(compositionPoint: Point, pointer: Point, zoom: number): void {
-  const stage = V.stage.getBoundingClientRect();
+  const gesture = window.performance.now() < zoomGestureUntil;
+  const stage = gesture && stageGeometry ? stageGeometry : V.stage.getBoundingClientRect();
   V.fit = false;
   V.zoom = clamp(zoom, .05, 8);
   const pan = zoomPanForPoint(
@@ -956,7 +996,7 @@ function setZoomAtPoint(compositionPoint: Point, pointer: Point, zoom: number): 
     { width: api.project.get().w, height: api.project.get().h }, V.zoom,
   );
   V.pan = [pan.x, pan.y];
-  V.layout();
+  V.layout(false, gesture);
 }
 
 function zoomAtEvent(e: any, factor: number): void {
@@ -984,27 +1024,28 @@ function schedulePresentation(): void {
    drawn into the viewport we requested counts as presented; a reused frame
    during navigation must not, or deferral and pan-refresh math break. */
 listen('frame:rendered', (frame: { viewport: PreviewViewport | null; time: number; version: number | undefined; quality: number }) => {
-  if (frame.viewport && frame.viewport === requestedViewport && V.el) {
+  if (frame.viewport === requestedViewport && V.el) {
     presentedViewport = frame.viewport;
-    presentation = { time: frame.time, version: frame.version, project: api.project.get(), quality: frame.quality };
-    displayViewport(frame.viewport);
+    const project = api.project.get();
+    presentation = { time: frame.time, version: frame.version, project, quality: frame.quality, width: project.w, height: project.h };
+    if (frame.viewport) displayViewport(frame.viewport);
+    else { V.el.style.position = ''; V.el.style.left = ''; V.el.style.top = ''; V.el.style.width = '100%'; V.el.style.height = '100%'; }
   }
 });
 listen('overlay', () => drawOverlay());
 
 function drawOverlay() {
+  /* The compositor paints synchronously at the end of its frame. Consume the
+     fallback requested by the time event instead of repainting it next RAF.
+     Paused edits still use that fallback when no compositor frame is needed. */
+  if (presentationFrame) window.cancelAnimationFrame(presentationFrame);
+  presentationFrame = 0;
   const c = V.octx; if (!c) return;
-  /* Self-heal after layout rebuilds: if the stage no longer matches the size
-     V.layout() last computed, re-run layout before drawing overlays. */
-  if (V.stage) {
-    const r = V.stage.getBoundingClientRect();
-    if (r.width >= 8 && r.height >= 8 &&
-        (Math.abs(r.width - (V._sw || 0)) > .5 || Math.abs(r.height - (V._sh || 0)) > .5)) {
-      V.layout();
-    }
-  }
+  /* ResizeObserver, window resize and panel layout events refresh this before
+     paint. Pan/zoom call layout directly, so their controls remain immediate. */
+  if (!overlayGeometry) return;
   const selectionInk = selectionOutlineColor(api.project.get());
-  const p = api.project.get(), dpr = V.ov.width / V.stage.getBoundingClientRect().width;
+  const p = api.project.get(), dpr = V.ov.width / overlayGeometry.width;
   c.setTransform(1, 0, 0, 1, 0, 0);
   c.clearRect(0, 0, V.ov.width, V.ov.height);
   if (V.zoomRect) {
@@ -1020,8 +1061,7 @@ function drawOverlay() {
     c.restore();
   }
   const S = V.shown * dpr;
-  const frame = V.inner.getBoundingClientRect(), stage = V.stage.getBoundingClientRect();
-  c.save(); c.translate((frame.left - stage.left) * dpr, (frame.top - stage.top) * dpr); c.scale(S, S);
+  c.save(); c.translate(overlayGeometry.x * dpr, overlayGeometry.y * dpr); c.scale(S, S);
   c.lineWidth = 1 / S;
 
   drawSnapLines(c);
@@ -1523,7 +1563,9 @@ function cursorForHit(selection: SelectionGeometry, hit: any) {
 }
 
 function updateStageCursor(e: any) {
-  if (!V.inner) return;
+  // A drag owns its cursor until release; hover geometry would repeat the
+  // selection evaluation and force layout after each manipulation write.
+  if (!V.inner || activeDrag) return;
   const tool = V.temporaryTool || toolService()?.tool;
   if (V.textSession && tool !== 'hand' && tool !== 'zoom') { setStageCursor(V.textSession.contains(pointerComp(e)) ? 'text' : 'default'); return; }
   if (tool === 'hand') { setStageCursor('grab'); return; }
@@ -1645,7 +1687,7 @@ function onDown(e: any) {
 
 function clearToolRect(): void {
   V.toolRect = null;
-  invalidate('render');
+  schedulePresentation();
 }
 
 function startZoom(e: any): void {
@@ -1659,7 +1701,7 @@ function startZoom(e: any): void {
       V.zoomRect = moved && !ev.altKey
         ? shapeBoxFromDrag(startScreen, stagePoint(ev))
         : null;
-      invalidate('render');
+      schedulePresentation();
     },
     up: (_dx: number, _dy: number, ev: any) => {
       const box = V.zoomRect as DragBox | null;
@@ -1680,7 +1722,7 @@ function startZoom(e: any): void {
         { x: stage.width / 2, y: stage.height / 2 }, zoom,
       );
     },
-    cancel: () => { V.zoomRect = null; invalidate('render'); },
+    cancel: () => { V.zoomRect = null; schedulePresentation(); },
   });
 }
 
@@ -1694,7 +1736,7 @@ function startSelectionMarquee(e: any): void {
       if (!passedMoveDragThreshold(dx, dy)) return;
       moved = true;
       V.toolRect = { kind: 'selection', box: shapeBoxFromDrag(start, pointerComp(ev)) };
-      invalidate('render');
+      schedulePresentation();
     },
     up: () => {
       const box = V.toolRect?.box as DragBox | undefined;
@@ -1731,7 +1773,7 @@ function startShape(e: any): void {
         kind: 'shape',
         box: shapeBoxFromDrag(start, pointerComp(ev), { fromCenter: ev.altKey, constrain: ev.shiftKey }),
       };
-      invalidate('render');
+      schedulePresentation();
     },
     up: (_dx: number, _dy: number, ev: any) => {
       const box = moved
@@ -1826,7 +1868,7 @@ function startText(e: any): void {
       if (!passedMoveDragThreshold(dx, dy)) return;
       moved = true;
       V.toolRect = { kind: 'text', box: shapeBoxFromDrag(start, pointerComp(ev), { fromCenter: ev.altKey }) };
-      invalidate('render');
+      schedulePresentation();
     },
     up: (_dx: number, _dy: number, ev: any) => {
       const box = moved ? shapeBoxFromDrag(start, pointerComp(ev), { fromCenter: ev.altKey }) : null;

@@ -132,7 +132,7 @@
     };
   };
   const pin = (element: HTMLElement, spec: PanelSpec, height: number): void => {
-    spec.size = Math.round(height);
+    spec.size = height;
     delete spec.flex;
     applyPanelSize(element, spec, PM.PANELS[spec.id] || {});
   };

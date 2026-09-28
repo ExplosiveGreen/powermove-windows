@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createRpc } from '../../../shared/sandbox-rpc';
 import { createSandboxAPI, PermissionError, sandboxControl } from '../../sandbox/shim-api';
 import { installSandboxRuntime } from '../../sandbox/boot';
-import { cached, createSandboxRuntime, projectMirror } from './sandbox-host';
+import { cached, createProjectMirrorCache, createSandboxRuntime, projectMirror } from './sandbox-host';
 import { createKernel } from './registries';
 import { parseHostEvent } from './sandbox-schemas';
 import type { HostDeps } from './host';
@@ -28,6 +28,99 @@ it('accepts a large validated extensions boot event', () => {
   const payload = { ids: Array.from({ length: 1500 }, (_, index) => `extension-${index}`), reason: 'boot' };
   expect(parseHostEvent('extensions:changed', payload)).toEqual(payload);
   expect(() => parseHostEvent('extensions:changed', { ...payload, ids: Array(2001).fill('x') })).toThrow();
+});
+it('sends transport and selection deltas without cloning the project, and updates the mirror before callbacks', async () => {
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.push(callback); return frames.length; });
+  const kernel = createKernel();
+  let document = { id: 'synthetic', layers: Array.from({ length: 262 }, (_, id) => ({ id, name: 'Synthetic layer' })) };
+  let revision = 1, time = 0, animationVersion = 0;
+  let selection = { layers: [] as string[], keys: [], chan: null };
+  const get = vi.fn(() => document);
+  const project = { get, revision: () => revision, selection: () => selection, time: () => time, playing: () => true } as unknown as ProjectAPI;
+  const deps = { pm: {}, state: { doc: {}, sel: {}, transport: {}, perf: {} }, project, anim: { version: () => animationVersion },
+    ui: { controls: {} }, storage: () => ({}), extensions: {}, panelsBackend: {}, reportRuntimeError: vi.fn()
+  } as unknown as HostDeps;
+  const record = { id: 'delta-fixture', trust: 'store', scope: 'user', manifest: { id: 'delta-fixture', name: 'Fixture', version: '1.0.0', apiVersion: 3, permissions: [] }, enabled: true, dir: '/tmp/delta-fixture', bundleUrl: '/ext/delta-fixture/bundle.js', bundleHash: 'fixture', health: { state: 'ok' }, updatedAt: 0 } as ExtensionRecord;
+  const frame = window.document.createElement('iframe');
+  let childApi!: ReturnType<typeof createSandboxAPI>;
+  const updates: any[] = [];
+  const pending = createSandboxRuntime(kernel, record, deps, {}, { frame, onPostInit(port, init) {
+    const child = createRpc(port, { mirror: (next: any) => { updates.push(next); sandboxControl(childApi).update(next); } });
+    close.push(() => child.close());
+    childApi = createSandboxAPI(child, init);
+    child.notify('activated');
+  } });
+  frame.dispatchEvent(new Event('load'));
+  const runtime = await pending;
+  close.push(() => runtime.dispose());
+  const initial = childApi.project.get();
+  get.mockClear();
+  for (let tick = 1; tick <= 120; tick++) {
+    time = tick / 120;
+    kernel.events.emit('time', time);
+    for (const callback of frames.splice(0)) callback(tick * 1000 / 120);
+  }
+  await new Promise(resolve => setTimeout(resolve, 10));
+  expect(get).not.toHaveBeenCalled();
+  expect(updates).toHaveLength(120);
+  expect(updates.every(update => !Object.hasOwn(update, 'project') && !Object.hasOwn(update, 'selection'))).toBe(true);
+  expect(childApi.project.get()).toBe(initial);
+  expect(childApi.project.time()).toBe(1);
+
+  const observed: unknown[] = [];
+  childApi.events.on('selection', () => observed.push(childApi.project.selection()));
+  await sandboxControl(childApi).ready();
+  selection = { layers: ['selected'], keys: [], chan: null };
+  kernel.events.emit('selection', selection as never);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  expect(observed).toEqual([selection]);
+  expect(get).not.toHaveBeenCalled();
+  expect(childApi.project.get()).toBe(initial);
+  expect(updates.at(-1)).not.toHaveProperty('project');
+
+  document = { ...document, id: 'replacement' };
+  kernel.events.emit('project:changed', { kind: 'replace' } as never);
+  for (const callback of frames.splice(0)) callback(2000);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  expect(get).toHaveBeenCalledTimes(1);
+  expect(childApi.project.get()).toEqual(document);
+  expect(childApi.project.get()).not.toBe(initial);
+  document.layers[0]!.name = 'Edited synthetic layer';
+  revision++;
+  kernel.events.emit('time', ++time);
+  for (const callback of frames.splice(0)) callback(2010);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  expect(get).toHaveBeenCalledTimes(2);
+  expect(childApi.project.get()).toEqual(document);
+  document.layers[0]!.name = 'Uncommitted synthetic edit';
+  animationVersion++;
+  kernel.events.emit('time', ++time);
+  for (const callback of frames.splice(0)) callback(2020);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  expect(get).toHaveBeenCalledTimes(3);
+  expect(childApi.project.get()).toEqual(document);
+  expect(deps.reportRuntimeError).not.toHaveBeenCalled();
+});
+
+it('keeps the combined UTF-8 mirror size bound across selection deltas and recovers after oversized selections', () => {
+  const document = { id: 'safe', payload: 'é'.repeat(2 * 1024 * 1024), assets: { a: { sourcePath: '/private/synthetic', name: 'Synthetic' } }, notes: { token: 'synthetic-token', body: 'safe' } };
+  let selection: unknown = { layers: [] };
+  const get = vi.fn(() => document);
+  const api = { project: { get, revision: () => 1, selection: () => selection, time: () => 0, playing: () => false } } as unknown as Parameters<typeof createProjectMirrorCache>[0];
+  const cache = createProjectMirrorCache(api);
+  expect(cache.snapshot().project).toMatchObject({ assets: { a: { name: 'Synthetic' } }, notes: { body: 'safe' } });
+  expect((cache.update(false, false).project as any).assets.a).not.toHaveProperty('sourcePath');
+  expect((cache.update(false, false).project as any).notes).not.toHaveProperty('token');
+  selection = { layers: ['x'.repeat(5 * 1024 * 1024)] };
+  expect(cache.update(false, true).project).toEqual({ tooLarge: true, revision: 1 });
+  expect(get).toHaveBeenCalledTimes(1);
+  selection = { layers: [] };
+  expect((cache.update(false, true).project as any).id).toBe('safe');
+  selection = { layers: ['x'.repeat(9 * 1024 * 1024)] };
+  expect(cache.update(false, true)).toMatchObject({ project: { tooLarge: true, revision: 1 }, selection: null });
+  selection = { layers: [] };
+  expect((cache.update(false, true).project as any).id).toBe('safe');
 });
 it('registers across a real MessageChannel, caches sync callbacks, scopes vars, and disposes', async () => {
   const output = await mkdtemp(path.join(os.tmpdir(), 'powermove-sandbox-fixture-'));

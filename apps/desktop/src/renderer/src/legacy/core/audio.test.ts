@@ -30,6 +30,27 @@ function audioLayer(): any {
 }
 
 describe('legacy audio install', () => {
+  it('limits a highly zoomed waveform to visible columns instead of drawing its offscreen tail', () => {
+    const PM = audioRegistry();
+    const layer = audioLayer(); layer.dur = 600;
+    PM.assets.get = () => ({ dur: 600, peaks: new Float32Array([.25, .5, .75, 1]) });
+    let columns = 0;
+    const context = { fillStyle: '', fillRect() { columns++; } };
+    PM.Audio.drawWaveform(context, layer, { x: 0, y: 0, width: 1_000_000, height: 40, clipLeft: 300, clipRight: 900 });
+    expect(columns).toBe(600);
+  });
+
+  it('preserves waveform source positions and peaks when its right edge is clipped', () => {
+    const PM = audioRegistry();
+    const layer = audioLayer(); layer.d.trim = 1;
+    PM.assets.get = () => ({ dur: 10, peaks: Float32Array.from({ length: 1000 }, (_, i) => (i % 17) / 17) });
+    const full: number[][] = [], clipped: number[][] = [];
+    const options = { x: -250, y: 5, width: 2000, height: 40, clipLeft: 100, step: 1, anchor: 1 };
+    PM.Audio.drawWaveform({ fillRect: (...args: number[]) => full.push(args) }, layer, options);
+    PM.Audio.drawWaveform({ fillRect: (...args: number[]) => clipped.push(args) }, layer, { ...options, clipRight: 500 });
+    expect(clipped).toEqual(full.filter(([x]) => x! < 500));
+  });
+
   it('hands the decoder its owned input without allocating a second full audio buffer', async () => {
     const bytes = new ArrayBuffer(64);
     const decoded = { duration: 1, length: 4, sampleRate: 4, numberOfChannels: 1, getChannelData: () => new Float32Array([0, .5, -.5, 0]) };

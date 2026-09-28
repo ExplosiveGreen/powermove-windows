@@ -3,7 +3,7 @@
   import { sel } from '../state/selection.svelte';
   import { tick } from 'svelte';
   import { doc } from '../state/document.svelte';
-  import { transport } from '../state/transport.svelte';
+  import { controlTime } from '../state/transport.svelte';
   import { EditGesture, type EditBinding } from './gesture';
   import { rowLabelId } from './context';
   import './controls.css';
@@ -33,8 +33,8 @@
   } = $props();
 
   const labelledBy = rowLabelId();
-  const value = $derived((doc.tick.values, doc.proj, transport.time, String(get() ?? '')));
-  const isMixed = $derived((sel.layers, doc.tick.values, doc.proj, transport.time, mixed?.(edit, value) ?? false));
+  const value = $derived((doc.tick.values, doc.proj, controlTime(), String(get() ?? '')));
+  const isMixed = $derived((sel.layers, doc.tick.values, doc.proj, controlTime(), mixed?.(edit, value) ?? false));
   const gesture = $derived(new EditGesture(api, edit));
 
   let trigger = $state<HTMLButtonElement>();
@@ -187,7 +187,8 @@
 
   function choose(name: string): void {
     close();
-    if (name === value && !isMixed) return;
+    const current = String(get() ?? '');
+    if (name === current && !(mixed?.(edit, current) ?? false)) return;
     gesture.once(name);
     api.transport.invalidate();
     void api.media.fonts.ensure(name, weight?.() ?? 400);

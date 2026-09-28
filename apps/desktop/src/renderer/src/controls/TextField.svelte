@@ -1,6 +1,6 @@
 <script lang="ts">
   import { doc } from '../state/document.svelte';
-  import { transport } from '../state/transport.svelte';
+  import { controlTime } from '../state/transport.svelte';
   import { EditGesture, type EditBinding } from './gesture';
   import { rowLabelId } from './context';
   import './controls.css';
@@ -23,7 +23,7 @@
   } = $props();
 
   const labelledBy = rowLabelId();
-  const value = $derived((doc.tick.values, doc.proj, transport.time, get()));
+  const value = $derived((doc.tick.values, doc.proj, controlTime(), get()));
   const gesture = $derived(new EditGesture(api, edit));
   let input: HTMLInputElement;
   let live = false;
@@ -37,6 +37,9 @@
   function focus(): void {
     gesture.begin();
     live = true;
+    const current = get();
+    draft = current == null ? '' : String(current);
+    input.value = draft;
   }
 
   function inputValue(): void {
@@ -58,7 +61,8 @@
       event.preventDefault();
       gesture.cancel();
       live = false;
-      draft = value == null ? '' : String(value);
+      const current = get();
+      draft = current == null ? '' : String(current);
       input.blur();
     }
   }

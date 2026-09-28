@@ -1,4 +1,4 @@
-import { videoClipsAt } from './video-timeline';
+import { videoClipsAt, type VideoClip } from './video-timeline';
 import { previewVideoElement } from './video-preview';
 import { layerVideoElement, pruneVideoInstances } from './video-instances';
 import { cancelPreviewVideoSeek, seekPreviewVideo } from './video-seek';
@@ -9,6 +9,7 @@ import { renderOpaqueFrame } from './frame-capture';
 import { installPreviewCache } from './preview-cache';
 import { sourceTime } from './retiming';
 import { viewerService } from './services';
+import { createPreviewQualityMonitor } from './preview-quality';
 /* Ported from js/core/engine.js — behavior-preserving. */
 import type { PMRegistry } from '../registry';
 
@@ -34,6 +35,7 @@ PM.loop = true;
 
 const E = { fps: 0, ms: 0, drops: 0, budget: 1000 / 60, auto: true };
 PM.perf = E;
+const previewQuality = createPreviewQualityMonitor();
 
 /* Video uses HTMLMediaElement.play(), which settles asynchronously. A pause can
    happen while a start is still pending, so remember the desired state and
@@ -112,6 +114,14 @@ let playingVideos = new Set<any>();
 let decoderAssets = new Set<any>();
 let bufferedVideos = new Set<HTMLVideoElement>();
 const frameVideoSeeks = new Map<any, number>();
+// Ownership, synchronization and lookahead frequently ask for the same time.
+// Share only within one engine tick; decoder readiness is never cached here.
+const videoClipPlans = new Map<number, VideoClip[]>();
+function plannedVideoClips(time: number): VideoClip[] {
+  let clips = videoClipPlans.get(time);
+  if (!clips) { clips = videoClipsAt(PM, time); videoClipPlans.set(time, clips); }
+  return clips;
+}
 function flushFrameVideoSeeks() {
   for (const [el, target] of frameVideoSeeks) seekPreviewVideo(el, target, .0005);
   frameVideoSeeks.clear();
@@ -136,7 +146,7 @@ function scrubVideos(T: any) {
   // Resolve only active clips, so inactive copies never claim or pause a
   // decoder owned by a visible clip.
   const owners = new Map<any, any>();
-  for (const clip of videoClipsAt(PM, drawn)) {
+  for (const clip of plannedVideoClips(drawn)) {
     const { layer, asset } = clip;
     const source = previewVideoElement(PM, asset);
     const el = layerVideoElement(PM, asset, clip.id);
@@ -157,7 +167,7 @@ function scrubVideos(T: any) {
     if (!asset?.el) continue;
     const el = layerVideoElement(PM, asset, layer.id);
     retain(asset, layer.id);
-    if (videoClipsAt(PM, layer.from).length > 1) buffer(el);
+    if (plannedVideoClips(layer.from).length > 1) buffer(el);
     ensureMediaPaused(el);
     const at = sourceTime(PM, layer, layer.from);
     seekPreviewVideo(el, sequencePlaybackTime(asset, at) ?? PM.clamp(at, 0, Math.max(0, (asset.dur || 0) - .04)), .0005);
@@ -166,11 +176,11 @@ function scrubVideos(T: any) {
   // Prepare the loop entrance only if it owns a different decoder. Seeking an
   // active clip early would interrupt the tail of the current loop.
   const [start, end] = PM.proj.work?.[1] > PM.proj.work?.[0] ? PM.proj.work : [0, PM.proj.dur];
-  if (PM.playing && PM.loop && end - drawn <= .5) for (const clip of videoClipsAt(PM, start)) {
+  if (PM.playing && PM.loop && end - drawn <= .5) for (const clip of plannedVideoClips(start)) {
     const el = layerVideoElement(PM, clip.asset, clip.id);
     retain(clip.asset, clip.id);
     if (owners.has(el)) continue;
-    if (videoClipsAt(PM, start).length > 1) buffer(el);
+    if (plannedVideoClips(start).length > 1) buffer(el);
     ensureMediaPaused(el); seekPreviewVideo(el, clip.at, .0005);
   }
 
@@ -212,7 +222,7 @@ function scrubVideos(T: any) {
 }
 
 function synchronizedPlaybackFrame(time: number) {
-  const clips = videoClipsAt(PM, time);
+  const clips = plannedVideoClips(time);
   if (clips.length < 2 || clips.some(clip => clip.rate == null)) return undefined;
   const decoders = clips.map(clip => layerVideoElement(PM, clip.asset, clip.id));
   if (decoders.some(video => !bufferedVideos.has(video))) return undefined;
@@ -222,7 +232,7 @@ function synchronizedPlaybackFrame(time: number) {
   for (let offset = 0; offset <= Math.ceil(fps * .2); offset++) {
     const at = (Math.round(time * fps) - offset) / fps;
     if (at < 0) break;
-    const candidates = videoClipsAt(PM, at);
+    const candidates = plannedVideoClips(at);
     if (candidates.length !== clips.length || candidates.some((clip, i) => clip.id !== clips[i]!.id)) break;
     const frames = new Map<string, PlaybackVideoFrame>();
     for (const [i, clip] of candidates.entries()) {
@@ -258,10 +268,12 @@ PM.setTime = (t: any, opt: any = {}) => {
   synchronizedFrame = null;
   PM.playbackVideoFrame = null;
   PM.time = t;
+  if (PM.playing) previewQuality.reset(window.performance.now());
   if (PM.playing) { clock.base=t;clock.origin=window.performance.now();clock.last=clock.origin;clock.cycle=0;videoSeekGeneration++; PM.Audio.seek(t); }
   PM.bus.emit('time', t);
   PM.invalidate('render'); PM.invalidate('timeline'); PM.invalidate('status');
-  if (!PM.playing) PM.invalidate('ui');
+  // Time subscribers already update live values. A broad UI invalidation also
+  // rebuilds parent menus/property structure for every pointer-move scrub.
 };
 PM.step = (frames: any) => PM.setTime(PM.time + frames / PM.proj.fps);
 
@@ -280,6 +292,8 @@ PM.play = () => {
   // that setup before starting the transport clock so it cannot skip frames.
   PM.Audio.start(PM.time);
   clock.last = window.performance.now();
+  previewQuality.reset(clock.last);
+  E.ms = 0;
   // Paused redraws are demand-driven. Start a new measurement window here so
   // idle time and the previous playback session cannot depress the FPS readout.
   clock.t0 = clock.last; clock.frames = 0; E.fps = 0;
@@ -298,7 +312,7 @@ PM.pause = () => {
   // Playback has a continuous clock, but edits belong to the frame on screen.
   // Leaving a fractional time here lets key creation round into the next frame.
   if (wasPlaying) PM.setTime(Math.floor(PM.time * PM.proj.fps + 1e-7) / PM.proj.fps, { raw: true });
-  PM.Audio.pause(); scrubVideos(PM.time);
+  PM.Audio.pause(); videoClipPlans.clear(); scrubVideos(PM.time);
   if (!wasPlaying) return;
   PM.bus.emit('transport');
   PM.invalidate();
@@ -313,22 +327,34 @@ let needsDraw = true;
 let contentGeneration = 0, renderedGeneration = -1;
 let lastRenderTime = NaN, lastProject: any = null;
 let lastPresentedSeekGeneration = -1;
+let lastPresentedFps = 0;
 let lastRenderFailure = -Infinity;
 let interactionUntil = 0, refinePending = false, lastQualityChange = -Infinity;
 let inputUntil = 0;
 PM.interactionActive = () => window.performance.now() < Math.max(inputUntil, interactionUntil);
 for (const event of ['pointerdown', 'pointermove', 'wheel', 'keydown']) window.document?.addEventListener?.(event, () => { inputUntil = window.performance.now() + 500; }, { passive: true });
 PM.bus.on('time', () => { if (!PM.playing) { interactionUntil = window.performance.now() + 150; refinePending = true; } });
-for (const event of ['layers', 'project', 'assets', 'quality']) PM.bus.on(event, () => { contentGeneration++; });
+for (const event of ['layers', 'project', 'assets', 'quality']) PM.bus.on(event, () => {
+  contentGeneration++;
+  previewQuality.reset(window.performance.now());
+});
 
 PM.bus.on('draw', () => { needsDraw = true; });
 
 function frame(now: any) {
   window.requestAnimationFrame(frame);
+  const cadenceSlow = previewQuality.tick(now, PM.playing, drawnFps());
+  E.budget = previewQuality.budget(drawnFps());
   // Offline renderers own the shared video decoders and canvas until done.
   // Redrawing the preview here seeks them back to the editor playhead between
   // export frames, producing repeated/frozen frames in the encoded video.
   if (PM.agentFrameCapture || PM.Export?.busy || PM.Preview?.preparing || PM.Preview?.active) return;
+  if (PM.playing && E.auto && cadenceSlow && PM.quality > .25) {
+    PM.quality = Math.max(.25, PM.quality - .25);
+    lastQualityChange = now;
+    PM.bus.emit('quality');
+  }
+  videoClipPlans.clear();
   const p = PM.proj;
   if (PM.playing) {
     if (now - clock.t0 > 500) { E.fps = Math.round(clock.frames * 1000 / (now - clock.t0)); clock.frames = 0; clock.t0 = now; PM.invalidate('status'); }
@@ -353,8 +379,17 @@ function frame(now: any) {
         || synchronizedFrame.generation !== contentGeneration
         || synchronizedFrame.seekGeneration !== videoSeekGeneration)) synchronizedFrame = null;
     const drawn = Math.floor(t * drawnFps() + 1e-7) / drawnFps();
+    // A high-refresh display must not redo decoder ownership, lookahead and
+    // timeline evaluation between project frames. Only skip a frame that was
+    // actually presented: pending decodes still retry on every display tick.
+    if (!synchronizedFrame && drawn === lastRenderTime && p === lastProject
+        && renderedGeneration === contentGeneration && lastPresentedSeekGeneration === videoSeekGeneration
+        && lastPresentedFps === drawnFps()) {
+      PM.bus.emit('overlay');
+      return;
+    }
     const target = synchronizedFrame?.time ?? drawn;
-    const clips = videoClipsAt(PM, target);
+    const clips = plannedVideoClips(target);
     PM.videoFrameSync = clips.length > 1 && clips.some(clip => clip.rate == null);
     if (PM.videoFrameSync) synchronizedFrame ??= {
       time: target, project: p, generation: contentGeneration, seekGeneration: videoSeekGeneration,
@@ -370,18 +405,26 @@ function frame(now: any) {
   // playback and content/time changes always bypass this navigation-only path.
   if (!PM.playing && viewerService(PM)?.deferNavigationRender(now)) return;
   let renderTime=PM.playing ? (synchronizedFrame?.time ?? Math.floor(PM.time * drawnFps() + 1e-7) / drawnFps()) : PM.time;
+  const renderOptions = {
+    mblur: !interactive, mbSamples: PM.playing ? 6 : 12,
+    shutter: p.shutter || .5, hideShy: false,
+  };
   PM.playbackVideoFrame = null;
-  if (PM.playing && !PM.videoFrameSync) {
+  if (PM.playing && !PM.videoFrameSync && !PM.GL.hasPreviewFrame?.(renderTime, renderOptions)) {
     const frame = synchronizedPlaybackFrame(renderTime);
-    if (frame === null) { PM.bus.emit('overlay'); return; }
+    if (frame === null) { previewQuality.record(now, false); PM.bus.emit('overlay'); return; }
     if (frame) {
       if (frame.time < lastRenderTime && lastProject === p && lastPresentedSeekGeneration === videoSeekGeneration
-          && renderedGeneration === contentGeneration) { PM.bus.emit('overlay'); return; }
+          && renderedGeneration === contentGeneration) { previewQuality.record(now, false); PM.bus.emit('overlay'); return; }
       PM.playbackVideoFrame = frame; renderTime = frame.time;
     }
   }
-  if (PM.playing && renderTime === lastRenderTime && p === lastProject && renderedGeneration === contentGeneration) {
+  if (PM.playing && renderTime === lastRenderTime && p === lastProject && renderedGeneration === contentGeneration
+      && lastPresentedSeekGeneration === videoSeekGeneration && lastPresentedFps === drawnFps()) {
     synchronizedFrame = null;
+    // The requested project frame was new (the fast duplicate check above
+    // already handled display-only ticks), but the decoder is still holding.
+    previewQuality.record(now, false);
     PM.bus.emit('overlay');
     return;
   }
@@ -390,10 +433,7 @@ function frame(now: any) {
   const t0 = window.performance.now();
   let presented = true;
   try {
-    presented = PM.GL.render(renderTime, {
-      mblur: !interactive, mbSamples: PM.playing ? 6 : 12,
-      shutter: p.shutter || .5, hideShy: false,
-    }) !== false;
+    presented = PM.GL.render(renderTime, renderOptions) !== false;
   } catch (error) {
     presented = false;
     /* A throw here used to escape the animation frame with the redraw flag
@@ -406,18 +446,24 @@ function frame(now: any) {
     }
   }
   flushFrameVideoSeeks();
-  if (presented) { lastRenderTime = renderTime; lastProject = p; renderedGeneration = contentGeneration; lastPresentedSeekGeneration = videoSeekGeneration; synchronizedFrame = null; }
+  if (presented) { lastRenderTime = renderTime; lastProject = p; renderedGeneration = contentGeneration; lastPresentedSeekGeneration = videoSeekGeneration; lastPresentedFps = drawnFps(); synchronizedFrame = null; }
   else needsDraw = true;
   PM.bus.emit('overlay');
   const ms = window.performance.now() - t0;
-  E.ms = E.ms * .85 + ms * .15;
+  // Replaying a stored image says nothing about the cost of drawing a new
+  // frame. Do not raise quality and throw away a smooth cached loop on that basis.
+  if (!PM.GL.stats?.previewHit) E.ms = E.ms * .85 + ms * .15;
   if (PM.playing && presented) {
     clock.frames++;
   }
+  if (PM.playing) previewQuality.record(now, presented && !PM.GL.compiling && !PM.assets.loading?.size, !!PM.GL.stats?.previewHit);
   /* adaptive quality while playing so scrubbing never stutters */
-  if (E.auto && (PM.playing || interactive) && now - lastQualityChange > 750) {
-    if (E.ms > 22 && PM.quality > .5) { PM.quality = Math.max(.5, PM.quality - .25); lastQualityChange = now; PM.bus.emit('quality'); }
-    else if (E.ms < 9 && PM.quality < 1) { PM.quality = Math.min(1, PM.quality + .25); lastQualityChange = now; PM.bus.emit('quality'); }
+  if (E.auto && !PM.GL.stats?.previewHit && (PM.playing || interactive) && now - lastQualityChange > 750) {
+    if (presented && (!PM.playing || previewQuality.ready(now)) && E.ms > E.budget * .9 && PM.quality > .25) {
+      PM.quality = Math.max(.25, PM.quality - .25); lastQualityChange = now; PM.bus.emit('quality');
+    }
+    // A cheap CPU submission does not prove GPU headroom. Keep the attained
+    // playback scale stable; the existing paused refinement restores Full.
   }
 }
 window.requestAnimationFrame(frame);
