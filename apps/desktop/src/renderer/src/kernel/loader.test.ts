@@ -712,6 +712,21 @@ it('publishes record changes after the async bridge read and runtime state befor
   await loader.dispose();
 });
 
+it('turns an extension off at the first sandbox_fatal error', async () => {
+  const bridge = fakeBridge([rec('spinner')]);
+  const { deps, toasts } = fakeDeps();
+  const loader = createLoader({ kernel, bridge: bridge.bridge, deps, builtins: { spinner: async () => ({ default: () => undefined }) } });
+  await loader.boot();
+  await loader.whenIdle();
+  expect(loader.activeIds()).toEqual(['spinner']);
+  loader.reportRuntimeError('spinner', Object.assign(new Error('stopped responding'), { code: 'sandbox_fatal' }));
+  await loader.whenIdle();
+  expect(loader.activeIds()).toEqual([]);
+  expect(loader.records()[0]).toMatchObject({ enabled: false, health: { state: 'runtime-error', error: expect.stringContaining('stopped responding') } });
+  expect(toasts).toHaveLength(1);
+  await loader.dispose();
+});
+
 describe('api.vars', () => {
   const declared = { apiVersion: 2, vars: [{ key: 'API_KEY', label: 'API key', secret: true, required: true }, { key: 'REGION', label: 'Region' }] };
 

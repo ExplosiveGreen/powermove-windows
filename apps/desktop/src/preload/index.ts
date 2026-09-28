@@ -63,6 +63,7 @@ const bridge: PowermoveBridge = {
     return () => ipcRenderer.removeListener(IPC.inputKey, listener);
   },
   sandboxFocus: (focus) => ipcRenderer.send(IPC.storeSandboxFocus, focus),
+  sandboxTerminate: (extensionId) => ipcRenderer.invoke(IPC.sandboxTerminate, extensionId) as Promise<number>,
   compatible: {
     status: () => ipcRenderer.invoke(IPC.compatibleStatus),
     configure: input => ipcRenderer.invoke(IPC.compatibleConfigure, input),

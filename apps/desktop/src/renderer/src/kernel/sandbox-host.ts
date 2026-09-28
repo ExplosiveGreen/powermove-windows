@@ -9,6 +9,8 @@ import { mountSandboxView, type ViewHost, type ViewLink } from './sandbox-view';
 import { chordOfEvent, normalizeChord } from './keychord';
 import { bridge } from './bridge';
 import { plain, projectSnapshots, sandboxStats } from './project-snapshots';
+import { sandboxBundleUrl, sandboxDocumentUrl, sandboxOrigin } from '../../../shared/sandbox-origin';
+import { watchSandbox } from './sandbox-watchdog';
 import { menuEntriesSchema, paletteEntriesSchema, parseHostEvent, parseInvoke, parseRegistration } from './sandbox-schemas';
 
 /** Kernel events that can change a document's SandboxState. */
@@ -129,12 +131,12 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   frame.hidden = true;
   frame.setAttribute('sandbox', 'allow-scripts');
   frame.setAttribute('aria-hidden', 'true');
-  // Inside Electron the document always comes from app:// (in development
-  // main proxies it from Vite); only the browser host (powermove serve)
-  // serves it from its own origin.
-  const base = location.protocol === 'app:' || navigator.userAgent.includes('Electron') ? 'app://powermove' : location.origin;
+  // Inside Electron the document comes from the extension's own app:// host,
+  // so it gets its own process (in development main proxies it from Vite);
+  // only the browser host (powermove serve) serves it from its own origin.
+  const base = sandboxOrigin(record.id, location.protocol === 'app:' || navigator.userAgent.includes('Electron') ? 'app://powermove' : location.origin);
   const perms = (manifest.permissions ?? []).join(',');
-  if (!test?.frame) frame.src = `${base}/host/ext-sandbox.html?id=${encodeURIComponent(record.id)}&perms=${encodeURIComponent(perms)}`;
+  if (!test?.frame) frame.src = sandboxDocumentUrl(base, record.id, perms);
   const registrations = new Map<string, Disposable>();
   const remoteHandles = new Set<number>();
   const claimHandles = (handles: number[]): void => {
@@ -372,7 +374,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   const initFor = (state: SandboxState): SandboxInit => ({
     id: record.id, apiVersion: manifest.apiVersion ?? 1, manifest, vars,
     theme: themeSnapshot(kernel), activeTheme: kernel.theme.activeId, state,
-    bundleUrl: record.bundleUrl ?? `${base}/ext/${encodeURIComponent(record.id)}/bundle.js`,
+    bundleUrl: sandboxBundleUrl(base, record.id, record.bundleUrl),
     catalog: {
       effects: plain(reg.effects.list()) as Array<Record<string, unknown>>,
       transitions: plain(reg.transitions.list()) as Array<Record<string, unknown>>,
@@ -389,7 +391,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     for (const link of links) { try { link.rpc.notify(method, value); } catch { /* view closing */ } }
   };
   const views: ViewHost = {
-    src: panelId => test?.onViewInit ? null : `${base}/host/ext-sandbox.html?id=${encodeURIComponent(record.id)}&view=${encodeURIComponent(panelId)}&perms=${encodeURIComponent(perms)}`,
+    src: panelId => test?.onViewInit ? null : sandboxDocumentUrl(base, record.id, perms, panelId),
     init: link => initFor(openDoc(link, link.rpc)),
     detach: link => { const doc = docOf.get(link); if (doc) docs.delete(doc); docOf.delete(link); },
     theme: () => viewTheme(kernel),
@@ -433,8 +435,13 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   }) : null;
   themeWatch?.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'data-theme'] });
   let disposed = false;
+  let watchdog: { dispose(): void } | null = null;
+  /* Removing a spinning sandbox's iframe does not stop its process: main
+     kills it, while the frames still exist to find it by. */
+  const terminate = async (): Promise<void> => { try { await bridge()?.sandboxTerminate?.(record.id); } catch { /* disposing still frees the kernel side */ } };
   const dispose = (): void => {
     if (disposed) return; disposed = true;
+    watchdog?.dispose();
     keysOff.dispose(); themeWatch?.disconnect(); docs.clear();
     // Registrations first: panel views tell the runtime to close their ports.
     for (const item of registrations.values()) item.dispose(); registrations.clear();
@@ -445,10 +452,11 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   stopForBudget = () => { deps.reportRuntimeError(record.id, new Error('exceeded the sandbox message budget')); dispose(); };
   for (const event of STATE_EVENTS) host.api.events.on(event, schedule);
   host.api.events.on('theme:changed', () => { try { rpc.notify('theme', themeSnapshot(kernel)); } catch { /* disposed */ } });
+  let timedOut = false;
   try {
     host.setActivating(true);
     const loaded = new Promise<void>((resolve, reject) => { frame.addEventListener('load', () => resolve(), { once: true }); frame.addEventListener('error', () => reject(new Error('Sandbox document failed to load')), { once: true }); });
-    const timeout = setTimeout(() => { const error = new Error('Sandbox document or activation timed out'); rejected(error); frame.dispatchEvent(new Event('error')); }, 9_000);
+    const timeout = setTimeout(() => { timedOut = true; const error = new Error('Sandbox document or activation timed out'); rejected(error); frame.dispatchEvent(new Event('error')); }, 9_000);
     document.body.append(frame);
     try {
       await loaded;
@@ -458,6 +466,12 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
       await ready;
     } finally { clearTimeout(timeout); }
     host.setActivating(false);
+    // A spinning or crashed runtime stops answering.
+    watchdog = watchSandbox({ ping: () => rpc.call('ping'), onUnresponsive: () => void (async () => {
+      await terminate();
+      dispose();
+      deps.reportRuntimeError(record.id, Object.assign(new Error('stopped responding'), { code: 'sandbox_fatal' }));
+    })() });
     return { handle: host, dispose };
-  } catch (error) { host.setActivating(false); dispose(); throw error; }
+  } catch (error) { host.setActivating(false); if (timedOut) await terminate(); dispose(); throw error; }
 }
