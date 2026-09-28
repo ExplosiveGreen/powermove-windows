@@ -27,6 +27,8 @@ const SAFE_INVOKE: Record<string, Set<string>> = {
 };
 const HOST_EVENTS = new Set(['project:changed', 'selection', 'time', 'transport', 'theme', 'extensions:changed']);
 const ownId = (extension: string, id: string): boolean => id.startsWith(`${extension}.`);
+/** Distinct CSP violations remembered (and logged) per extension session. */
+const MAX_VIOLATION_KEYS = 100;
 const LEGACY_EDIT_COMMANDS = new Set(['delete', 'duplicate', 'split', 'selectAll', 'deselect', 'groupLayers', 'ungroupLayers', 'nudgeSelection', 'nudgeKeyframes']);
 function denied(message: string, code = 'permission_denied'): never {
   const error = new Error(message) as Error & { code: string };
@@ -285,15 +287,21 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     'extensions-list'() { return host.api.extensions.list().map(({ dir: _dir, ...rest }) => rest); },
     log(level: unknown, message: unknown, data: unknown) { const now = Date.now(); if (now - logWindow >= 1000) { logWindow = now; logCount = 0; } if (++logCount > 50) return; if (level === 'info' || level === 'warn' || level === 'error') host.api.log(level, String(message).slice(0, 4096), ...(Array.isArray(data) ? data : [])); },
     'runtime-error': (error: { message: string }) => deps.reportRuntimeError(record.id, new Error(error?.message)),
-    /* Each open panel replays activate in its own document, so one blocked
-       request can surface once per document. Count it once per extension
-       session, or opening panels alone would trip the auto-disable rule. */
-    'csp-violation': (event: { directive: string; blockedURI: string }) => {
-      const key = `${event?.directive} ${event?.blockedURI}`;
+    /* A blocked load already did no harm, so live it is logged, never
+       counted toward the auto-disable rule. Each open panel replays activate
+       in its own document, so one request can surface once per document: each
+       distinct key is heard once per extension session, and at most
+       MAX_VIOLATION_KEYS are kept. The publish-time sandbox check (observer)
+       still fails on any. */
+    'csp-violation': (event: { directive?: unknown; blockedURI?: unknown }) => {
+      if (violations.size >= MAX_VIOLATION_KEYS) return;
+      const directive = String(event?.directive ?? '').slice(0, 64);
+      const blockedUri = String(event?.blockedURI ?? '').slice(0, 512);
+      const key = `${directive} ${blockedUri}`;
       if (violations.has(key)) return;
       violations.add(key);
-      if (observer?.csp) observer.csp(String(event?.directive ?? ''), String(event?.blockedURI ?? ''));
-      else deps.reportRuntimeError(record.id, new Error(`CSP blocked ${event?.blockedURI} (${event?.directive})`));
+      if (observer?.csp) { observer.csp(directive, blockedUri); return; }
+      host.api.log('warn', `The sandbox blocked ${blockedUri || 'a request'} (${directive})${violations.size === MAX_VIOLATION_KEYS ? '; further blocked requests are not logged' : ''}`);
     },
     /* Trusted-only reach and sync reads of async results (shim-api.ts). Live,
        they only warn once per member: the throw itself already surfaced. */
