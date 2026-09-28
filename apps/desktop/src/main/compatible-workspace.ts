@@ -7,6 +7,7 @@ import { compileExtension } from './extensions/compiler';
 import { collectArtifacts, mimeTypeForPath } from './codex/artifacts';
 import { publishExtensionChanges } from './codex/change-history';
 import { loginShellPath } from './login-shell-path';
+import { killProcessFamily } from './process-family';
 import { agentResultSchema } from './codex/instructions';
 import type { AgentWorkspace } from './codex/workspace';
 import type { PowermoveAgentToolSpec } from './agent-tools/spec';
@@ -195,7 +196,11 @@ export async function runWorkspaceCommand(root: string, access: 'project' | 'com
   const env = await commandEnvironment(await realpath(root), access);
   // Project access keeps outbound network for research and downloads (the
   // footage chip depends on it); only the filesystem is confined.
-  const profile = `(version 1)(allow default)(allow network-outbound)(deny appleevent-send)(deny file-write*)(allow file-write* (subpath ${JSON.stringify(await realpath(root))}) (literal "/dev/null") (literal "/dev/tty")`
+  const profile = `(version 1)(allow default)(allow network-outbound)(deny appleevent-send)`
+    // Stay in the process group the host kills; posix_spawn escapes are
+    // found through their parents by killProcessFamily.
+    + '(deny syscall-unix (syscall-number SYS_setsid SYS_setpgid))'
+    + `(deny file-write*)(allow file-write* (subpath ${JSON.stringify(await realpath(root))}) (literal "/dev/null") (literal "/dev/tty")`
     // Inherited stdio only; a broad /dev subpath would expose devices.
     + ' (literal "/dev/stdout") (literal "/dev/stderr") (regex #"^/dev/fd/[0-9]+$"))';
   if (access === 'project' && process.platform !== 'darwin') throw new Error('Project command sandbox is only available on macOS.');
@@ -204,10 +209,8 @@ export async function runWorkspaceCommand(root: string, access: 'project' | 'com
       access === 'project' ? ['-p', profile, '/bin/zsh', '-c', command] : ['-c', command],
       { cwd: root, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '', truncated = false, stopped = false;
-    const stop = () => {
-      stopped = true;
-      if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* Already exited. */ } }
-    };
+    const sweep = () => child.pid ? killProcessFamily(child.pid) : Promise.resolve();
+    const stop = () => { stopped = true; void sweep(); };
     const timer = setTimeout(stop, timeoutMs);
     signal.addEventListener('abort', stop, { once: true });
     if (signal.aborted) stop();
@@ -219,6 +222,11 @@ export async function runWorkspaceCommand(root: string, access: 'project' | 'com
     child.stdout.on('data', append); child.stderr.on('data', append);
     const cleanup = () => { clearTimeout(timer); signal.removeEventListener('abort', stop); };
     child.on('error', error => { cleanup(); reject(error); });
+    // Nothing a command starts outlives it. A process that escaped the kill
+    // may still hold the output pipes, so stop waiting on them shortly after.
+    child.on('exit', () => {
+      void sweep().finally(() => setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); }, 250).unref());
+    });
     child.on('close', code => {
       cleanup();
       if (signal.aborted) reject(signal.reason);

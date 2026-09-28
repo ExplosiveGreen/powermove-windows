@@ -126,6 +126,23 @@ it.runIf(process.platform === 'darwin')('keeps outbound network in Project acces
   expect(Number(result.output)).toBeGreaterThan(0);
 }, 40_000);
 
+it.runIf(process.platform === 'darwin')('stops what a command leaves running and refuses new sessions', async () => {
+  const ws = await workspace();
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const leftover = await runWorkspaceCommand(ws.layout.root, 'project', 'sleep 30 >/dev/null 2>&1 & printf %s $!', 5000, signal());
+  await expect.poll(() => alive(Number(leftover.output))).toBe(false);
+  // Piped, so perl is not already a session leader (which would refuse anyway).
+  const setsid = await runWorkspaceCommand(ws.layout.root, 'project', `perl -MPOSIX -e 'POSIX::setsid() < 0 and die "setsid: $!\\n"; print "escaped"' 2>&1 | cat`, 5000, signal());
+  expect(setsid.output).toBe('setsid: Operation not permitted\n');
+  // posix_spawn can still start a new session; its live parent leads to it.
+  const script = `const c = require('node:child_process').spawn('/bin/sleep', ['30'], { detached: true, stdio: 'ignore' }); console.log(c.pid); setInterval(() => {}, 1000);`;
+  const node = JSON.stringify(process.execPath);
+  const timedOut = await runWorkspaceCommand(ws.layout.root, 'project', `${node} -e ${JSON.stringify(script)}`, 1500, signal()).catch((error: Error) => error.message);
+  const escaped = Number(/(\d+)/.exec(String(timedOut))?.[1]);
+  expect(escaped).toBeGreaterThan(1);
+  await expect.poll(() => alive(escaped)).toBe(false);
+});
+
 it.runIf(process.platform === 'darwin')('lets Project commands write to their inherited stdio but not other devices', async () => {
   const ws = await workspace();
   const result = await runWorkspaceCommand(ws.layout.root, 'project', 'printf out > /dev/stdout && printf fd > /dev/fd/1 && printf err > /dev/stderr', 5000, signal());
