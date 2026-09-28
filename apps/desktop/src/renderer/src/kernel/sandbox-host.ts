@@ -19,7 +19,7 @@ export interface SandboxRuntime { handle: ExtensionHandle; dispose(): void }
 const SAFE_INVOKE: Record<string, Set<string>> = {
   commands: new Set(['run']), project: new Set(['apply', 'select', 'setTime', 'play', 'pause', 'undo', 'redo', 'snapshot']),
   transport: new Set(['step']), assets: new Set(['pick', 'import', 'get', 'readText']),
-  storage: new Set(['get', 'set', 'delete']), ui: new Set(['toast', 'confirm', 'icon']),
+  storage: new Set(['get', 'set', 'delete']), ui: new Set(['toast', 'confirm', 'icon', 'copy']),
   panels: new Set(['open', 'close', 'refresh']), keybindings: new Set(['unbind']),
   theme: new Set(['activate']), palette: new Set(['open']),
   media: new Set(['getImportDefaults']), events: new Set(['emit']),
@@ -176,7 +176,21 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     if (imports.reduce((sum, entry) => sum + entry.bytes, file.size) > IMPORT_MINUTE_BYTES) denied('assets.import accepts up to 2 GiB a minute', 'resource_limit');
     imports.push({ at: now, bytes: file.size });
   };
-  const invoke = (namespace: string, method: string, args: unknown): unknown => {
+  /* ui.copy: the kernel's manifest record grants it (never the document's
+     URL), the host itself sees the calling view focused, and it writes once
+     a second at most. The runtime has no focus to prove, so it never copies. */
+  let copiedAt = -Infinity;
+  const copy = async (text: string, view: ViewLink | null): Promise<void> => {
+    if (!permissions.includes('clipboard')) denied('ui.copy requires clipboard permission', 'clipboard');
+    if (!view?.focused?.()) denied('ui.copy works only from a panel that has focus');
+    const write = bridge()?.clipboardWriteText;
+    if (!write) throw new Error('The clipboard is unavailable');
+    const now = Date.now();
+    if (now - copiedAt < 1000) denied('ui.copy is limited to once a second', 'resource_limit');
+    copiedAt = now;
+    await write(text);
+  };
+  const invoke = (namespace: string, method: string, args: unknown, view: ViewLink | null = null): unknown => {
     if (!SAFE_INVOKE[namespace]?.has(method)) throw new Error(`Sandbox method unavailable: ${namespace}.${method}`);
     const parsed = parseInvoke(namespace, method, args);
     if (!permissions.includes('project:write') && (namespace === 'project' && method !== 'snapshot' || namespace === 'transport'))
@@ -200,6 +214,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
       const error = new Error(`assets.${method} requires assets permission`); error.name = 'PermissionError'; throw error;
     }
     if (namespace === 'assets' && method === 'import') admitImport(parsed[0] as File);
+    if (namespace === 'ui' && method === 'copy') return copy(String(parsed[0]), view);
     if (namespace === 'storage') {
       const key = String(parsed[0]);
       if (key.length > 128) denied('storage key exceeds 128 characters', 'resource_limit');
@@ -283,7 +298,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
       registrations.set(token, { dispose() { if (released) return; released = true; registrationCount -= 1; for (const handle of handles) remoteHandles.delete(handle); item.dispose(); } });
     },
     'dispose-registration'(token: string) { link.registrations.get(token)?.dispose(); link.registrations.delete(token); },
-    invoke,
+    invoke: (namespace: string, method: string, args: unknown) => invoke(namespace, method, args, runtime ? null : link as ViewLink),
     /* Enforced here whatever the shim does: at most one full copy per
        generation for each document. A document asking again for the
        generation it already holds gets `unchanged`, however often it asks. */

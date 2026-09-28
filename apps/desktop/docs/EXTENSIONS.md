@@ -107,7 +107,11 @@ sandbox.
 
 - `network` allows HTTPS and WebSocket requests and remote images and media. It
   is the capability that lets project data leave, so it is the one to scrutinize.
-- `clipboard` allows writing to the clipboard.
+- `clipboard` allows `ui.copy(text)`, which writes plain text (up to 500,000
+  characters, at most once a second) from one of the extension's panels while
+  that panel has focus. No permission lets an extension read the clipboard.
+  Treat it as a disclosure rather than a hard boundary: a focused panel can
+  also copy with `document.execCommand('copy')`.
 - `assets` allows picking, importing, and reading asset files.
 - `project:write` allows project mutation through `apply`, `undo`, `redo`, `select`, time and transport controls. `commands.run` can call an extension's own commands and, with this permission, the named legacy editing commands. It cannot call another extension's commands or File, app, export, settings, or mods commands.
 - `full-access` allows trusted-only APIs. Store installs that request it stay off
@@ -342,7 +346,7 @@ api.events.on('project:changed', async () => {
 | --- | --- |
 | `effects`, `transitions`, `layers`, `theme`, `keybindings`, `commands`, `palette`, `menus`, `status`, `panels` | `anim`, `model`, `groups`, `history`, `edit`, `inspector`, `render`, `uiState` |
 | `assets`, `project`, `transport` time and controls, `storage`, `events`, `vars`, `util`, `ease`, pure `space3d` helpers | `selection` live graph helpers, `dnd`, `workspace`, `services`, `host`; live `space3d` methods |
-| `media.registerImportDefaults/getImportDefaults`, `ui.toast/confirm/icon`, `extensions.list`, `log`, `onDispose` | `media.importFiles/assets/audio/fonts`, `ui.controls/modal/menu/drag/gesture/mount` |
+| `media.registerImportDefaults/getImportDefaults`, `ui.toast/confirm/icon/copy`, `extensions.list`, `log`, `onDispose` | `media.importFiles/assets/audio/fonts`, `ui.controls/modal/menu/drag/gesture/mount` |
 
 Sandboxed panels render their `component` or `build` content in a separate
 view iframe. `panels.header`, `panels.moveSlot`, and `panels.library.render`

@@ -4,11 +4,13 @@ import { Blob as NodeBlob, File as NodeFile } from 'node:buffer';
 import { createRpc } from '../../../shared/sandbox-rpc';
 import { createSandboxRuntime } from './sandbox-host';
 import { createKernel } from './registries';
+import { installBridgeForTests, resetBridgeForTests } from './bridge';
+import { CLIPBOARD_TEXT_MAX_CHARS, type PowermoveBridge } from '../../../shared/ipc';
 import type { HostDeps } from './host';
 import type { ExtensionRecord, ProjectAPI } from './api';
 
 const close: Array<() => void> = [];
-afterEach(() => { for (const fn of close.splice(0)) fn(); document.body.replaceChildren(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { for (const fn of close.splice(0)) fn(); document.body.replaceChildren(); vi.unstubAllGlobals(); vi.restoreAllMocks(); resetBridgeForTests(); });
 const MiB = 1024 * 1024;
 /* A real File crosses the port: Node's clones over its MessageChannel, and
    parts that are Blobs are held by reference, so a 600 MiB file costs 1 MiB. */
@@ -97,4 +99,58 @@ it('caps one import at 512 MiB and an extension at 2 GiB a minute, before the ho
   now += 60_000;
   await client.call('invoke', 'assets', 'import', [fileOf(512)]);
   expect(imported).toHaveBeenCalledTimes(6);
+});
+
+/* ui.copy (report item 11): the manifest record's clipboard permission, a
+   view the host sees focused, once a second, through main's write channel. */
+async function copier(permissions: string[]) {
+  const clipboardWriteText = vi.fn(async (_text: string) => {});
+  installBridgeForTests({ clipboardWriteText } as unknown as PowermoveBridge);
+  const harness = await runtime(permissions);
+  const view = await harness.openView();
+  view.frame.tabIndex = 0;
+  return { ...harness, view, clipboardWriteText };
+}
+
+it('copies text from a focused panel view with the clipboard permission, once a second', async () => {
+  let now = 5_000_000;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const { view, clipboardWriteText } = await copier(['clipboard']);
+  view.frame.focus();
+  await view.rpc.call('invoke', 'ui', 'copy', ['#ff6600']);
+  expect(clipboardWriteText).toHaveBeenCalledExactlyOnceWith('#ff6600');
+  await expect(view.rpc.call('invoke', 'ui', 'copy', ['again'])).rejects.toMatchObject({ code: 'resource_limit' });
+  now += 1000;
+  await view.rpc.call('invoke', 'ui', 'copy', ['again']);
+  expect(clipboardWriteText).toHaveBeenLastCalledWith('again');
+  // Plain text only, up to the channel's limit.
+  now += 1000;
+  for (const value of [{ html: '<b>x</b>' }, 42, 'x'.repeat(CLIPBOARD_TEXT_MAX_CHARS + 1)]) {
+    await expect(view.rpc.call('invoke', 'ui', 'copy', [value])).rejects.toBeTruthy();
+  }
+  expect(clipboardWriteText).toHaveBeenCalledTimes(2);
+});
+
+it('refuses ui.copy without the permission, from the runtime, and from an unfocused view', async () => {
+  const denied = await copier([]);
+  denied.view.frame.focus();
+  await expect(denied.view.rpc.call('invoke', 'ui', 'copy', ['x'])).rejects.toMatchObject({ name: 'PermissionError', code: 'clipboard' });
+  close.splice(0).forEach(fn => fn());
+  const { client, view, clipboardWriteText } = await copier(['clipboard']);
+  // The runtime document has no focus to prove, even while a view has it.
+  view.frame.focus();
+  await expect(client.call('invoke', 'ui', 'copy', ['x'])).rejects.toMatchObject({ name: 'PermissionError', message: expect.stringContaining('focus') });
+  view.frame.blur();
+  await expect(view.rpc.call('invoke', 'ui', 'copy', ['x'])).rejects.toMatchObject({ name: 'PermissionError', message: expect.stringContaining('focus') });
+  // A focused frame in a window that lost focus is not focused either.
+  view.frame.focus();
+  vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+  await expect(view.rpc.call('invoke', 'ui', 'copy', ['x'])).rejects.toMatchObject({ message: expect.stringContaining('focus') });
+  // Nothing the view sends stands in for focus.
+  view.frame.blur();
+  vi.mocked(document.hasFocus).mockReturnValue(true);
+  await view.rpc.call('focus', { field: false }).catch(() => {});
+  view.rpc.notify('pointer', { button: 0, x: 1, y: 1 });
+  await expect(view.rpc.call('invoke', 'ui', 'copy', ['x'])).rejects.toMatchObject({ message: expect.stringContaining('focus') });
+  expect(clipboardWriteText).not.toHaveBeenCalled();
 });
