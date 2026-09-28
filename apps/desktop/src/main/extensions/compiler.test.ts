@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
+import { SVELTE_RUNTIME_MODULES } from '../../shared/extension-runtime';
 import { MANIFEST_LIMITS } from '../../shared/extensions';
 import { compileExtension } from './compiler';
 
@@ -123,6 +124,33 @@ describe('compileExtension', () => {
     const output = await readFile(result.bundlePath, 'utf8');
     expect(output).toContain('globalThis.__powermove_runtime["svelte/internal/client"]');
     expect(output).not.toContain('$state(');
+  });
+
+  it('resolves every Svelte runtime entry through the host table and bundles no Svelte of its own', async () => {
+    const outDir = await temporaryDirectory();
+    const dir = path.resolve('test/fixtures/svelte-surface');
+    const result = await compileExtension({ dir, entry: 'index.ts', outDir });
+    if (!result.ok) throw new Error(result.error);
+    const output = await readFile(result.bundlePath, 'utf8');
+    for (const specifier of SVELTE_RUNTIME_MODULES) {
+      expect(output).toContain(`globalThis.__powermove_runtime[${JSON.stringify(specifier)}]`);
+    }
+    expect(output).not.toMatch(/^\s*import\b/m);
+    const map = JSON.parse(Buffer.from(output.slice(output.lastIndexOf('base64,') + 7).trim(), 'base64').toString('utf8')) as { sources: string[] };
+    const sources = map.sources.map((source) => source.replaceAll('\\', '/'));
+    expect(sources.filter((source) => source.includes('node_modules'))).toEqual([]);
+    const from = (namespace: string) => sources.filter((source) => source.startsWith(`${namespace}:`)).map((source) => source.slice(namespace.length + 1));
+    expect(from('powermove-source').map((source) => path.basename(source)).sort()).toEqual(['Panel.svelte', 'bell.ts', 'counter.svelte.ts', 'index.ts']);
+    expect(from('powermove-runtime').sort()).toEqual([...SVELTE_RUNTIME_MODULES].sort());
+  });
+
+  it('refuses Svelte entries outside the client runtime surface', async () => {
+    const { dir, outDir } = await fixture('server-svelte');
+    for (const specifier of ['svelte/server', 'svelte/compiler', 'svelte/legacy', 'svelte/internal/server', 'svelte/internal/flags/legacy']) {
+      await writeFile(path.join(dir, 'index.ts'), `import * as m from ${JSON.stringify(specifier)}; export default () => m;`);
+      const result = await compileExtension({ dir, entry: 'index.ts', outDir });
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining(`Unsupported Svelte runtime import: ${specifier}`) });
+    }
   });
 
   it('rejects traversal, absolute imports, node_modules, and symlink escapes', async () => {

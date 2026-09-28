@@ -1,4 +1,4 @@
-import { EDITOR_HELPER_EXPORTS } from '../../shared/extension-runtime';
+import { EDITOR_HELPER_EXPORTS, type SvelteRuntimeModule } from '../../shared/extension-runtime';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, realpath, rename, rm, stat, writeFile, lstat } from 'node:fs/promises';
 import path from 'node:path';
@@ -80,14 +80,27 @@ async function namespaceKeys(specifier: string): Promise<string[]> {
   return pending;
 }
 
+/* Main imports each entry only to list its export names; bundles read the
+   values from the renderer's table. Node resolves the server builds, whose
+   names match the browser ones (runtime-globals.test.ts pins that). */
+const SVELTE_NAMESPACES: Record<SvelteRuntimeModule, () => Promise<Record<string, unknown>>> = {
+  svelte: () => import('svelte'),
+  'svelte/animate': () => import('svelte/animate'),
+  'svelte/attachments': () => import('svelte/attachments'),
+  'svelte/easing': () => import('svelte/easing'),
+  'svelte/events': () => import('svelte/events'),
+  // @ts-expect-error -- Svelte intentionally ships no declarations for its internal client entrypoint.
+  'svelte/internal/client': () => import('svelte/internal/client'),
+  'svelte/motion': () => import('svelte/motion'),
+  'svelte/reactivity': () => import('svelte/reactivity'),
+  'svelte/reactivity/window': () => import('svelte/reactivity/window'),
+  'svelte/store': () => import('svelte/store'),
+  'svelte/transition': () => import('svelte/transition')
+};
+
 async function importRuntimeNamespace(specifier: string): Promise<Record<string, unknown>> {
-  if (specifier === 'svelte') return import('svelte');
-  if (specifier === 'svelte/store') return import('svelte/store');
-  if (specifier === 'svelte/internal/client') {
-    // @ts-expect-error -- Svelte intentionally ships no declarations for its internal client entrypoint.
-    return import('svelte/internal/client');
-  }
-  throw new Error(`Unsupported Svelte runtime import: ${specifier}`);
+  if (!Object.hasOwn(SVELTE_NAMESPACES, specifier)) throw new Error(`Unsupported Svelte runtime import: ${specifier}`);
+  return SVELTE_NAMESPACES[specifier as SvelteRuntimeModule]();
 }
 
 async function runtimeModule(specifier: string): Promise<string> {
