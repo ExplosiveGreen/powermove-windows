@@ -35,7 +35,8 @@
   });
   $effect(() => {
     const target = rows?.length ? pins.count / rows.length : 0;
-    void pinned.set(target).then(() => { settled.pinned = target; });
+    // A newer target rejects the superseded set() with "Aborted"; that is not an error.
+    void pinned.set(target).then(() => { settled.pinned = target; }, () => {});
   });
 
   const narrow = new MediaQuery('max-width: 240px');
