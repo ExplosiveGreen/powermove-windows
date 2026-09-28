@@ -1,3 +1,4 @@
+import { whenCheck } from '../kernel/registries';
 import type { OverlayPM } from './types';
 
 export type PaletteEntry = {
@@ -48,8 +49,11 @@ export function paletteEntries(PM: OverlayPM, query: string, onLate?: (entries: 
       kb: command.kb,
       run: () => PM.cmd(command.id)
     };
-    /* `when` is the kernel's "runnable by id, but not offered here" flag. */
-    const shown = typeof command.when === 'function' ? command.when() : true;
+    /* `when` is the kernel's "runnable by id, but not offered here" flag.
+       Its registered form answers at once with the last reply; the palette
+       asks afresh. */
+    const check = whenCheck(PM.Kernel?.commands?.get?.(command.id));
+    const shown = check ? check.ask() : typeof command.when === 'function' ? command.when() : true;
     if (isThenable(shown)) later(Promise.resolve(shown).then(value => value ? [entry] : [], () => []));
     else if (shown) entries.push(entry);
   }

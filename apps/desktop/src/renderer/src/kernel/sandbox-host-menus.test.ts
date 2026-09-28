@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { createRpc } from '../../../shared/sandbox-rpc';
 import { createSandboxAPI, sandboxControl, type SandboxEvent } from '../../sandbox/shim-api';
 import { createSandboxRuntime, freshWhen, WHEN_DEADLINE_MS } from './sandbox-host';
-import { createKernel, MENU_DEADLINE_MS } from './registries';
+import { createKernel, MENU_DEADLINE_MS, whenCheck } from './registries';
 import type { HostDeps } from './host';
 import type { ExtensionRecord, MenuContribution, ProjectAPI } from './api';
 
@@ -179,12 +179,30 @@ it('asks a sandboxed when() afresh on every check', async () => {
     api.commands.register({ id: 'menu-ext.go', label: 'Go', run: () => {}, when: () => enabled });
     api.commands.register({ id: 'menu-ext.toggle', label: 'Toggle', run: () => { enabled = !enabled; } });
   });
-  const when = kernel.commands.get('menu-ext.go')!.when!;
-  expect(await when()).toBe(true);
+  const check = whenCheck(kernel.commands.get('menu-ext.go'))!;
+  expect(await check.ask()).toBe(true);
   await kernel.commands.get('menu-ext.toggle')!.run();
-  expect(await when()).toBe(false);
+  expect(await check.ask()).toBe(false);
   await kernel.commands.get('menu-ext.toggle')!.run();
-  expect(await when()).toBe(true);
+  expect(await check.ask()).toBe(true);
+});
+
+it('keeps a sandboxed when() synchronous for in-realm readers, answering with the last reply', async () => {
+  let enabled = false;
+  const kernel = await sandboxed(api => {
+    api.commands.register({ id: 'menu-ext.go', label: 'Go', run: () => {}, when: async () => enabled });
+    api.commands.register({ id: 'menu-ext.toggle', label: 'Toggle', run: () => { enabled = !enabled; } });
+  });
+  const shown = () => kernel.commands.list().filter(command => !command.when || command.when()).map(command => command.id);
+  const go = kernel.commands.get('menu-ext.go')!;
+  expect(go.when!()).toBe(true); // nothing answered yet
+  await new Promise(resolve => setTimeout(resolve, 5));
+  expect(shown()).toEqual(['menu-ext.toggle']);
+  expect(whenCheck(go)!.last()).toBe(false);
+  await kernel.commands.get('menu-ext.toggle')!.run();
+  expect(shown()).toEqual(['menu-ext.toggle']); // the last answer, while the next one is asked
+  await new Promise(resolve => setTimeout(resolve, 5));
+  expect(shown()).toEqual(['menu-ext.go', 'menu-ext.toggle']);
 });
 
 it('falls back to the last when() answer only when the fresh one is late', async () => {

@@ -122,8 +122,9 @@ export interface CommandDefinition {
   /** Display hint only; bind keys with `keybindings.bind`. */
   kb?: string | null;
   run: (...args: unknown[]) => unknown;
-  /** Return false to hide from palette/menus (still runnable by id). Asked
-   *  on every check; a Promise (sandboxed extensions) lands when it settles. */
+  /** Return false to hide from palette/menus (still runnable by id). A
+   *  sandboxed extension's may return a Promise: the palette asks it on every
+   *  open, and every other reader gets its last answer (`true` before any). */
   when?: () => boolean | Promise<boolean>;
 }
 
@@ -132,7 +133,8 @@ export interface CommandsAPI {
   /** Returns a Promise when the extension runs sandboxed (Store installs). */
   run(id: string, ...args: unknown[]): unknown;
   has(id: string): boolean;
-  list(): CommandDefinition[];
+  /** Every command; `when` here always answers synchronously, so `!c.when || c.when()` filters. */
+  list(): Array<CommandDefinition & { when?: () => boolean }>;
 }
 
 /**

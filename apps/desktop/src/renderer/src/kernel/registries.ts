@@ -70,6 +70,50 @@ const isThenable = (value: unknown): value is PromiseLike<unknown> =>
 const flatMenu = (answers: unknown[]): MenuContribution[] =>
   answers.flatMap(answer => Array.isArray(answer) ? answer as MenuContribution[] : []);
 
+/* ── command `when` ──────────────────────────────────────── */
+
+/** A command's `when` as the kernel keeps it: `last()` is its newest answer (`true` before any), `ask()` asks it now. */
+export interface WhenCheck { last(): boolean; ask(): boolean | Promise<boolean> }
+const WHEN_CHECK: unique symbol = Symbol('powermove.whenCheck');
+
+/**
+ * The registered `when` is synchronous for every caller (`commands.list()`
+ * filters, menus): one that answers with a Promise (a sandboxed extension's)
+ * reads as its last answer and asks again in the background, one ask at a
+ * time. The palette asks afresh through `whenCheck`.
+ */
+export function settledWhen(ask: () => boolean | Promise<boolean>): { when: () => boolean; check: WhenCheck } {
+  let last = true, asked = 0, answered = 0, waiting = false;
+  const check: WhenCheck = {
+    last: () => last,
+    ask() {
+      const turn = ++asked;
+      // An older ask answering after a newer one does not overwrite it.
+      const land = (value: unknown): boolean => { if (turn > answered) { answered = turn; last = Boolean(value); } return Boolean(value); };
+      const answer = ask();
+      return isThenable(answer) ? Promise.resolve(answer).then(land) : land(answer);
+    }
+  };
+  const when = (): boolean => {
+    if (waiting) return last;
+    const answer = check.ask();
+    if (typeof answer === 'boolean') return answer;
+    waiting = true;
+    void answer.catch(() => {}).finally(() => { waiting = false; });
+    return last;
+  };
+  return { when, check };
+}
+
+/** Attach `check` to a registered definition without it showing up in copies (`{ ...def }`, the sandbox catalog). */
+export function withWhenCheck<T extends object>(definition: T, check: WhenCheck): T {
+  return Object.defineProperty(definition, WHEN_CHECK, { value: check });
+}
+
+export function whenCheck(definition: unknown): WhenCheck | undefined {
+  return definition && typeof definition === 'object' ? (definition as { [WHEN_CHECK]?: WhenCheck })[WHEN_CHECK] : undefined;
+}
+
 /* ── events ──────────────────────────────────────────────── */
 
 type AnyHandler = (payload: never) => void;
