@@ -10,7 +10,7 @@ import { compileExtension } from './extensions/compiler';
 import { collectArtifacts, mimeTypeForPath } from './codex/artifacts';
 import { publishExtensionChanges } from './codex/change-history';
 import { loginShellPath } from './login-shell-path';
-import { killProcessFamily } from './process-family';
+import { killStrays, ProcessFamily } from './process-family';
 import { agentResultSchema } from './codex/instructions';
 import type { AgentWorkspace } from './codex/workspace';
 import type { PowermoveAgentToolSpec } from './agent-tools/spec';
@@ -32,6 +32,7 @@ export const COMPATIBLE_WORKSPACE_TOOLS: readonly PowermoveAgentToolSpec[] = [
 export class CompatibleWorkspace {
   private readonly commands = new Set<WorkspaceCommand>();
   private readonly jobs = new Map<string, WorkspaceCommand>();
+  private readonly startedAt = Date.now();
 
   constructor(readonly layout: AgentWorkspace, readonly access: 'project' | 'computer', readonly context: 'app' | 'project' = 'project') {}
 
@@ -44,11 +45,12 @@ export class CompatibleWorkspace {
 
   /**
    * Stop every command and background job of this run, with everything they
-   * started. Runs before complete_task validates, so nothing can change the
-   * staged files between the compile check and publishing, and at run end.
+   * started, then anything that escaped a finished command. Runs before
+   * complete_task validates and at run end.
    */
   async stopCommands(): Promise<void> {
     await Promise.all([...this.commands].map(command => command.stop()));
+    await killStrays(await realpath(this.layout.root), this.startedAt);
   }
 
   /** Resolve existing ancestors too, so symlinks cannot redirect file writes. */
@@ -292,7 +294,8 @@ export async function startWorkspaceCommand(root: string, access: 'project' | 'c
   options: { timeoutMs: number; signal: AbortSignal; keepTail?: boolean; input?: string }): Promise<WorkspaceCommand> {
   const { timeoutMs, signal } = options;
   signal.throwIfAborted();
-  const env = await commandEnvironment(await realpath(root), access);
+  const real = await realpath(root);
+  const env = await commandEnvironment(real, access);
   // Project access keeps outbound network for research and downloads (the
   // footage chip depends on it); only the filesystem is confined.
   const profile = `(version 1)(allow default)(allow network-outbound)(deny appleevent-send)`
@@ -305,6 +308,7 @@ export async function startWorkspaceCommand(root: string, access: 'project' | 'c
   if (access === 'project' && process.platform !== 'darwin') throw new Error('Project command sandbox is only available on macOS.');
   // The command creates its own scratch folder, so the sandbox, not main,
   // decides where a planted link may lead.
+  const startedAt = Date.now();
   const shell = ['/bin/sh', '-c', 'mkdir -p -- "$TMPDIR" 2>/dev/null; exec /bin/zsh -c "$1"', 'zsh', command];
   const child = spawn(access === 'project' ? '/usr/bin/sandbox-exec' : shell[0]!,
     access === 'project' ? ['-p', profile, ...shell] : shell.slice(1),
@@ -313,7 +317,11 @@ export async function startWorkspaceCommand(root: string, access: 'project' | 'c
   child.stdin.on('error', () => undefined); child.stdin.end(options.input);
   let output = '', truncated = false, running = true, exitCode: number | null = null;
   let ending: CommandEnding | null = null, exited = false;
-  const sweep = () => child.pid ? killProcessFamily(child.pid) : Promise.resolve();
+  // Descendants are recorded while it runs, so one that left the group and
+  // lost its parent is still killed with the command.
+  const family = new ProcessFamily(child.pid ?? null, { cwd: real, since: startedAt });
+  if (child.pid) family.watch();
+  const sweep = () => child.pid ? family.kill() : Promise.resolve();
   // A command that already exited on its own is not reported as stopped.
   const end = (reason: CommandEnding) => { if (!exited) ending ??= reason; return sweep(); };
   const onTimeout = () => void end('timeout');
@@ -335,7 +343,7 @@ export async function startWorkspaceCommand(root: string, access: 'project' | 'c
   child.stdout.on('data', append); child.stderr.on('data', append);
   const done = new Promise<WorkspaceCommandResult & { ending: CommandEnding | null }>((resolve, reject) => {
     const cleanup = () => { clearTimeout(timer); signal.removeEventListener('abort', onAbort); running = false; };
-    child.on('error', error => { cleanup(); reject(error); });
+    child.on('error', error => { cleanup(); void sweep(); reject(error); });
     // Nothing a command starts outlives it. A process that escaped the kill
     // may still hold the output pipes, so stop waiting on them shortly after.
     child.on('exit', () => {

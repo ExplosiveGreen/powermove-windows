@@ -173,6 +173,25 @@ it.runIf(process.platform === 'darwin')('stops what a command leaves running and
   await expect.poll(() => alive(escaped)).toBe(false);
 });
 
+it.runIf(process.platform === 'darwin')('stops detached children after their parent exits, at once or after they moved away', async () => {
+  const ws = await workspace();
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+  const node = (script: string) => `${quote(process.execPath)} -e ${quote(script)}`;
+  // The parent exits immediately, so no parent link leads to the child.
+  const late = `require('node:child_process').spawn('/bin/sh', ['-c', 'echo $$ > late.pid; sleep 1; echo late > late.txt'], { detached: true, stdio: 'ignore' }).unref()`;
+  expect((await runWorkspaceCommand(ws.layout.root, 'project', node(late), 5000, signal())).exitCode).toBe(0);
+  // This one leaves the workspace folder while its parent still lives.
+  const moved = `const c = require('node:child_process').spawn('/bin/sleep', ['30'], { detached: true, stdio: 'ignore', cwd: '/' }); c.unref(); console.log(c.pid); setTimeout(() => {}, 800)`;
+  const escaped = Number((await runWorkspaceCommand(ws.layout.root, 'project', node(moved), 5000, signal())).output);
+  expect(escaped).toBeGreaterThan(1);
+  await expect.poll(() => alive(escaped)).toBe(false);
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  await expect(access(path.join(ws.layout.root, 'late.txt'))).rejects.toThrow();
+  const latePid = Number(await readFile(path.join(ws.layout.root, 'late.pid'), 'utf8').catch(() => '0'));
+  if (latePid) expect(alive(latePid)).toBe(false);
+});
+
 it('allows up to ten minutes per command and keeps the thirty second default', async () => {
   const ws = await workspace();
   await expect(ws.call('run_command', { command: 'true', timeoutMs: 600_001 }, signal())).rejects.toThrow('between 1 and 600000');
