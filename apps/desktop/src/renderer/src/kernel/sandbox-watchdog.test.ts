@@ -55,7 +55,22 @@ describe('watchSandbox', () => {
     expect(state.pings).toBe(1);
   });
 
-  it('a late check (sleep, throttling) restarts the clock instead of firing', async () => {
+  it('after a sleep, a live sandbox answers the fresh ping and is left alone', async () => {
+    const { state, ping, now } = sandbox();
+    const onUnresponsive = vi.fn();
+    watchSandbox({ ping, onUnresponsive, now });
+    await vi.advanceTimersByTimeAsync(4_000);
+    state.hung = true; // the 6 s check's ping is lost to the sleep
+    await vi.advanceTimersByTimeAsync(2_000);
+    state.hung = false;
+    state.skew += 3_600_000; // the machine slept between the 6 s and 8 s checks
+    await vi.advanceTimersByTimeAsync(2_000);
+    state.skew += 3_600_000; // and again right after waking
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(onUnresponsive).not.toHaveBeenCalled();
+  });
+
+  it('a sandbox hung across a sleep fires at the threshold after the fresh ping, not before', async () => {
     const { state, ping, now } = sandbox();
     state.hung = true;
     const onUnresponsive = vi.fn();
@@ -64,10 +79,34 @@ describe('watchSandbox', () => {
     state.skew += 3_600_000; // the machine slept between the 4 s and 6 s checks
     await vi.advanceTimersByTimeAsync(2_000);
     expect(onUnresponsive).not.toHaveBeenCalled();
+    expect(state.pings).toBe(2); // the late check asked again
     await vi.advanceTimersByTimeAsync(7_999);
     expect(onUnresponsive).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(onUnresponsive).toHaveBeenCalledTimes(1);
+  });
+
+  /* Chromium's intensive throttling (a window hidden for over 5 minutes) runs
+     chained timers once a minute, so every check is late. */
+  const throttled = { setTimeout: (fn: () => void) => setTimeout(fn, 60_000), clearTimeout: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>) };
+
+  it('catches a sandbox that spins while the window is hidden and throttled', async () => {
+    const { state, ping, now } = sandbox();
+    const onUnresponsive = vi.fn();
+    watchSandbox({ ping, onUnresponsive, now, timers: throttled });
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(onUnresponsive).not.toHaveBeenCalled(); // live and throttled: every late check is answered
+    state.hung = true;
+    await vi.advanceTimersByTimeAsync(2 * 60_000); // one check sends the ping that hangs, the next sees it
+    expect(onUnresponsive).toHaveBeenCalledTimes(1);
+  });
+
+  it('a live sandbox answering late checks under throttling is never declared unresponsive', async () => {
+    const { ping, now } = sandbox(40);
+    const onUnresponsive = vi.fn();
+    watchSandbox({ ping, onUnresponsive, now, timers: throttled });
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(onUnresponsive).not.toHaveBeenCalled();
   });
 
   it('a rejected ping is over: the next check sends another', async () => {

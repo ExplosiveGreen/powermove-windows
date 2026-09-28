@@ -46,9 +46,12 @@ Nothing here has shipped to Store users yet, so the sandbox contract may change.
 ### 2. Watchdog
 
 - The kernel pings each runtime (`ping` call) every 2 s. If a ping has been
-  outstanding for 8 s of host time (checks that were themselves delayed, e.g.
-  by sleep or timer throttling, reset the clock instead of firing), the
-  extension is declared unresponsive.
+  outstanding for 8 s of host time, the extension is declared unresponsive. A
+  check that was itself delayed (sleep, timer throttling) sends a fresh ping
+  instead of firing; if that ping is still outstanding at the next check, late
+  or not, the extension is unresponsive (a live sandbox answers within
+  milliseconds of the host waking). Under intensive throttling, where every
+  check is late, a spin is still caught within two checks.
 - Unresponsive → the kernel asks main to terminate it (`sandboxTerminate(id)`).
   Main finds frames on that extension's host across editor windows, and
   SIGKILLs each OS process only if every frame in that process belongs to that
