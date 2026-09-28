@@ -2,6 +2,7 @@ import { installLayerMenu } from './layer-menu';
 import { installParentPickwhip } from './parent-pickwhip';
 import { evaluatedValue } from '../core/content-properties';
 import { materializeSvgPaths } from '../core/svg-import';
+import { temporalKeys } from '../core/temporal-bridge';
 import { inspectorService, timelineService, toolService, viewerService } from '../core/services';
 /* Ported from js/ui/shortcuts.js — behavior-preserving.
  *
@@ -253,24 +254,48 @@ def('precompose', 'Group layers', null, () => PM.cmd('groupLayers'), 'Edit', hid
 
 /* ── layer clipboard ───────────────────────────────────── */
 let layerClip: any = null;
+/* Selected keyframes take precedence over their layers, as Delete does.
+   Only the most recent copy (effects, keyframes, or layers) stays pasteable. */
+let keyClip: KeyframeClipboard | null = null;
+const copySelectedKeyframes = (): boolean => {
+  const copied = copyKeyframes(PM);
+  if (!copied) return false;
+  keyClip = copied;
+  layerClip = null;
+  inspectorService(PM)?.clearEffectClipboard();
+  const count = copied.tracks.reduce((sum, track) => sum + track.keys.length, 0);
+  PM.toast?.(`Copied ${count} ${count === 1 ? 'keyframe' : 'keyframes'}`);
+  return true;
+};
 def('copyLayers', 'Copy layers', '⌘C', () => {
   const inspector = inspectorService(PM);
-  if (inspector?.copySelectedEffects()) return;
+  if (inspector?.copySelectedEffects()) { keyClip = null; return; }
+  if (copySelectedKeyframes()) return;
   const sels: any = selectedStackLayers(PM); if (!sels.length) return;
   /* An explicit layer copy becomes the active app-local clipboard payload.
      Effect rows stop propagation before this command, so copying an effect
      keeps the effect payload active while the user selects its destination. */
   inspector?.clearEffectClipboard();
+  keyClip = null;
   layerClip = sels.map((L: any) => JSON.parse(JSON.stringify(L)));
   PM.toast(`Copied ${layerClip.length} ${layerClip.length === 1 ? 'layer' : 'layers'}`);
 }, 'Edit');
-def('cutLayers', 'Cut layers', '⌘X', () => cutLayers(PM, (value: any[]) => { layerClip = value; }), 'Edit');
+def('cutLayers', 'Cut layers', '⌘X', () => {
+  if (copySelectedKeyframes()) return deleteSelection(PM);
+  return cutLayers(PM, (value: any[]) => { layerClip = value; keyClip = null; });
+}, 'Edit');
 def('pasteLayers', 'Paste layers', '⌘V', () => {
   /* Effect paste deliberately routes through the ordinary global shortcut:
      select effect → ⌘C → select destination layer → ⌘V. */
   if (inspectorService(PM)?.pasteCopiedEffects()) return;
+  if (keyClip) return pasteKeyframes(PM, keyClip);
   return pasteLayers(PM, () => layerClip);
 }, 'Edit');
+def('copyKeyframes', 'Copy keyframes', null, () => copySelectedKeyframes(), 'Keyframes');
+def('pasteKeyframes', 'Paste keyframes', null, (target?: KeyframePasteTarget) => {
+  if (!keyClip) { PM.toast?.('Copy keyframes first'); return false; }
+  return pasteKeyframes(PM, keyClip, target);
+}, 'Keyframes');
 def('contextUndo', 'Undo', null, () => activeTextField() ? nativeEdit('undo') : readingText() ? false : PM.cmd('undo'), 'Edit', hidden);
 def('contextRedo', 'Redo', null, () => activeTextField() ? nativeEdit('redo') : readingText() ? false : PM.cmd('redo'), 'Edit', hidden);
 def('contextCut', 'Cut', null, () => activeTextField() ? nativeEdit('cut') : readingText() ? false : PM.cmd('cutLayers'), 'Edit', hidden);
@@ -904,6 +929,8 @@ interface SelectedKeyframeEntry {
   comp: any;
   layer: any;
   prop: any;
+  /** Property path as `PM.findProp` resolves it. */
+  path: string;
   key: any;
 }
 
@@ -919,7 +946,7 @@ function selectedKeyframeEntries(PM: PMRegistry): SelectedKeyframeEntry[] {
     seen.add(comp);
     for (const layer of comp.layers || []) for (const item of PM.allProps?.(layer) || []) {
       for (const key of item?.prop?.kf || []) if (selected.has(key?.i)) {
-        entries.push({ comp, layer, prop: item.prop, key });
+        entries.push({ comp, layer, prop: item.prop, path: item.key, key });
       }
     }
     comps.push(...Object.values(comp.comps || {}));
@@ -962,6 +989,120 @@ export function nudgeKeyframes(PM: PMRegistry, frames?: any): unknown {
     PM.touch?.();
     PM.bus?.emit?.('sel');
     PM.invalidate?.();
+  });
+}
+
+export interface KeyframeClipboard {
+  /** Composition time of the earliest copied key; paste puts it at the target time. */
+  start: number;
+  /** Channel selected at copy time. Selecting another channel before pasting
+   * retargets a single-property clipboard, as in After Effects. */
+  chan: string | null;
+  tracks: { layer: string; path: string; keys: { at: number; key: any }[] }[];
+}
+
+export interface KeyframePasteTarget {
+  layer?: string;
+  path?: string;
+  time?: number;
+}
+
+/** Snapshot the selected keyframes with their composition times. */
+export function copyKeyframes(PM: PMRegistry): KeyframeClipboard | null {
+  const selected = selectedKeyframeEntries(PM);
+  if (!selected.length) return null;
+  const tracks = new Map<string, KeyframeClipboard['tracks'][number]>();
+  for (const { layer, path, key } of selected) {
+    const id = `${layer.id}\n${path}`;
+    let track = tracks.get(id);
+    if (!track) tracks.set(id, track = { layer: layer.id, path, keys: [] });
+    track.keys.push({ at: Number(layer.from) + Number(key.t), key: JSON.parse(JSON.stringify(key)) });
+  }
+  for (const track of tracks.values()) track.keys.sort((a, b) => a.at - b.at);
+  return {
+    start: Math.min(...selected.map(({ layer, key }) => Number(layer.from) + Number(key.t))),
+    chan: typeof PM.sel?.chan === 'string' ? PM.sel.chan : null,
+    tracks: [...tracks.values()],
+  };
+}
+
+function keyframeValueKind(value: any): string {
+  if (Array.isArray(value)) return `array:${value.length}`;
+  return value === null ? 'null' : typeof value;
+}
+
+function editableLayer(PM: PMRegistry, layer: any): boolean {
+  return !layer.lock && !(PM.groupAncestors?.(layer) || []).some((group: any) => group.lock);
+}
+
+/** Paste copied keyframes so the earliest lands at the playhead (or `target.time`),
+ * keeping relative timing. A one-layer clipboard goes to the selected layers;
+ * a multi-layer clipboard returns to its source layers. Pasted keys replace
+ * keys on the same frame and become the new keyframe selection. */
+export function pasteKeyframes(PM: PMRegistry, clipboard: KeyframeClipboard | null, target: KeyframePasteTarget = {}): unknown {
+  if (!clipboard?.tracks.length) return false;
+  const comp: any = typeof PM.curComp === 'function' ? PM.curComp() : PM.proj;
+  const fps = Math.max(1, Number(PM.proj?.fps) || 30);
+  const duration = Math.max(0, Number(comp?.dur) || 0);
+  const layers = currentLayers(PM);
+  const byId = new Map(layers.map((layer: any) => [layer.id, layer]));
+  const time = Number.isFinite(Number(target.time)) ? Number(target.time) : Number(PM.time) || 0;
+  const offset = time - clipboard.start;
+
+  const sourceLayers = new Set(clipboard.tracks.map(track => track.layer));
+  const selectedLayers = selectedStackLayers(PM).filter((layer: any) => layer.type !== 'group');
+  const destinationLayers = (source: string): any[] => {
+    if (target.layer) return byId.has(target.layer) ? [byId.get(target.layer)] : [];
+    if (sourceLayers.size === 1 && selectedLayers.length) return selectedLayers;
+    return byId.has(source) ? [byId.get(source)] : [];
+  };
+  const chan = typeof PM.sel?.chan === 'string' ? PM.sel.chan : null;
+  const retarget = clipboard.tracks.length === 1
+    ? target.path ?? (chan && chan !== clipboard.chan ? chan : null)
+    : null;
+
+  const writes: { layer: any; prop: any; keys: any[] }[] = [];
+  let skipped = 0;
+  for (const track of clipboard.tracks) {
+    const kind = keyframeValueKind(track.keys[0]?.key.v);
+    for (const layer of destinationLayers(track.layer)) {
+      if (!editableLayer(PM, layer)) { skipped++; continue; }
+      const retargeted = retarget ? PM.findProp?.(layer, retarget) : null;
+      /* An explicit destination row is strict; a stale channel selection is not. */
+      const prop = retargeted || (retarget && target.path ? null : PM.findProp?.(layer, track.path));
+      const current = prop?.kf?.length ? prop.kf[0].v : prop?.v;
+      if (!prop || keyframeValueKind(current) !== kind) { skipped++; continue; }
+      const keys = track.keys.map(({ at, key }) => ({ at: Math.round((at + offset) * fps) / fps, key }))
+        .filter(({ at }) => at >= -1e-9 && at <= duration + 1e-9)
+        .map(({ at, key }) => ({
+          ...JSON.parse(JSON.stringify(key)),
+          i: PM.uid('k'),
+          t: Math.round((at - Number(layer.from)) * fps) / fps,
+        }));
+      if (keys.length) writes.push({ layer, prop, keys });
+    }
+  }
+  if (!writes.length) {
+    PM.toast?.(skipped ? 'No matching property to paste keyframes into' : 'Select a layer to paste keyframes');
+    return false;
+  }
+
+  const pasted = writes.flatMap(write => write.keys);
+  return PM.hist.do(pasted.length === 1 ? 'Paste keyframe' : 'Paste keyframes', () => {
+    for (const { prop, keys } of writes) {
+      const frames = new Set(keys.map(key => Math.round(Number(key.t) * fps)));
+      prop.kf = [...(prop.kf || []).filter((key: any) => !frames.has(Math.round(Number(key.t) * fps))), ...keys]
+        .sort((a: any, b: any) => Number(a.t) - Number(b.t));
+      temporalKeys(prop.kf);
+    }
+    PM.sel.keys = pasted.map(key => key.i);
+    const timeline = timelineService(PM);
+    if (timeline) timeline.keySelectionActive = true;
+    PM.touch?.();
+    PM.bus?.emit?.('sel');
+    PM.invalidate?.();
+    PM.toast?.(`Pasted ${pasted.length} ${pasted.length === 1 ? 'keyframe' : 'keyframes'}`);
+    return pasted;
   });
 }
 

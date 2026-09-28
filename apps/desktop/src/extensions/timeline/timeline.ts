@@ -3538,6 +3538,12 @@ function pushKeyframeMenu(items: any[], clickedEntries: any[]) {
     }),
   });
   items.push('-', {
+    label: multiple ? `Copy ${keys.length} keyframes` : 'Copy keyframe',
+    run: () => {
+      api.selection.set({ keys: expandScaleKeyIds(api, keys) });
+      api.commands.run('copyKeyframes');
+    },
+  }, {
     label: multiple ? `Delete ${keys.length} keyframes` : 'Delete keyframe',
     run: () => api.history.do(multiple ? 'Delete keyframes' : 'Delete keyframe', () => {
       const values = new Map<any, any>();
@@ -3579,6 +3585,7 @@ function onCtx(e: any) {
         const values = trackChannels(r).map(axis => ({ ...axis, value: api.anim.evP(r.L, axis.prop, x2t(x), axis.key) }));
         values.forEach(axis => api.anim.setKeyOn(axis.prop, x2t(x) - r.L.from, axis.value, 'linear', api.project.get().fps));
       }) });
+      items.push({ label: 'Paste keyframes here', run: () => api.commands.run('pasteKeyframes', { layer: r.L.id, path: r.key, time: x2t(x) }) });
       items.push({ label: 'Clear all keyframes', icon: 'x', disabled: !r.prop.kf.length, run: () => api.history.do('Clear keys', () => { trackChannels(r).forEach(axis => { axis.prop.v = api.anim.evP(r.L, axis.prop, api.transport.time(), axis.key); axis.prop.kf = []; }); api.anim.touch(); }) });
     }
   } else if (!T.graph && hr && hr.row.kind === 'layer') {
