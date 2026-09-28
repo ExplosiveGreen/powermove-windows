@@ -1,7 +1,7 @@
 /* The sandbox check as the Store shows it: running it for a Library item in
    this window, and its report as one line per problem. The check itself is
    kernel/sandbox-check.ts; publishing waits on it in the publish sheet. */
-import type { ExtensionRecord } from '../../../shared/extensions';
+import type { ExtensionPermission, ExtensionRecord } from '../../../shared/extensions';
 import { bridge } from '../kernel/bridge';
 import { recordFor } from '../kernel/extensions.svelte';
 import type { InstalledKernel } from '../kernel/install';
@@ -48,24 +48,29 @@ const ALTERNATIVE: Record<string, string> = {
   media: 'use api.assets instead', ui: 'build it inside your panel instead'
 };
 
-const FULL_ACCESS = '`permissions: ["full-access"]`';
 const NETWORK_DIRECTIVES = new Set(['connect-src', 'img-src', 'media-src', 'font-src']);
 
-function permissionLine(hit: SandboxCheckReport['permissionErrors'][number]): string {
-  const name = hit.namespace === 'powermove' ? `${hit.member} from 'powermove'` : `api.${hit.namespace}${hit.member ? `.${hit.member}` : ''}`;
-  if (hit.needs === 'project:read') return `Reads the project with ${name} without permission. Declare \`permissions: ["project:read"]\`.`;
-  const alternative = ALTERNATIVE[hit.namespace];
-  return alternative
-    ? `Calls ${name}, which needs full access. Declare ${FULL_ACCESS} or ${alternative}.`
-    : `Calls ${name}, which needs full access. Declare ${FULL_ACCESS}.`;
+/** Manifest permissions exist from apiVersion 3, so older code is told to raise it too. */
+function declare(permission: ExtensionPermission, apiVersion = 3): string {
+  const list = `\`permissions: ["${permission}"]\``;
+  return apiVersion < 3 ? `Set \`apiVersion: 3\` and declare ${list}` : `Declare ${list}`;
 }
 
-function cspLine(hit: SandboxCheckReport['cspViolations'][number]): string {
+function permissionLine(hit: SandboxCheckReport['permissionErrors'][number], apiVersion?: number): string {
+  const name = hit.namespace === 'powermove' ? `${hit.member} from 'powermove'` : `api.${hit.namespace}${hit.member ? `.${hit.member}` : ''}`;
+  if (hit.needs === 'project:read') return `Reads the project with ${name} without permission. ${declare('project:read', apiVersion)}.`;
+  const alternative = ALTERNATIVE[hit.namespace];
+  return alternative
+    ? `Calls ${name}, which needs full access. ${declare('full-access', apiVersion)} or ${alternative}.`
+    : `Calls ${name}, which needs full access. ${declare('full-access', apiVersion)}.`;
+}
+
+function cspLine(hit: SandboxCheckReport['cspViolations'][number], apiVersion?: number): string {
   const directive = hit.directive.replace(/-elem$|-attr$/, '');
   if (NETWORK_DIRECTIVES.has(directive) && /^(?:https?|wss?):/i.test(hit.blockedUri)) {
     let where = hit.blockedUri;
     try { where = new URL(hit.blockedUri).host || where; } catch { /* keep the raw value */ }
-    return `Reaches ${where} without the network permission. Declare \`permissions: ["network"]\`.`;
+    return `Reaches ${where} without the network permission. ${declare('network', apiVersion)}.`;
   }
   if (hit.blockedUri === 'eval') return 'Uses eval or new Function, which the sandbox blocks. Build the code ahead of time instead.';
   return `The sandbox blocked ${hit.blockedUri || 'a request'} (${hit.directive}).`;
@@ -77,9 +82,9 @@ export function sandboxCheckLines(report: SandboxCheckReport): string[] {
   const lines: string[] = [];
   const permission = report.permissionErrors.length > 0;
   const covered = (message: string): boolean => permission && /requires (?:full access|project:read permission)/.test(message);
-  for (const hit of report.permissionErrors) lines.push(permissionLine(hit));
+  for (const hit of report.permissionErrors) lines.push(permissionLine(hit, report.apiVersion));
   if (report.activation !== 'ok' && !covered(report.activation.error)) lines.push(`Failed to start in the sandbox: ${report.activation.error}`);
-  for (const hit of report.cspViolations) lines.push(cspLine(hit));
+  for (const hit of report.cspViolations) lines.push(cspLine(hit, report.apiVersion));
   for (const hit of report.asyncMisuse) lines.push(`Reads the result of api.${hit.member} right away, but it returns a Promise in the sandbox. Await it and set \`apiVersion: 3\`.`);
   for (const panel of report.panels) if (!panel.mounted && !covered(panel.error ?? '')) lines.push(`Panel '${panel.id}' failed to mount: ${panel.error ?? 'unknown error'}`);
   for (const message of report.runtimeErrors) if (!covered(message)) lines.push(`Threw an error: ${message}`);
