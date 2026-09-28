@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm, symlink, access } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, symlink, access } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { CompatibleWorkspace, runWorkspaceCommand } from './compatible-workspace';
@@ -9,6 +9,7 @@ import { agentResultSchema } from './codex/instructions';
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
 const signal = () => new AbortController().signal;
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 async function workspace() {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'pm-api-workspace-')); directories.push(directory);
   const layout = await prepareAgentWorkspace({ projectId: 'proof', provider: 'compatible', projectJSON: '{}', images: [], attachments: [] } as any, directory, 'project', agentResultSchema(), { extensionsDir: path.join(directory, 'extensions'), apiPackFiles: [] });
@@ -55,6 +56,31 @@ it.runIf(process.platform === 'darwin')('runs commands with real Project write i
   const pending = runWorkspaceCommand(ws.layout.root, 'project', 'sleep 10', 5000, controller.signal);
   setTimeout(() => controller.abort(new Error('Stopped by test')), 30);
   await expect(pending).rejects.toThrow('Stopped by test');
+});
+
+it.runIf(process.platform === 'darwin')('keeps Project temp files, heredocs and mktemp inside the workspace scratch folder', async () => {
+  const ws = await workspace();
+  const scratch = path.join(await realpath(ws.layout.root), '.powermove', 'tmp');
+  const heredoc = await runWorkspaceCommand(ws.layout.root, 'project', 'cat <<EOF\nheredoc works\nEOF', 5000, signal());
+  expect(heredoc).toMatchObject({ output: 'heredoc works\n', exitCode: 0 });
+  const script = [
+    'a=$(mktemp) && b=$(mktemp -d) && c=$(mktemp -t render) && d=$(mktemp -dq -t clip)',
+    'e=$(mktemp -p "$TMPDIR/.." inside.XXXXXX) && f=$(mktemp local.XXXXXX)',
+    'printf data > "$a" && printf "%s\\n" "$a" "$b" "$c" "$d" "$e" "$f" && [ -d "$b" ] && [ -d "$d" ] && cat "$a"'
+  ].join(' && ');
+  const made = await runWorkspaceCommand(ws.layout.root, 'project', script, 5000, signal());
+  expect(made.exitCode, made.output).toBe(0);
+  const [a = '', b = '', c = '', d = '', e = '', f = '', data] = made.output.split('\n');
+  for (const file of [a, b, c, d]) expect(path.dirname(file)).toBe(scratch);
+  expect(path.basename(c)).toMatch(/^render\.[A-Za-z0-9]{8}$/);
+  expect(path.basename(d)).toMatch(/^clip\./);
+  expect(path.normalize(e)).toMatch(new RegExp(`^${escapeRegExp(path.dirname(scratch))}/inside\\.[A-Za-z0-9]{6}$`));
+  expect(f).toMatch(/^local\.[A-Za-z0-9]{6}$/);
+  expect(data).toBe('data');
+  expect((await runWorkspaceCommand(ws.layout.root, 'project', 'printf "%s|%s|%s" "$TMP" "$TEMP" "$TMPPREFIX"', 5000, signal())).output)
+    .toBe(`${scratch}|${scratch}|${path.join(scratch, 'zsh')}`);
+  // An explicit template outside the workspace is still refused.
+  expect((await runWorkspaceCommand(ws.layout.root, 'project', 'mktemp /private/tmp/pm-escape.XXXXXX', 5000, signal())).exitCode).not.toBe(0);
 });
 
 it.runIf(process.platform === 'darwin')('lets Project commands write to their inherited stdio but not other devices', async () => {

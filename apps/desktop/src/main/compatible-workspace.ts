@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { AgentToolContent, CodexRunResult } from '../shared/ipc';
 import { EXTENSION_ID, parseManifest } from '../shared/extensions';
@@ -128,12 +128,63 @@ function boundedInteger(value: unknown, fallback: number, min: number, max: numb
   return value as number;
 }
 
+// macOS mktemp ignores TMPDIR for -t and bare calls and uses the per-user
+// temp folder, which Project commands must not write: other tools run code
+// cached there. Default those templates to $TMPDIR; keep explicit ones.
+const MKTEMP_SHIM = `#!/bin/zsh -f
+emulate -L zsh
+local -a flags templates resolved
+local dir= prefix= arg rest c named=0
+while (( $# )); do
+  arg=$1; shift
+  case $arg in
+    --) templates+=("$@"); break ;;
+    --tmpdir) dir=\${TMPDIR:-/tmp} ;;
+    --tmpdir=*) dir=\${arg#--tmpdir=} ;;
+    --*) flags+=("$arg") ;;
+    -?*)
+      rest=\${arg#-}
+      while [[ -n $rest ]]; do
+        c=\${rest[1]}; rest=\${rest[2,-1]}
+        case $c in
+          t|p)
+            local value=$rest; rest=
+            if [[ -z $value ]] && (( $# )); then value=$1; shift; fi
+            if [[ $c == t ]]; then prefix=$value; named=1; else dir=$value; fi ;;
+          *) flags+=("-$c") ;;
+        esac
+      done ;;
+    *) templates+=("$arg") ;;
+  esac
+done
+local base=\${\${dir:-\${TMPDIR:-/tmp}}%/}
+for arg in "\${templates[@]}"; do
+  if [[ -n $dir && $arg != /* ]]; then resolved+=("$base/$arg"); else resolved+=("$arg"); fi
+done
+if (( named || ! \${#templates} )); then resolved+=("$base/\${prefix:-tmp}.XXXXXXXX"); fi
+exec /usr/bin/mktemp "\${flags[@]}" -- "\${resolved[@]}"
+`;
+
+/** Scratch and tool locations inside the app-owned workspace. */
+async function commandEnvironment(root: string): Promise<NodeJS.ProcessEnv> {
+  const scratch = path.join(root, '.powermove', 'tmp');
+  const bin = path.join(root, '.powermove', 'bin');
+  await mkdir(scratch, { recursive: true });
+  const shims = process.platform === 'darwin';
+  if (shims) {
+    await mkdir(bin, { recursive: true });
+    await writeFile(path.join(bin, 'mktemp'), MKTEMP_SHIM, { mode: 0o755 });
+    await chmod(path.join(bin, 'mktemp'), 0o755);
+  }
+  const PATH = process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin';
+  // Keep account keys and provider configuration out of subprocess environments.
+  return { PATH: shims ? `${bin}:${PATH}` : PATH, HOME: process.env.HOME, LANG: 'en_US.UTF-8',
+    TMPDIR: scratch, TMP: scratch, TEMP: scratch, TMPPREFIX: path.join(scratch, 'zsh') };
+}
+
 export async function runWorkspaceCommand(root: string, access: 'project' | 'computer', command: string, timeoutMs: number, signal: AbortSignal): Promise<{ output: string; exitCode: number | null; truncated: boolean }> {
   signal.throwIfAborted();
-  const scratch = path.join(await realpath(root), '.powermove', 'tmp');
-  await mkdir(scratch, { recursive: true });
-  // Keep account keys and provider configuration out of subprocess environments.
-  const env: NodeJS.ProcessEnv = { PATH: process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin', HOME: process.env.HOME, LANG: 'en_US.UTF-8', TMPDIR: scratch };
+  const env = await commandEnvironment(await realpath(root));
   const profile = `(version 1)(allow default)(deny appleevent-send)(deny file-write*)(allow file-write* (subpath ${JSON.stringify(await realpath(root))}) (literal "/dev/null") (literal "/dev/tty")`
     // Inherited stdio only; a broad /dev subpath would expose devices.
     + ' (literal "/dev/stdout") (literal "/dev/stderr") (regex #"^/dev/fd/[0-9]+$"))';
