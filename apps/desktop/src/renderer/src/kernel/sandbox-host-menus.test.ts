@@ -106,6 +106,58 @@ it('answers a sandboxed palette provider for the query asked, the first one incl
   expect(ran).toEqual(['beta', 'alpha']);
 });
 
+/* A controllable answer per key: `answer(key)` settles the one asked for it. */
+function gates() {
+  const open = new Map<string, () => void>();
+  return {
+    wait: (key: string) => new Promise<void>(resolve => open.set(key, resolve)),
+    answer: async (key: string) => { open.get(key)!(); await new Promise(resolve => setTimeout(resolve, 5)); }
+  };
+}
+
+it('keeps the handles of the newest palette query however the replies land', async () => {
+  const ran: string[] = [];
+  const gate = gates();
+  const kernel = await sandboxed(api => {
+    api.palette.registerProvider(async (query: string) => {
+      await gate.wait(query);
+      return [{ id: `menu-ext.${query}`, label: query, category: 'Find', run: () => { ran.push(query); } }];
+    });
+  });
+  const provider = kernel.paletteProviders()[0]!.provider;
+  // Typed a, ab, abc; abc answers first, then the slower ab and a.
+  const [a, ab, abc] = ['a', 'ab', 'abc'].map(query => provider(query) as Promise<Array<{ run(): unknown }>>);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  await gate.answer('abc');
+  await gate.answer('ab');
+  await gate.answer('a');
+  const shown = await abc;
+  await shown[0]!.run(); // the palette shows abc's rows
+  expect(ran).toEqual(['abc']);
+  expect(await a).toEqual([]); // two newer queries already answered: nothing to run
+  expect((await ab).map(entry => (entry as { label: string }).label)).toEqual(['ab']);
+});
+
+it('keeps the handles of the newest menu open however the replies land', async () => {
+  const ran: string[] = [];
+  const gate = gates();
+  const kernel = await sandboxed(api => {
+    api.menus.contribute('layer:context', async (ctx: { layerId: string }) => {
+      await gate.wait(ctx.layerId);
+      return [{ label: `Tag ${ctx.layerId}`, run: () => { ran.push(ctx.layerId); } }];
+    });
+  });
+  const opens = ['A', 'B', 'C'].map(layerId => kernel.gatherMenu('layer:context', { layerId }, 1000) as Promise<MenuContribution[]>);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  await gate.answer('C');
+  await gate.answer('A');
+  await gate.answer('B');
+  const [, onB, onC] = await Promise.all(opens);
+  await run(onC!, 'Tag C');
+  await run(onB!, 'Tag B');
+  expect(ran).toEqual(['C', 'B']);
+});
+
 it('asks a sandboxed when() afresh on every check', async () => {
   const kernel = await sandboxed(api => {
     let enabled = true;

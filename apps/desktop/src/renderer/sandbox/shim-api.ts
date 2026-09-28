@@ -179,6 +179,31 @@ function reactiveSource(start?: () => void): { read(): void; bump(): void; live(
   const read = createSubscriber(next => { update = next; start?.(); return () => { update = null; }; });
   return { read, bump: () => update?.(), live: () => update !== null };
 }
+/*
+ * Callback handles in the replies to a callback the host asks again and
+ * again (palette queries, menu opens). Replies can land in any order and the
+ * host keeps the one for the newest call it made, so handles are kept by the
+ * order the calls were made, not the order they answered: the two newest
+ * replies stay runnable, and a reply two newer ones already beat creates none.
+ */
+function replyHandles(handle: (fn: (...args: any[]) => unknown) => HandleId, release: (id: HandleId) => void) {
+  let issued = 0, disposed = false;
+  let kept: Array<{ seq: number; ids: HandleId[] }> = [];
+  return {
+    issue: () => ++issued,
+    answer<T>(seq: number, build: (hold: (fn: (...args: any[]) => unknown) => HandleId) => T[]): T[] {
+      if (disposed || kept.filter(reply => reply.seq > seq).length >= 2) return [];
+      const ids: HandleId[] = [];
+      let items: T[];
+      try { items = build(fn => { const id = handle(fn); ids.push(id); return id; }); }
+      catch (error) { for (const id of ids) release(id); throw error; }
+      kept = [...kept, { seq, ids }].sort((a, b) => b.seq - a.seq);
+      for (const reply of kept.splice(2)) for (const id of reply.ids) release(id);
+      return items;
+    },
+    dispose() { disposed = true; for (const reply of kept.splice(0)) for (const id of reply.ids) release(id); }
+  };
+}
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
     Object.freeze(value);
@@ -372,18 +397,15 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     }, list: () => list('status') },
     palette: { registerProvider(fn: (...args: any[]) => unknown) {
       if (mode === 'view') return registration('palette', { provider: 0 }, [], fn);
-      let current: HandleId[] = [], previous: HandleId[] = [];
-      /* The entries may be a Promise. Handles live for this query and the next. */
+      const replies = replyHandles(handle, id => rpc.release(id));
+      // The entries may be a Promise.
       const id = handle(async (query: string) => {
+        const seq = replies.issue();
         const entries = await fn(query) as Record<string, any>[];
-        for (const item of previous) rpc.release(item);
-        previous = current; current = [];
-        return entries.map(entry => {
-          const run = handle(entry.run); current.push(run); return { ...entry, run };
-        });
+        return replies.answer(seq, hold => entries.map(entry => ({ ...entry, run: hold(entry.run) })));
       });
       const registrationHandle = registration('palette', { provider: id }, [id]);
-      const disposable = { dispose() { registrationHandle.dispose(); for (const item of [...previous, ...current]) rpc.release(item); previous = []; current = []; } };
+      const disposable = { dispose() { registrationHandle.dispose(); replies.dispose(); } };
       disposers.push(disposable.dispose);
       return disposable;
     }, open: (query?: string) => fire('invoke', 'palette', 'open', query === undefined ? [] : [query]) },
@@ -391,20 +413,15 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
       const own = { location, fn };
       menuContributors.add(own);
       if (mode === 'view') { const recorded = registration('menus', { location, items: 0 }, [], fn); return { dispose() { menuContributors.delete(own); recorded.dispose(); } }; }
-      let current: HandleId[] = [], previous: HandleId[] = [];
-      /* The items may be a Promise; the host waits for them within its menu
-         deadline. Handles live for this open and the next. */
+      const replies = replyHandles(handle, id => rpc.release(id));
+      // The items may be a Promise; the host waits for them within its menu deadline.
       const id = handle(async (ctx: unknown) => {
+        const seq = replies.issue();
         const items = await fn(ctx) as Array<string | Record<string, any>>;
-        for (const item of previous) rpc.release(item);
-        previous = current; current = [];
-        return items.map(entry => {
-          if (typeof entry === 'string' || !entry.run) return entry;
-          const run = handle(entry.run); current.push(run); return { ...entry, run };
-        });
+        return replies.answer(seq, hold => items.map(entry => typeof entry === 'string' || !entry.run ? entry : { ...entry, run: hold(entry.run) }));
       });
       const registrationHandle = registration('menus', { location, items: id }, [id]);
-      const disposable = { dispose() { menuContributors.delete(own); registrationHandle.dispose(); for (const item of [...previous, ...current]) rpc.release(item); previous = []; current = []; } };
+      const disposable = { dispose() { menuContributors.delete(own); registrationHandle.dispose(); replies.dispose(); } };
       disposers.push(disposable.dispose);
       return disposable;
     /* Only this extension's own contributions: another's items carry
