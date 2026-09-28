@@ -71,7 +71,7 @@ test('a store extension’s Svelte panel renders in its own view iframe with hos
   await expect(panel).toHaveClass(/\bframe\b/);
   await expect(panel.locator('header .ptitle')).toHaveText('Sandbox panel');
   const frame = panel.locator('iframe.ext-panel-frame');
-  await expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
+  await expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-forms');
   await expect(frame).toHaveAttribute('src', new RegExp(`/host/ext-sandbox\\.html\\?id=sandboxed-ext&view=${panelId}&perms=`));
   // The view reports its own mount; Playwright cannot look inside the frame.
   await expect(frame).toHaveAttribute('data-state', 'ready', { timeout: 15_000 });

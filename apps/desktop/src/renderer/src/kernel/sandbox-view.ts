@@ -71,7 +71,8 @@ export function mountSandboxView(host: ViewHost, panel: SandboxPanelInfo, body: 
   }
   const frame = document.createElement('iframe');
   frame.className = 'ext-panel-frame';
-  frame.setAttribute('sandbox', 'allow-scripts');
+  // allow-forms only lets a submit reach the panel's handlers: boot.ts cancels it and form-action 'none' refuses it.
+  frame.setAttribute('sandbox', 'allow-scripts allow-forms');
   frame.title = panel.title;
   frame.dataset.view = panel.id;
   let live: { link: ViewLink; token: string } | null = null;

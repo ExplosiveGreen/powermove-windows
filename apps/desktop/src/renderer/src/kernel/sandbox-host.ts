@@ -133,7 +133,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   const host = createExtensionAPI(reg, record, deps, vars);
   const frame = test?.frame ?? document.createElement('iframe');
   frame.hidden = true;
-  frame.setAttribute('sandbox', 'allow-scripts');
+  frame.setAttribute('sandbox', 'allow-scripts allow-forms'); // as a view's (sandbox-view.ts)
   frame.setAttribute('aria-hidden', 'true');
   // Inside Electron the document comes from the extension's own app:// host,
   // so it gets its own process (in development main proxies it from Vite);

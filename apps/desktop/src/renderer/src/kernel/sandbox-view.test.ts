@@ -97,7 +97,7 @@ it('docks a sandboxed Svelte panel as a frame panel with host chrome, refreshes 
   const { element, frame } = await openPanel(h);
   expect(element.classList.contains('frame')).toBe(true);
   expect(element.querySelector('header .ptitle')?.textContent).toBe('Sandbox panel');
-  expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
+  expect(frame.getAttribute('sandbox')).toBe('allow-scripts allow-forms');
   expect(frame.className).toBe('ext-panel-frame');
   expect(frame.title).toBe('Sandbox panel');
 
