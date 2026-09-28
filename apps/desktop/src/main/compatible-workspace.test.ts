@@ -83,6 +83,21 @@ it.runIf(process.platform === 'darwin')('keeps Project temp files, heredocs and 
   expect((await runWorkspaceCommand(ws.layout.root, 'project', 'mktemp /private/tmp/pm-escape.XXXXXX', 5000, signal())).exitCode).not.toBe(0);
 });
 
+it.runIf(process.platform === 'darwin')('gives commands the login PATH without the rest of the host environment', async () => {
+  const ws = await workspace();
+  process.env.PM_TEST_PROVIDER_TOKEN = 'must-not-leak';
+  try {
+    const result = await runWorkspaceCommand(ws.layout.root, 'project', 'env', 5000, signal());
+    expect(result.output).not.toContain('must-not-leak');
+    const PATH = /^PATH=(.*)$/m.exec(result.output)?.[1]?.split(':') ?? [];
+    // ~/.zshenv may still prepend its own entries inside the shell.
+    const bin = path.join(await realpath(ws.layout.root), '.powermove', 'bin');
+    expect(PATH).toEqual(expect.arrayContaining([bin, '/usr/bin', '/bin']));
+    expect(PATH.indexOf(bin)).toBeLessThan(PATH.indexOf('/usr/bin'));
+    expect(PATH.every(entry => path.isAbsolute(entry))).toBe(true);
+  } finally { delete process.env.PM_TEST_PROVIDER_TOKEN; }
+});
+
 it.runIf(process.platform === 'darwin')('lets Project commands write to their inherited stdio but not other devices', async () => {
   const ws = await workspace();
   const result = await runWorkspaceCommand(ws.layout.root, 'project', 'printf out > /dev/stdout && printf fd > /dev/fd/1 && printf err > /dev/stderr', 5000, signal());

@@ -6,6 +6,7 @@ import { EXTENSION_ID, parseManifest } from '../shared/extensions';
 import { compileExtension } from './extensions/compiler';
 import { collectArtifacts, mimeTypeForPath } from './codex/artifacts';
 import { publishExtensionChanges } from './codex/change-history';
+import { loginShellPath } from './login-shell-path';
 import { agentResultSchema } from './codex/instructions';
 import type { AgentWorkspace } from './codex/workspace';
 import type { PowermoveAgentToolSpec } from './agent-tools/spec';
@@ -176,7 +177,7 @@ async function commandEnvironment(root: string): Promise<NodeJS.ProcessEnv> {
     await writeFile(path.join(bin, 'mktemp'), MKTEMP_SHIM, { mode: 0o755 });
     await chmod(path.join(bin, 'mktemp'), 0o755);
   }
-  const PATH = process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin';
+  const PATH = await loginShellPath();
   // Keep account keys and provider configuration out of subprocess environments.
   return { PATH: shims ? `${bin}:${PATH}` : PATH, HOME: process.env.HOME, LANG: 'en_US.UTF-8',
     TMPDIR: scratch, TMP: scratch, TEMP: scratch, TMPPREFIX: path.join(scratch, 'zsh') };
