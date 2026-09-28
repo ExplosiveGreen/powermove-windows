@@ -134,7 +134,9 @@ export async function runWorkspaceCommand(root: string, access: 'project' | 'com
   await mkdir(scratch, { recursive: true });
   // Keep account keys and provider configuration out of subprocess environments.
   const env: NodeJS.ProcessEnv = { PATH: process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin', HOME: process.env.HOME, LANG: 'en_US.UTF-8', TMPDIR: scratch };
-  const profile = `(version 1)(allow default)(deny appleevent-send)(deny file-write*)(allow file-write* (subpath ${JSON.stringify(await realpath(root))}) (literal "/dev/null") (literal "/dev/tty"))`;
+  const profile = `(version 1)(allow default)(deny appleevent-send)(deny file-write*)(allow file-write* (subpath ${JSON.stringify(await realpath(root))}) (literal "/dev/null") (literal "/dev/tty")`
+    // Inherited stdio only; a broad /dev subpath would expose devices.
+    + ' (literal "/dev/stdout") (literal "/dev/stderr") (regex #"^/dev/fd/[0-9]+$"))';
   if (access === 'project' && process.platform !== 'darwin') throw new Error('Project command sandbox is only available on macOS.');
   return new Promise((resolve, reject) => {
     const child = spawn(access === 'project' ? '/usr/bin/sandbox-exec' : '/bin/zsh',

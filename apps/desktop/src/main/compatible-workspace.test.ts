@@ -56,3 +56,15 @@ it.runIf(process.platform === 'darwin')('runs commands with real Project write i
   setTimeout(() => controller.abort(new Error('Stopped by test')), 30);
   await expect(pending).rejects.toThrow('Stopped by test');
 });
+
+it.runIf(process.platform === 'darwin')('lets Project commands write to their inherited stdio but not other devices', async () => {
+  const ws = await workspace();
+  const result = await runWorkspaceCommand(ws.layout.root, 'project', 'printf out > /dev/stdout && printf fd > /dev/fd/1 && printf err > /dev/stderr', 5000, signal());
+  expect(result.exitCode).toBe(0);
+  // stdout and stderr are separate pipes, so only their own order is fixed.
+  expect(result.output.replace('err', '')).toBe('outfd');
+  expect(result.output).toContain('err');
+  const device = await runWorkspaceCommand(ws.layout.root, 'project', 'printf x > /dev/zero', 5000, signal());
+  expect(device.exitCode).not.toBe(0);
+  expect(device.output).toContain('not permitted');
+});
