@@ -89,25 +89,29 @@ inside the extension folder. No npm packages, no `..` escapes.
 Store extensions from other publishers run sandboxed. Declare `apiVersion: 3` for
 new Store-bound extensions and list the access they need in `manifest.json`
 (`permissions` may be an empty array). `permissions` requires `apiVersion: 3`,
-so code at `apiVersion` 1 or 2 can declare nothing: in the sandbox it cannot read
-the project or use any other permission, and publishing it with such a use is
-blocked until it sets `apiVersion: 3` and declares the permission.
+so code at `apiVersion` 1 or 2 can declare nothing: in the sandbox it cannot use
+any permission, and publishing it with such a use is blocked until it sets
+`apiVersion: 3` and declares the permission.
 
 ```json
-"permissions": ["network", "assets", "project:read"]
+"permissions": ["network", "assets"]
 ```
 
-- `network` allows HTTPS and WebSocket requests and remote images and media.
+Reading the project needs no permission, at any `apiVersion`: `project.get`,
+`project.selection`, `project.snapshot` (a rendered frame), `project.time`,
+`project.playing`, `project.revision`, the transport reads, and the
+`project:changed`, `selection`, `time` and `transport` events are available to
+every sandboxed extension. Without `network`, what it reads cannot leave the
+sandbox.
+
+- `network` allows HTTPS and WebSocket requests and remote images and media. It
+  is the capability that lets project data leave, so it is the one to scrutinize.
 - `clipboard` allows writing to the clipboard.
 - `assets` allows picking, importing, and reading asset files.
-- `project:read` allows reading the project: `project.get`, `project.selection`, `project.snapshot` (a rendered frame), and the `project:changed` and `selection` events. Reading needs `apiVersion: 3` plus `project:read` (or `project:write`). `project.time`, `project.playing`, `project.revision`, the transport reads and the `time` and `transport` events need no permission.
-- `project:write` allows project mutation through `apply`, `undo`, `redo`, `select`, time and transport controls, and includes `project:read`. `commands.run` can call an extension's own commands and, with this permission, the named legacy editing commands. It cannot call another extension's commands or File, app, export, settings, or mods commands.
+- `project:write` allows project mutation through `apply`, `undo`, `redo`, `select`, time and transport controls. `commands.run` can call an extension's own commands and, with this permission, the named legacy editing commands. It cannot call another extension's commands or File, app, export, settings, or mods commands.
 - `full-access` allows trusted-only APIs. Store installs that request it stay off
   until the person installing them accepts Powermove's full-access dialog. They
   can later revoke trust from the Library.
-
-The Store lists `project:read` as “Reads your project”. When `project:write` is
-also declared it shows only “Edits your project”.
 
 Store extensions supply simple event names; the kernel publishes them as `ext:<extension-id>:<name>`. They may subscribe to those events and the validated read-only host events `project:changed`, `selection`, `time`, `transport`, `theme`, and `extensions:changed`. Registration IDs must start with `<extension-id>.`, and keybindings may invoke only their own commands. Store code can list extensions and call `setUp` for itself; management of other extensions requires a trusted extension.
 
@@ -136,20 +140,20 @@ desktop app first, since serve has no trust dialog.
 ### Project data in the sandbox
 
 The sandbox has no live project. Each sandboxed document keeps a small state
-(time, playing, revision and, with project read access, the selection) that the
-host updates when it changes, and reads the project on request:
+(time, playing, revision and the selection) that the host updates when it
+changes, and reads the project on request:
 
-- `await api.project.get()` returns a snapshot (with `apiVersion: 3` and
-  `project:read` or `project:write`; otherwise it rejects and says what to add).
-  It is cached until the project changes: repeated calls resolve at once without
-  asking the host, and concurrent calls share one request. One snapshot build per change is shared by every
-  sandboxed extension in the window, so reading on each `project:changed` is cheap.
+- `await api.project.get()` returns a snapshot. It is cached until the project
+  changes: repeated calls resolve at once without asking the host, and
+  concurrent calls share one request. One snapshot build per change is shared by
+  every sandboxed extension in the window, so reading on each `project:changed`
+  is cheap.
 - The snapshot is deep-frozen; assignments throw. Edit through `api.project.apply`.
 - The snapshot omits the edit log (`edits` is absent although the type declares
   it), asset fields whose names contain `blob` or `source`, and keys matching
   `token`, `secret`, `password`, or ending in `key` within `library` and `notes`,
-  with the same rules inside each composition. Every extension with project read
-  access sees the rest; keep credentials in extension variables or storage.
+  with the same rules inside each composition. Every extension sees the rest;
+  keep credentials in extension variables or storage.
 - A snapshot above 8 Mi characters of JSON makes `project.get()` reject until the
   project is smaller.
 
@@ -169,12 +173,11 @@ The trusted-only namespaces are `api.render`, `api.host`, `api.services`,
 `api.ui.controls`, `api.ui.modal`, `api.ui.menu`, `api.ui.drag`,
 `api.ui.gesture`, `api.ui.mount`, `api.media.importFiles`,
 `api.media.assets`, `api.media.audio`, and `api.media.fonts`.
-Publishing scans direct uses of these names, network and clipboard APIs, and
-project reads (`api.project.get`, `api.project.selection`, `api.project.snapshot`, and `on('project:changed')`
-or `on('selection')`), and blocks undeclared permissions. Below `apiVersion: 3`
-every such use is undeclared, and the repair says to set `apiVersion: 3` as well
-as declare the permission. This text scan does not
-detect destructured aliases or dynamic property access. Local extensions made or
+Publishing scans direct uses of these names and of network and clipboard APIs,
+and blocks undeclared permissions. Below `apiVersion: 3` every such use is
+undeclared, and the repair says to set `apiVersion: 3` as well as declare the
+permission. Project reads need no permission, so the scan ignores them. This
+text scan does not detect destructured aliases or dynamic property access. Local extensions made or
 forked on this Mac are trusted and keep working without permission declarations.
 
 Extensions you make here run with full access. Anything you publish runs
@@ -195,9 +198,7 @@ in-realm type in `api.ts` shows a synchronous result: `api.commands.run`,
 `api.storage.get/set/delete`, `api.media.getImportDefaults`, `api.ui.icon`,
 and `api.extensions.list`. `apiVersion` 1 and 2 code gets the same Promises;
 the Sandbox check reports code that uses one of their results without awaiting
-it. `api.project.get` needs `apiVersion: 3` and `project:read`, so older code
-cannot read the project in the sandbox at all. Methods already typed as
-asynchronous, such as `api.assets.pick/import/readText` and `api.ui.confirm`, remain asynchronous.
+it. Methods already typed as asynchronous, such as `api.assets.pick/import/readText` and `api.ui.confirm`, remain asynchronous.
 `api.project.revision/selection/time/playing` and `api.transport.time/playing`
 stay synchronous.
 
@@ -217,7 +218,7 @@ api.events.on('project:changed', async () => {
 Sandboxed panels render their `component` or `build` content in a separate
 view iframe. `panels.header`, `panels.moveSlot`, and `panels.library.render`
 are unavailable there; the host owns the panel chrome. Declare `network`,
-`clipboard`, `assets`, `project:read`, or `project:write` (with `apiVersion: 3`)
+`clipboard`, `assets`, or `project:write` (with `apiVersion: 3`)
 when using their corresponding capabilities. `full-access` installs run with the
 in-realm API after the person installing the extension accepts the trust dialog.
 
