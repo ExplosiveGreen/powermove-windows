@@ -9,6 +9,7 @@ import { EXTENSION_ID, parseManifest } from '../shared/extensions';
 import { compileExtension } from './extensions/compiler';
 import { collectArtifacts, mimeTypeForPath } from './codex/artifacts';
 import { publishExtensionChanges, withStageSnapshot } from './codex/change-history';
+import { validateStagedExtensions } from './codex/validate-staged-extensions';
 import { loginShellPath } from './login-shell-path';
 import { killStrays, ProcessFamily } from './process-family';
 import { agentResultSchema } from './codex/instructions';
@@ -147,9 +148,9 @@ export class CompatibleWorkspace {
     throw new Error(`Unknown workspace tool: ${name}`);
   }
 
-  private async compile(id: unknown, stagingDirectory = this.layout.stagingDirectory) {
+  private async compile(id: unknown) {
     if (typeof id !== 'string' || !EXTENSION_ID.test(id)) throw new Error('Provide a valid extension id.');
-    const dir = path.join(stagingDirectory, id);
+    const dir = path.join(this.layout.stagingDirectory, id);
     const manifest = parseManifest(JSON.parse(await readFile(path.join(dir, 'manifest.json'), 'utf8')));
     if (!manifest.ok) throw new Error(manifest.error);
     if (manifest.manifest.id !== id) throw new Error('The manifest id must match its folder.');
@@ -178,14 +179,12 @@ export class CompatibleWorkspace {
         || !['created', 'updated', 'removed'].includes(item.action)) throw new Error('Invalid extension change.');
       return { id: item.id, action: item.action as 'created' | 'updated' | 'removed', summary: typeof item.summary === 'string' ? item.summary : '' };
     });
-    // One private copy is compiled and published; later stage writes cannot ship.
+    // One private copy is checked and published; later stage writes cannot ship.
     return withStageSnapshot(this.layout, async snapshot => {
-      for (const change of extensions) {
-        signal.throwIfAborted();
-        if (change.action === 'removed') continue;
-        const compiled = await this.compile(change.id, snapshot.stagingDirectory);
-        if (!compiled.ok) throw new Error(`${change.id} failed compilation: ${compiled.error}`);
-      }
+      signal.throwIfAborted();
+      // The same manifest, credential and compile checks as Codex and Claude runs.
+      await validateStagedExtensions(snapshot, extensions);
+      signal.throwIfAborted();
       const artifacts = await collectArtifacts(this.layout.runDirectory, this.layout.runId, value.artifacts as unknown[]);
       signal.throwIfAborted();
       const changeSet = await publishExtensionChanges(snapshot, extensions);

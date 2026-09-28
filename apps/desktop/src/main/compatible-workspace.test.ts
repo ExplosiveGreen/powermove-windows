@@ -55,6 +55,21 @@ it('reports real compile errors before publishing and exports created artifacts'
   if (finished.ok) expect(JSON.parse(finished.text).artifacts).toEqual([expect.objectContaining({ name: 'note.txt', size: 5 })]);
 });
 
+it('runs the credential scan before publishing, as Codex and Claude runs do', async () => {
+  const ws = await workspace();
+  const dir = path.join(ws.layout.stagingDirectory, 'keyed-effect');
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, 'manifest.json'), JSON.stringify({ id: 'keyed-effect', name: 'Keyed', version: '1.0.0', apiVersion: 1, contributes: ['effects'] }));
+  // Assembled so this test file does not itself look like it holds a key.
+  const key = ['sk', 'proj', 'A1b2C3d4E5f6G7h8I9j0K1l2'].join('-');
+  await writeFile(path.join(dir, 'index.ts'), `const key = '${key}';\nexport default function activate() { return key; }\n`);
+  const result = { summary: 'Done', commands: [], artifacts: [], extensions: [{ id: 'keyed-effect', action: 'created' }], notes: [], externalActions: [] };
+  await expect(ws.finish(result, signal())).rejects.toThrow('keyed-effect/index.ts:1 looks like an OpenAI API key');
+  await expect(access(path.join(ws.layout.liveDirectory, 'keyed-effect'))).rejects.toThrow();
+  await writeFile(path.join(dir, 'index.ts'), 'export default function activate() {}\n');
+  expect((await ws.finish(result, signal())).ok).toBe(true);
+});
+
 it.runIf(process.platform === 'darwin')('runs commands with real Project write isolation and propagates cancellation', async () => {
   const ws = await workspace();
   const outside = path.join(path.dirname(ws.layout.root), 'outside.txt');
