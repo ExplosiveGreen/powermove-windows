@@ -1,6 +1,6 @@
 import type { ExtensionRecord } from '../../../shared/extensions';
 import { createRpc, createRpcBudget, rpcTransfers, type Rpc } from '../../../shared/sandbox-rpc';
-import { canReadProject, panelInfo, PROJECT_READ_EVENTS, PROJECT_READ_MEMBERS, type SandboxEvent, type SandboxInit, type SandboxKey, type SandboxState, type SandboxViewInit } from '../../sandbox/shim-api';
+import { canReadProject, panelInfo, PROJECT_READ_EVENTS, PROJECT_READ_MEMBERS, type SandboxEvent, type SandboxInit, type SandboxKey, type SandboxSnapshot, type SandboxState, type SandboxViewInit } from '../../sandbox/shim-api';
 import type { Disposable, Selection } from './api';
 import { createExtensionAPI, type ExtensionHandle, type HostDeps } from './host';
 import type { Kernel } from './registries';
@@ -33,12 +33,14 @@ function denied(message: string, code = 'permission_denied'): never {
   error.name = 'PermissionError'; error.code = code; throw error;
 }
 /* One sandbox document (the runtime or a view) as the data plane sees it:
-   the state it was last told, the event names it listens to, and the
-   occurrences waiting for the next flush. */
+   the state it was last told, the event names it listens to, the
+   occurrences waiting for the next flush, and the snapshot generation it was
+   last sent in full. */
 interface PlaneDoc {
   rpc: Rpc; sent: SandboxState; selection: string;
   interest: Map<string, { count: number; off: Disposable }>;
   pending: SandboxEvent[];
+  delivered: number | null;
 }
 const STATE_KEYS = ['time', 'playing', 'revision', 'generation'] as const;
 /** Within one flush `time` and `selection` keep their last value and `project:changed` collapses per kind; everything else stays, in order. */
@@ -274,10 +276,17 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     },
     'dispose-registration'(token: string) { link.registrations.get(token)?.dispose(); link.registrations.delete(token); },
     invoke,
-    /* Enforced here whatever the shim does. */
-    'project-snapshot'() {
+    /* Enforced here whatever the shim does: read access, and at most one full
+       copy per generation for each document. A document asking again for the
+       generation it already holds gets `unchanged`, however often it asks. */
+    'project-snapshot'(): SandboxSnapshot {
       if (!readable()) denied('project.get requires project:read permission', 'project:read');
-      return snapshots.read();
+      const doc = docOf.get(link);
+      if (!doc || !docs.has(doc)) throw new Error('Sandbox document is not connected');
+      const snapshot = snapshots.read();
+      if (doc.delivered === snapshot.generation) return { generation: snapshot.generation, unchanged: true };
+      doc.delivered = snapshot.generation;
+      return snapshot;
     },
     'extensions-list'() { return host.api.extensions.list().map(({ dir: _dir, ...rest }) => rest); },
     log(level: unknown, message: unknown, data: unknown) { const now = Date.now(); if (now - logWindow >= 1000) { logWindow = now; logCount = 0; } if (++logCount > 50) return; if (level === 'info' || level === 'warn' || level === 'error') host.api.log(level, String(message).slice(0, 4096), ...(Array.isArray(data) ? data : [])); },
@@ -326,13 +335,16 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   const snapshots = projectSnapshots(kernel, deps.project);
   const docs = new Set<PlaneDoc>();
   const docOf = new WeakMap<object, PlaneDoc>();
-  const stateNow = (): SandboxState => ({
-    time: host.api.project.time(), playing: host.api.project.playing(), revision: host.api.project.revision(),
-    generation: snapshots.generation, selection: readable() ? plain(host.api.project.selection()) as Selection : null
-  });
+  /* The selection and its JSON are the kernel's shared copy (ProjectSnapshots.selection),
+     so a frame that only moved `time` costs nothing proportional to it. */
+  const stateNow = (): { state: SandboxState; selection: string } => {
+    const selection = readable() ? snapshots.selection() : null;
+    return { state: { time: host.api.project.time(), playing: host.api.project.playing(), revision: host.api.project.revision(),
+      generation: snapshots.generation, selection: (selection?.value ?? null) as Selection | null }, selection: selection?.json ?? 'null' };
+  };
   const openDoc = (link: object, docRpc: Rpc): SandboxState => {
-    const state = stateNow();
-    const doc: PlaneDoc = { rpc: docRpc, sent: state, selection: JSON.stringify(state.selection), interest: new Map(), pending: [] };
+    const { state, selection } = stateNow();
+    const doc: PlaneDoc = { rpc: docRpc, sent: state, selection, interest: new Map(), pending: [], delivered: null };
     docs.add(doc); docOf.set(link, doc);
     return state;
   };
@@ -341,8 +353,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
   function flush(): void {
     flushQueued = false;
     if (disposed || !docs.size) return;
-    const state = stateNow();
-    const selection = JSON.stringify(state.selection);
+    const { state, selection } = stateNow();
     for (const doc of docs) {
       const delta: Partial<Record<keyof SandboxState, unknown>> = {};
       for (const key of STATE_KEYS) if (doc.sent[key] !== state[key]) delta[key] = state[key];

@@ -235,8 +235,9 @@ it('coalesces one flush: last time and selection, one project:changed per kind, 
 });
 
 /* Data plane (docs/sandbox-data-plane.md §3): real shim documents on real ports. */
-function planeDeps(live: { proj: Record<string, any>; time: number; playing: boolean }) {
-  const project = { get: () => live.proj, revision: () => Number(live.proj.revision), selection: () => ({ layers: ['l1'], keys: [], chan: null }),
+function planeDeps(live: { proj: Record<string, any>; time: number; playing: boolean; selection?: { layers: string[]; keys: string[]; chan: string | null } }) {
+  const project = { get: () => live.proj, revision: () => Number(live.proj.revision),
+    selection: vi.fn(() => live.selection ? { layers: [...live.selection.layers], keys: [...live.selection.keys], chan: live.selection.chan } : { layers: ['l1'], keys: [], chan: null }),
     time: () => live.time, playing: () => live.playing, apply: vi.fn(), select: vi.fn(), setTime: vi.fn(), play: vi.fn(), pause: vi.fn(), undo: vi.fn(), redo: vi.fn(), snapshot: async () => '' } as unknown as ProjectAPI;
   return { pm: {}, state: { doc: {}, sel: {}, transport: {}, perf: {} }, project,
     ui: { controls: {}, toast: vi.fn(), confirm: async () => true, menu: vi.fn(), modal: vi.fn(), icon: () => '' },
@@ -252,10 +253,11 @@ async function planeRuntime(kernel: ReturnType<typeof createKernel>, deps: HostD
   const ticks: string[] = [];
   let api!: any;
   let init!: SandboxInit;
+  let rpc!: ReturnType<typeof createRpc>;
   const pending = createSandboxRuntime(kernel, record, deps, {}, { frame, onPostInit(port, message) {
     init = message;
     let control: ReturnType<typeof sandboxControl> | undefined;
-    const child = createRpc(port, { tick: (delta: unknown, events: SandboxEvent[]) => { ticks.push(JSON.stringify([delta, events])); control?.tick(delta as never, events); } }, 10_000, { trusted: true });
+    const child = rpc = createRpc(port, { tick: (delta: unknown, events: SandboxEvent[]) => { ticks.push(JSON.stringify([delta, events])); control?.tick(delta as never, events); } }, 10_000, { trusted: true });
     close.push(() => child.close());
     api = createSandboxAPI(child, message);
     control = sandboxControl(api);
@@ -265,9 +267,11 @@ async function planeRuntime(kernel: ReturnType<typeof createKernel>, deps: HostD
   frame.dispatchEvent(new Event('load'));
   const runtime = await pending;
   close.push(() => runtime.dispose());
-  return { runtime, api, ticks, init: () => init };
+  return { runtime, api, ticks, init: () => init, rpc };
 }
 const flushed = () => new Promise(resolve => setTimeout(resolve, 0));
+/* A tick crosses a real port, which one macrotask does not always cover under load. */
+const until = async (check: () => boolean) => { for (let wait = 0; wait < 100 && !check(); wait++) await new Promise(resolve => setTimeout(resolve, 10)); expect(check()).toBe(true); };
 
 it('inits with state and no project, ticks small deltas, and forwards only subscribed events, coalesced', async () => {
   const kernel = createKernel();
@@ -340,7 +344,7 @@ it('sends small ticks during playback and builds one snapshot for three extensio
   live.proj.revision += 1;
   live.proj.layers[0].name = 'Renamed';
   kernel.events.emit('project:changed', { kind: 'values' });
-  await flushed();
+  await until(() => docs.every(doc => doc.api.project.revision() === live.proj.revision));
   const second = await Promise.all(docs.map(doc => doc.api.project.get()));
   expect(stats.snapshotBuilds - builds).toBe(1);
   expect(second.map(project => project.layers[0].name)).toEqual(['Renamed', 'Renamed', 'Renamed']);
@@ -350,4 +354,71 @@ it('sends small ticks during playback and builds one snapshot for three extensio
   // Unchanged generation: no message, the same frozen object.
   expect(await docs[0]!.api.project.get()).toBe(second[0]);
   expect(stats.snapshotBuilds - builds).toBe(1);
+});
+
+it('sends each document one full copy per generation, however often it asks', async () => {
+  const kernel = createKernel();
+  const live = { proj: { revision: 1, layers: [{ id: 'a' }] } as Record<string, any>, time: 0, playing: false };
+  const deps = planeDeps(live);
+  const reader = await planeRuntime(kernel, deps, 'reader-ext', ['project:read']);
+  const other = await planeRuntime(kernel, deps, 'other-ext', ['project:read']);
+  const project = await reader.api.project.get();
+  const generation = reader.init().state.generation;
+  // A patched shim asking straight on its port gets no second copy of the generation it holds.
+  const asked = await Promise.all(Array.from({ length: 20 }, () => reader.rpc.call('project-snapshot')));
+  expect(asked).toEqual(Array(20).fill({ generation, unchanged: true }));
+  expect(await reader.api.project.get()).toBe(project);
+  // Another document at the same generation still gets its own full copy, once.
+  expect(await other.rpc.call('project-snapshot')).toEqual({ generation, json: JSON.stringify({ revision: 1, layers: [{ id: 'a' }] }) });
+  expect(await other.rpc.call('project-snapshot')).toEqual({ generation, unchanged: true });
+  live.proj.layers[0].id = 'b';
+  reader.ticks.length = 0;
+  kernel.events.emit('project:changed', { kind: 'values' });
+  await until(() => reader.ticks.some(tick => tick.includes('"generation"')));
+  const next = await reader.api.project.get();
+  expect(next).toEqual({ revision: 1, layers: [{ id: 'b' }] });
+  expect(await reader.rpc.call('project-snapshot')).toEqual({ generation: generation + 1, unchanged: true });
+  expect(await reader.api.project.get()).toBe(next);
+});
+
+it('copies and stringifies the selection once per change for every document, and not at all on a time-only frame', async () => {
+  const kernel = createKernel();
+  const selection = { layers: Array.from({ length: 540 }, (_, index) => `L${index}`), keys: Array.from({ length: 4000 }, (_, index) => `k${index}`), chan: null as string | null };
+  const live = { proj: { revision: 1, layers: [] } as Record<string, any>, time: 0, playing: true, selection };
+  const deps = planeDeps(live);
+  const read = deps.project.selection as unknown as ReturnType<typeof vi.fn>;
+  const heard: string[][] = [];
+  const docs = await Promise.all(['one-ext', 'two-ext'].map(id => planeRuntime(kernel, deps, id, ['project:read'], api => {
+    api.events.on('selection', () => heard.push(api.project.selection().layers));
+  })));
+  await flushed();
+  const stats = sandboxStats();
+  read.mockClear();
+  const builds = stats.selectionBuilds;
+  let hostMs = 0;
+  for (let frame = 1; frame <= 120; frame++) {
+    const start = performance.now();
+    live.time = frame / 60; kernel.events.emit('time', live.time);
+    await Promise.resolve();
+    hostMs += performance.now() - start;
+  }
+  await flushed();
+  expect(read).not.toHaveBeenCalled();
+  expect(stats.selectionBuilds - builds).toBe(0);
+  // One change, one copy, shared by both documents.
+  live.selection = { layers: ['L7'], keys: [], chan: 'opacity' };
+  kernel.events.emit('selection', deps.project.selection());
+  read.mockClear();
+  await until(() => heard.length === 2);
+  expect(read).toHaveBeenCalledTimes(1);
+  expect(stats.selectionBuilds - builds).toBe(1);
+  expect(docs.map(doc => doc.api.project.selection())).toEqual([live.selection, live.selection]);
+  expect(heard).toEqual([['L7'], ['L7']]);
+  // A new revision or a replaced project is read again even without an event.
+  live.proj.revision = 2; kernel.events.emit('time', 3);
+  await flushed();
+  live.proj = { revision: 2, layers: [] }; kernel.events.emit('time', 4);
+  await flushed();
+  expect(stats.selectionBuilds - builds).toBe(3);
+  console.info(`[bench] playback, two readers, ${JSON.stringify(selection).length} character selection: ${(hostMs / 120 * 1000).toFixed(1)} µs host time per frame, 0 selection copies`);
 });

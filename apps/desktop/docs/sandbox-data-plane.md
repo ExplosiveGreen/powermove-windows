@@ -97,7 +97,10 @@ document caches the parsed snapshot by `generation`: if `state.generation`
 equals the cached one, it resolves at once without a message. Otherwise it
 calls `project-snapshot` (one call in flight, shared by concurrent callers),
 `JSON.parse`s the string, deep-freezes it, and caches it. Too large → rejects
-with a clear error.
+with a clear error. The kernel sends each document (keyed per runtime or view
+document, so a fresh one gets a full copy) at most one full copy per
+generation; asking again for the generation it was already sent returns
+`{ generation, unchanged: true }`, and the document keeps its copy.
 
 **Snapshots on the host.** One `ProjectSnapshots` per kernel, shared by every
 sandboxed extension and view in the window:
@@ -110,8 +113,16 @@ sandboxed extension and view in the window:
   keys matching `/blob|source/i` at any depth, `library` and `notes` drop keys
   matching `/token|secret|password|key$/i` at any depth, each comp gets the same
   project rules, functions drop out. The limit is 8 Mi characters of JSON.
+  The redacted copies are kept by identity of the live objects and reused
+  until a `project:changed` of kind `library`, `assets`, `project` or
+  `replace` (or any unknown kind) or a replaced project; `values`,
+  `structure` and `history` changes pay only the native `JSON.stringify`.
+- The pushed `selection` is copied and stringified once per kernel
+  `selection` or `project:changed` (or project object / revision change), and
+  that copy is shared by every document; a `time`-only flush does no work
+  proportional to it.
 - Counters for tests: `globalThis.__powermoveSandboxStats = { snapshotBuilds,
-  snapshotMs, ticks }`.
+  snapshotMs, ticks, selectionBuilds }`.
 
 Cost model: an extension that never calls `project.get()` costs one tiny
 `tick` per frame it is subscribed to or whose `time` changed (microseconds). N

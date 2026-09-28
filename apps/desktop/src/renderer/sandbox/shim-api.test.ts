@@ -91,6 +91,21 @@ it('asks again when the reply predates the generation the document already heard
   expect(count('project-snapshot')).toBe(2);
 });
 
+it('keeps its copy when the kernel answers that the generation is unchanged', async () => {
+  let replies = 0;
+  const { api, control, count } = harness(['project:read'], 3, {
+    'project-snapshot': (): SandboxSnapshot => ++replies === 1 ? { generation: 1, json: '{"layers":[1]}' } : { generation: 1, unchanged: true }
+  });
+  const first = await api.project.get();
+  // The document heard of generation 2 before the kernel built it: the kernel still holds generation 1.
+  control.tick({ generation: 2 }, []);
+  await expect(api.project.get()).resolves.toBe(first);
+  expect(count('project-snapshot')).toBe(4);
+  // With nothing cached, `unchanged` is no project.
+  const empty = harness(['project:read'], 3, { 'project-snapshot': (): SandboxSnapshot => ({ generation: 1, unchanged: true }) });
+  await expect(empty.api.project.get()).rejects.toThrow('could not read the project');
+});
+
 it('rejects project.get clearly when the snapshot is too large', async () => {
   const { api } = harness(['project:read'], 3, { 'project-snapshot': (): SandboxSnapshot => ({ generation: 1, tooLarge: true }) });
   await expect(api.project.get()).rejects.toThrow('8 Mi character');
