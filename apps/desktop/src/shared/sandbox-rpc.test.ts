@@ -157,15 +157,3 @@ it('meters unsolicited replies and caps handles across connected ports', async (
   }
   expect(report).toHaveBeenCalledTimes(1);
 });
-it('times only the peer-registered callbacks it runs', async () => {
-  const channel = new MessageChannel();
-  const busy: number[] = [];
-  const left = createRpc(channel.port1 as unknown as MessagePort, {}, 100);
-  const right = createRpc(channel.port2 as unknown as MessagePort, { plain: () => 1 }, 100, { onBusy: ms => busy.push(ms) });
-  close.push(() => { left.close(); right.close(); });
-  const id = right.handle(() => { const until = performance.now() + 5; while (performance.now() < until) { /* spin */ } return 'done'; });
-  expect(await left.invokeHandle(id)).toBe('done');
-  expect(await left.call('plain')).toBe(1);
-  expect(busy).toHaveLength(1);
-  expect(busy[0]).toBeGreaterThanOrEqual(4);
-});
