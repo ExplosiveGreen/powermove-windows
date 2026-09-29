@@ -66,7 +66,6 @@ describe('Codex CLI adapter', () => {
         reasoningEffort: null,
         access: 'project',
         shellNetwork: true,
-        workspaceRoots: ['/workspace', '/workspace'],
         extensionsDir: '/user-data/extensions',
         sessionId: null,
         instructions: 'AGENT INSTRUCTIONS',
@@ -81,7 +80,6 @@ describe('Codex CLI adapter', () => {
       '--config', 'approval_policy="on-request"',
       '--config', 'default_permissions="powermove"',
       '--config', 'permissions.powermove.extends=":workspace"',
-      '--config', 'projects={"/workspace"={trust_level="untrusted"}}',
       '--config', 'permissions.powermove.network.enabled=true',
       '--output-schema',
       '/workspace/.powermove/result-schema.json',
@@ -130,18 +128,14 @@ describe('Codex CLI adapter', () => {
     expect(buildEditorArgv(common)).toEqual(expect.arrayContaining(['--sandbox', 'read-only']));
   });
 
-  it('marks the shared workspace untrusted so its .codex config never loads', () => {
-    const common = {
-      schemaPath: '/workspace/schema.json', outputPath: '/workspace/result.json', prompt: 'Build',
-      imagePaths: [], model: null, reasoningEffort: null, extensionsDir: '/user-data/extensions',
-      instructions: 'AGENT INSTRUCTIONS', workspaceRoots: ['/var/ws', '/private/var/ws']
-    };
+  it('leaves workspace trust to Codex, so project config loads normally', () => {
     for (const sessionId of [null, 'thread-123']) {
-      const argv = buildAutonomousArgv({ ...common, access: 'project', sessionId });
-      const trust = argv.indexOf('projects={"/var/ws"={trust_level="untrusted"},"/private/var/ws"={trust_level="untrusted"}}');
-      expect(argv[trust - 1]).toBe('--config');
-      // An exec option, so `exec resume` applies it too.
-      expect(trust).toBeGreaterThan(argv.indexOf(sessionId ? 'resume' : 'exec'));
+      const argv = buildAutonomousArgv({
+        schemaPath: '/workspace/schema.json', outputPath: '/workspace/result.json', prompt: 'Build',
+        imagePaths: [], model: null, reasoningEffort: null, extensionsDir: '/user-data/extensions',
+        instructions: 'AGENT INSTRUCTIONS', access: 'project', sessionId
+      });
+      expect(argv.join(' ')).not.toMatch(/projects=|trust_level/);
     }
   });
 

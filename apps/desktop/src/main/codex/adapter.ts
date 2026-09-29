@@ -35,12 +35,8 @@ export const PROJECT_PERMISSION_PROFILE = 'powermove';
  * commands reach any host. They follow `exec` because root-level approval
  * and profile overrides do not reach it; the legacy
  * `sandbox_workspace_write.network_access` switch did not either.
- *
- * The workspace is marked untrusted: other agents can write it, and a trusted
- * project would load its `.codex` config, MCP servers, hooks and rules
- * outside the sandbox.
  */
-export function projectSandboxArgv(options: { shellNetwork: boolean; workspaceRoots: readonly string[] }): string[] {
+export function projectSandboxArgv(options: { shellNetwork: boolean }): string[] {
   const profile = `permissions.${PROJECT_PERMISSION_PROFILE}`;
   const config = [
     'approvals_reviewer="auto_review"',
@@ -48,9 +44,6 @@ export function projectSandboxArgv(options: { shellNetwork: boolean; workspaceRo
     `default_permissions=${JSON.stringify(PROJECT_PERMISSION_PROFILE)}`,
     `${profile}.extends=":workspace"`
   ];
-  if (options.workspaceRoots.length) {
-    config.push(`projects={${[...new Set(options.workspaceRoots)].map(root => `${JSON.stringify(root)}={trust_level="untrusted"}`).join(',')}}`);
-  }
   // Direct sockets to any host: no network proxy, no domain list.
   if (options.shellNetwork) config.push(`${profile}.network.enabled=true`);
   return config.flatMap(value => ['--config', value]);
@@ -78,8 +71,6 @@ export interface AutonomousArgvOptions extends CommonArgvOptions {
    * Project access choice grants it; Edit project runs keep project
    * authority without it. */
   shellNetwork?: boolean;
-  /** The workspace as given and as its real path; Codex keys trust by the real one. */
-  workspaceRoots?: readonly string[];
 }
 
 function appendModelOptions(
@@ -148,9 +139,7 @@ export function buildAutonomousArgv(options: AutonomousArgvOptions): string[] {
   if (sessionId !== null) argv.push('resume');
   argv.push(
     '--skip-git-repo-check',
-    ...sandboxed ? projectSandboxArgv({
-      shellNetwork: options.shellNetwork === true, workspaceRoots: options.workspaceRoots ?? []
-    }) : [],
+    ...sandboxed ? projectSandboxArgv({ shellNetwork: options.shellNetwork === true }) : [],
     ...userMcpArgv(options.externalMcpServers),
     ...nativeMcpArgv(options.nativeTools),
     '--output-schema',

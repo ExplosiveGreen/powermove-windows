@@ -74,15 +74,11 @@ export function buildClaudeArgv(options: ClaudeArgvOptions): string[] {
   const editorTools = options.nativeTools
     ? `${EDITOR_TOOLS},${POWERMOVE_LIVE_INSPECTION_MCP_TOOL_NAMES.join(',')}`
     : EDITOR_TOOLS;
-  // The working directory is an Agent Workspace other agents can write, so its
-  // .claude settings, hooks, agents, skills and .mcp.json never load; user
-  // settings are the runtime home Powermove writes.
   const argv = [
     '--print',
     '--output-format', 'stream-json',
     '--include-partial-messages',
     '--verbose',
-    '--setting-sources', 'user',
     '--mcp-config', mcpConfig,
     '--json-schema', JSON.stringify(options.schema)
   ];

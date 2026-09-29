@@ -62,14 +62,12 @@ describe('Claude CLI adapter', () => {
     });
   });
 
-  it.each(['editor', 'project', 'computer'] as const)('loads only user settings in %s mode, never the shared workspace', access => {
+  it.each(['editor', 'project', 'computer'] as const)('loads project settings from the workspace in %s mode', access => {
     const argv = buildClaudeArgv({
       schema, prompt: 'Build', imagePaths: [], model: null, reasoningEffort: null, sessionId: null, access, instructions: 'Build.'
     });
-    // A workspace .claude/settings.json hook, .mcp.json server, agent or skill
-    // would otherwise run outside the sandbox on the next Claude run.
-    expect(argv[argv.indexOf('--setting-sources') + 1]).toBe('user');
-    expect(argv.indexOf('--setting-sources')).toBeLessThan(argv.indexOf('--system-prompt'));
+    // Claude's default sources: user, project and local settings all load.
+    expect(argv).not.toContain('--setting-sources');
   });
 
   it('lets project Bash reach any host while its writes stay in the sandbox', () => {
