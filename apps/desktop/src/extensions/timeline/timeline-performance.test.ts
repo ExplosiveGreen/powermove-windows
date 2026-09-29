@@ -143,8 +143,9 @@ it.each(['up', 'cancel'])('scrubs at pointer precision, selects project frames, 
   // releasing Shift restores the raw pointer position immediately.
   drag.move(267, 0, { clientX: startX + 267, shiftKey: true });
   value.moves.mockClear(); value.flush();
-  expect(value.state.time).toBe(10);
-  expect(value.moves.mock.calls.find(([, y]) => y === 7)![0]).toBeCloseTo(value.timeline.gut + 300 + .5);
+  // Snaps to the strip's last visible frame, not the exclusive out edge.
+  expect(value.state.time).toBeCloseTo(10 - 1 / 30, 9);
+  expect(value.moves.mock.calls.find(([, y]) => y === 7)![0]).toBeCloseTo(value.timeline.gut + 299 + .5);
   window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift' }));
   value.moves.mockClear(); value.flush();
   expect(value.state.time).toBe(9.9);

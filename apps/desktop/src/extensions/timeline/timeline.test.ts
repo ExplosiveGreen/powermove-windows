@@ -10,6 +10,10 @@ import {
   planQuickOffsetTiming,
   propertyValueColumns,
   resolveTimelineSnap,
+  resolveEdgeSnap,
+  playheadSnapTargets,
+  firstFrameTime,
+  lastFrameTime,
   shouldDrawClipLabel,
   timelinePropertyTargets,
   timelineWorkArea,
@@ -444,6 +448,51 @@ describe('temporary Shift snapping', () => {
 
   it('leaves the playhead raw outside the acquire radius', () => {
     expect(resolveTimelineSnap(4.2, [3, 5], 0.05)).toEqual({ time: 4.2, target: null });
+  });
+});
+
+describe('strip edge snapping', () => {
+  it('treats the last visible frame of a strip as its playhead edge', () => {
+    expect(lastFrameTime(2, 3, 30)).toBeCloseTo(5 - 1 / 30);
+    expect(lastFrameTime(2, 3.01, 30)).toBeCloseTo(5, 6);
+    expect(firstFrameTime(2.01, 30)).toBeCloseTo(2 + 1 / 30);
+    expect(lastFrameTime(2, 0.001, 30)).toBeCloseTo(firstFrameTime(2, 30));
+  });
+
+  it('offers first/last frames, markers, work area and key times as playhead targets', () => {
+    const targets = playheadSnapTargets({
+      fps: 30, dur: 8, work: [1, 7], markers: [{ t: 4 }],
+      layers: [{ from: 2, dur: 3, keys: [1.4] }, { from: 6, dur: 0 }],
+    });
+    expect(targets).toContain(2);
+    expect(targets.some(time => Math.abs(time - (5 - 1 / 30)) < 1e-9)).toBe(true);
+    expect(targets).not.toContain(5);
+    expect(targets.some(time => Math.abs(time - 3.4) < 1e-9)).toBe(true);
+    for (const time of [0, 1, 4, 7]) expect(targets).toContain(time);
+    expect(targets).not.toContain(6);
+    expect(targets).toEqual([...targets].sort((a, b) => a - b));
+  });
+
+  it('snaps the closest moving edge exactly and never re-rounds the delta', () => {
+    const probes = [{ time: 2, edge: 'in' as const }, { time: 5, edge: 'out' as const }];
+    const resolved = resolveEdgeSnap(probes, 0.96, [{ time: 6 }, { time: 3.3 }], 0.1);
+    expect(resolved.delta).toBe(6 - 5);
+    expect(resolved.lock).toEqual({ probe: 1, target: 6 });
+  });
+
+  it('holds a lock through the release radius and lets go beyond it', () => {
+    const probes = [{ time: 2, edge: 'in' as const }];
+    const lock = { probe: 0, target: 3 };
+    expect(resolveEdgeSnap(probes, 1.13, [{ time: 3 }, { time: 3.16 }], 0.1, lock, 0.15).lock).toEqual(lock);
+    expect(resolveEdgeSnap(probes, 1.2, [{ time: 3 }], 0.1, lock, 0.15)).toEqual({ delta: 1.2, lock: null });
+  });
+
+  it('prefers a heavier target over a nearer light one and honours edge-only targets', () => {
+    const probes = [{ time: 2, edge: 'in' as const }, { time: 5, edge: 'out' as const }];
+    const weighted = resolveEdgeSnap(probes, 0.94, [{ time: 3.0 }, { time: 2.99, weight: 3 }], 0.1);
+    expect(weighted.lock?.target).toBe(2.99);
+    const outOnly = resolveEdgeSnap([{ time: 2, edge: 'in' as const }], 1.02, [{ time: 3, edge: 'out' }], 0.1);
+    expect(outOnly).toEqual({ delta: 1.02, lock: null });
   });
 });
 

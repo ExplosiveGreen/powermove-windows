@@ -386,6 +386,40 @@ describe('timeline extension', () => {
     expect(value.api.edit.commit).toHaveBeenCalledExactlyOnceWith('Trim clip');
   });
 
+  it('Shift-moving a strip snaps its edges to the playhead exactly and holds through the release radius', () => {
+    const value = harness();
+    const layer = { id: 'clip', type: 'solid', name: 'Clip', from: 2, dur: 3, d: {}, p: {} } as any;
+    value.state.project.layers = [layer];
+    value.state.selection.layers = [layer.id];
+    value.state.time = 6;
+    vi.mocked(value.api.edit.dispatch).mockImplementation((command: any) => {
+      if (command.patch.from !== undefined) layer.from = command.patch.from;
+      return { ok: true } as any;
+    });
+    let drag: any;
+    vi.mocked(value.api.ui.drag).mockImplementation((_event: any, handlers: any) => { drag = handlers; return { cancel: vi.fn() }; });
+    activate(value);
+    const canvas = build(value).querySelector<HTMLCanvasElement>('#tl-canvas')!;
+    const timeline = value.state.timeline as any;
+    timeline.pps = 100;
+    timeline.scrollT = 0;
+    timeline.rows = [{ kind: 'layer', L: layer }];
+    pointer(canvas, timeline.gut + 3.5 * timeline.pps, timeline.ruler + timeline.row / 2);
+    // Out edge (5) lands on the playhead (6); the exact delta is not frame-rounded.
+    drag.move(95, 0, { shiftKey: true });
+    expect(layer.from + layer.dur).toBe(6);
+    drag.move(108, 0, { shiftKey: true });
+    expect(layer.from + layer.dur).toBe(6);
+    drag.move(120, 0, { shiftKey: true });
+    expect(layer.from + layer.dur).not.toBe(6);
+    // Without Shift the move is plain frame snapping.
+    drag.move(95, 0, { shiftKey: false });
+    expect(layer.from * 30).toBeCloseTo(Math.round(layer.from * 30));
+    expect(layer.from).not.toBe(3);
+    drag.up();
+    expect(value.api.edit.commit).toHaveBeenCalledExactlyOnceWith('Move clip');
+  });
+
   it.each(['move', 'in', 'out'] as const)('expands the selection once for a large %s gesture while respecting locks', (gesture) => {
     const value = harness();
     const layers = Array.from({ length: 1000 }, (_, index) => ({

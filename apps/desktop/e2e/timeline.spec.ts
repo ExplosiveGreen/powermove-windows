@@ -585,7 +585,7 @@ test('Shift pressed during a playhead drag snaps live to clip edges and keyframe
       y: box.y + timeline.ruler - 6,
       target,
     });
-    return [point(1.93, 2), point(3.33, 3.4), point(4.93, 5)];
+    return [point(1.93, 2), point(3.33, 3.4), point(4.93, 5 - 1 / 30)];
   });
 
   for (const point of points) {

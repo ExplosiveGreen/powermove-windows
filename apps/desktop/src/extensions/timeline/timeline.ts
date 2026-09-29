@@ -299,6 +299,93 @@ export function resolveKeyframeGroupSnap(
   return lock ? { delta: lock.target - lock.anchor, lock } : { delta: rawDelta, lock: null };
 }
 
+const FRAME_EPSILON = 1e-6;
+
+/** First frame at which a strip is visible (its in edge, rounded up to a frame). */
+export function firstFrameTime(from: number, fps: number): number {
+  const rate = Math.max(1, fps);
+  return Math.ceil(from * rate - FRAME_EPSILON) / rate;
+}
+
+/** Last frame at which a strip is visible. A strip covers [from, from + dur),
+    so the out edge itself is already the first frame *after* the strip. */
+export function lastFrameTime(from: number, dur: number, fps: number): number {
+  const rate = Math.max(1, fps);
+  const first = firstFrameTime(from, rate);
+  return Math.max(first, (Math.ceil((from + dur) * rate - FRAME_EPSILON) - 1) / rate);
+}
+
+export interface PlayheadSnapInput {
+  fps: number;
+  dur: number;
+  work?: number[] | null;
+  markers?: Array<{ t: number }>;
+  layers: Array<{ from: number; dur: number; keys?: number[] }>;
+}
+
+/** Frame-aligned times the playhead may snap to. Strips contribute their first
+    and last *visible* frame rather than the exclusive out edge, so a snapped
+    playhead always lands on a frame that actually shows the strip. */
+export function playheadSnapTargets(input: PlayheadSnapInput): number[] {
+  const rate = Math.max(1, input.fps);
+  const frame = (time: number) => Math.round(time * rate) / rate;
+  const targets = new Set<number>([0, lastFrameTime(0, input.dur, rate)]);
+  for (const time of input.work ?? []) if (Number.isFinite(time)) targets.add(frame(time));
+  for (const marker of input.markers ?? []) if (Number.isFinite(marker.t)) targets.add(frame(marker.t));
+  for (const layer of input.layers) {
+    if (!(layer.dur > 0)) continue;
+    targets.add(firstFrameTime(layer.from, rate));
+    targets.add(lastFrameTime(layer.from, layer.dur, rate));
+    for (const key of layer.keys ?? []) if (Number.isFinite(key)) targets.add(frame(layer.from + key));
+  }
+  return [...targets].filter(Number.isFinite).sort((a, b) => a - b);
+}
+
+export interface EdgeSnapProbe { time: number; edge: 'in' | 'out' }
+export interface EdgeSnapTarget {
+  time: number;
+  /** Restrict the target to one kind of probe; omitted matches both. */
+  edge?: 'in' | 'out';
+  /** Above 1 makes a target win over nearer, lower-weight neighbours. */
+  weight?: number;
+}
+export interface EdgeSnapLock { probe: number; target: number }
+export interface EdgeSnapResolution { delta: number; lock: EdgeSnapLock | null }
+
+/** Snap a rigid set of strip edges. Every moving edge is tested against every
+    target; the closest weighted match wins. Once acquired, the lock survives
+    until the pointer leaves the wider release radius, so neighbouring targets
+    cannot make the strip chatter. A snapped delta is exact (`target - probe`),
+    and callers must not frame-round it again. */
+export function resolveEdgeSnap(
+  probes: EdgeSnapProbe[], requestedDelta: number, targets: EdgeSnapTarget[], tolerance: number,
+  locked: EdgeSnapLock | null = null, releaseTolerance = tolerance * 1.5,
+): EdgeSnapResolution {
+  const raw = Number.isFinite(requestedDelta) ? requestedDelta : 0;
+  const acquire = Math.max(0, Number.isFinite(tolerance) ? tolerance : 0);
+  const release = Math.max(acquire, Number.isFinite(releaseTolerance) ? releaseTolerance : acquire);
+  if (locked) {
+    const probe = probes[locked.probe];
+    if (probe && Math.abs(probe.time + raw - locked.target) <= release) {
+      return { delta: locked.target - probe.time, lock: locked };
+    }
+  }
+  let found: EdgeSnapLock | null = null;
+  let best = Infinity;
+  for (let index = 0; index < probes.length; index++) {
+    const probe = probes[index]!;
+    if (!Number.isFinite(probe.time)) continue;
+    for (const target of targets) {
+      if (!Number.isFinite(target.time) || (target.edge && target.edge !== probe.edge)) continue;
+      const distance = Math.abs(probe.time + raw - target.time);
+      if (distance > acquire + Number.EPSILON) continue;
+      const score = distance / Math.max(0.1, target.weight ?? 1);
+      if (score < best) { best = score; found = { probe: index, target: target.time }; }
+    }
+  }
+  return found ? { delta: found.target - probes[found.probe]!.time, lock: found } : { delta: raw, lock: null };
+}
+
 export type KeyframeContextEntry = { key: { i?: string }; prop: unknown };
 
 /** A context-click on any selected key edits the complete selection. Clicking
@@ -564,6 +651,8 @@ listen(window, 'keyup', (event: KeyboardEvent) => {
   if (event.key === 'Shift') updateShiftHeld(false);
 }, true);
 listen(window, 'blur', () => updateShiftHeld(false), undefined);
+const SNAP_ACQUIRE_PX = 10;
+const SNAP_RELEASE_PX = 15;
 function shiftSnapping(event?: any) {
   return shiftHeld || !!event?.shiftKey || !!event?.getModifierState?.('Shift');
 }
@@ -2542,16 +2631,17 @@ function scrub(e: any) {
     const time = clamp(rawTime, 0, api.project.get().dur);
     if (!shiftSnapping()) { lockedTarget = null; present(time); return; }
     if (!targets) {
-      targets = [];
-      for (const L of api.project.get().layers) {
-        targets.push(L.from, L.from + L.dur);
-        for (const item of api.anim.allProps(L) || []) {
-          for (const key of item.prop?.kf || []) targets.push(L.from + key.t);
-        }
-      }
-  }
-    const tolerance = 10 / Math.max(1, T.pps);
-    const resolved = resolveTimelineSnap(time, targets, tolerance, lockedTarget, 15 / Math.max(1, T.pps));
+      const project = api.project.get();
+      targets = playheadSnapTargets({
+        fps: project.fps, dur: project.dur, work: project.work, markers: project.markers,
+        layers: project.layers.map((L: any) => ({
+          from: L.from, dur: L.dur,
+          keys: (api.anim.allProps(L) || []).flatMap((item: any) => (item.prop?.kf || []).map((key: any) => key.t)),
+        })),
+      });
+    }
+    const tolerance = SNAP_ACQUIRE_PX / Math.max(1, T.pps);
+    const resolved = resolveTimelineSnap(time, targets, tolerance, lockedTarget, SNAP_RELEASE_PX / Math.max(1, T.pps));
     lockedTarget = resolved.target;
     present(resolved.time);
   };
@@ -2794,35 +2884,68 @@ function gutterDown(e: any, x: any, y: any) {
 function slide(e: any) {
   const selectedIds = new Set(api.groups.expand(api.selection.layers()) || api.selection.layers());
   if (selectedLayers(api).some((layer: any) => layer.type === 'group') && api.project.get().layers.some((layer: any) => selectedIds.has(layer.id) && layer.lock)) return;
-  const layers = api.project.get().layers.filter((l: any) => selectedIds.has(l.id) && l.type !== 'group' && !(api.groups.ancestors(l) || []).some((g: any) => g.lock));
+  const layers = api.project.get().layers.filter((l: any) => selectedIds.has(l.id) && l.type !== 'group' && !l.lock && !(api.groups.ancestors(l) || []).some((g: any) => g.lock));
   const groups = api.project.get().layers.filter((L: any) => selectedIds.has(L.id) && L.type === 'group' && !L.lock && !(api.groups.ancestors(L) || []).some((g: any) => g.lock));
   const groupStart = groups.map((L: any) => ({L, from:L.from}));
   const start = layers.map((L: any) => ({ L, from: L.from }));
   api.edit.begin('Move clip', { origin: 'timeline' });
+  const snapper = layerEdgeSnapper([...start, ...groupStart].map((s: any) => s.L.id));
+  const probes: EdgeSnapProbe[] = start.flatMap((s: any) => [
+    { time: s.from, edge: 'in' as const }, { time: s.from + s.L.dur, edge: 'out' as const },
+  ]);
+  const earliest = Math.min(...start.map((item: any) => item.from));
   let moved = false;
   beginDrag(e, {
     cursor: 'grabbing',
     move: (dx: any, dy: any, ev: any) => {
       moved = true;
-      let dt = dx / T.pps;
-      if (shiftSnapping(ev)) dt = snapDelta(start, dt);
-      dt = Math.max(dt, -Math.min(...start.map((item: any) => item.from)));
-      groupStart.forEach((s: any) => api.edit.dispatch({type:'set_layer',target:s.L.id,patch:{from:api.util.snapF(s.from+dt,api.project.get().fps)}}));
-      start.forEach((s: any) => api.edit.dispatch({ type: 'set_layer', target: s.L.id, patch: { from: Math.max(0, api.util.snapF(s.from + dt, api.project.get().fps)) } }));
+      const requested = dx / T.pps;
+      const { delta, snapped } = shiftSnapping(ev) ? snapper.resolve(probes, requested) : snapper.release(requested);
+      const dt = Math.max(delta, -earliest);
+      const at = (from: number) => snapped ? Math.max(0, from + dt) : Math.max(0, api.util.snapF(from + dt, api.project.get().fps));
+      groupStart.forEach((s: any) => api.edit.dispatch({ type: 'set_layer', target: s.L.id, patch: { from: snapped ? s.from + dt : api.util.snapF(s.from + dt, api.project.get().fps) } }));
+      start.forEach((s: any) => api.edit.dispatch({ type: 'set_layer', target: s.L.id, patch: { from: at(s.from) } }));
     },
     up: () => { moved ? api.edit.commit('Move clip') : api.edit.cancel(); },
     cancel: () => api.edit.cancel(),
   });
 }
-function snapDelta(start: any, dt: any, side?: 'in' | 'out') {
-  const pts = [api.transport.time(), 0, api.project.get().dur, ...(api.project.get().work || []), ...api.project.get().markers.map((m: any) => m.t)];
-  api.project.get().layers.forEach((L: any) => { if (!start.some((s: any) => s.L === L)) { pts.push(L.from, L.from + L.dur); } });
-  const tol = 8 / T.pps;
-  let best = dt, bd = tol;
-  for (const s of start) for (const edge of (side === 'in' ? [s.from + dt] : side === 'out' ? [s.from + s.dur + dt] : [s.from + dt, s.from + s.L.dur + dt])) {
-    for (const p of pts) { const d = Math.abs(edge - p); if (d < bd) { bd = d; best = dt + (p - edge); } }
-  }
-  return best;
+
+/** Shift-snapping for strip drags. Fixed targets (other strips, markers, work
+    area, composition ends) are gathered once per gesture; the playhead is read
+    live and weighted higher, and also offers the frame *after* it to out edges
+    so a strip can end exactly on the playhead's frame. */
+function layerEdgeSnapper(movingIds: string[]) {
+  const moving = new Set(movingIds);
+  let fixed: EdgeSnapTarget[] | null = null;
+  let lock: EdgeSnapLock | null = null;
+  return {
+    resolve(probes: EdgeSnapProbe[], requested: number) {
+      if (!fixed) {
+        const project = api.project.get();
+        fixed = [{ time: 0 }, { time: project.dur }];
+        for (const time of project.work || []) fixed.push({ time });
+        for (const marker of project.markers || []) fixed.push({ time: marker.t });
+        for (const L of project.layers) {
+          if (moving.has(L.id) || !(L.dur > 0)) continue;
+          fixed.push({ time: L.from }, { time: L.from + L.dur });
+        }
+      }
+      const frame = 1 / Math.max(1, api.project.get().fps);
+      const head = api.transport.time();
+      const resolved = resolveEdgeSnap(
+        probes, requested,
+        [...fixed, { time: head, weight: 1.5 }, { time: head + frame, edge: 'out', weight: 1.5 }],
+        SNAP_ACQUIRE_PX / Math.max(1, T.pps), lock, SNAP_RELEASE_PX / Math.max(1, T.pps),
+      );
+      lock = resolved.lock;
+      return { delta: resolved.delta, snapped: !!lock };
+    },
+    release(requested: number) {
+      lock = null;
+      return { delta: requested, snapped: false };
+    },
+  };
 }
 
 function trim(e: any, side: any) {
@@ -2830,14 +2953,18 @@ function trim(e: any, side: any) {
   const layers = api.project.get().layers.filter((l: any) => selectedIds.has(l.id) && l.type !== 'group' && !l.lock && !(api.groups.ancestors(l) || []).some((g: any) => g.lock));
   const start = layers.map((L: any) => ({ L, from: L.from, dur: L.dur, trim: Number(L.d && L.d.trim) || 0 }));
   api.edit.begin('Trim clip', { origin: 'timeline' });
+  const snapper = layerEdgeSnapper(start.map((s: any) => s.L.id));
+  const probes: EdgeSnapProbe[] = start.map((s: any) => side === 'in'
+    ? { time: s.from, edge: 'in' as const }
+    : { time: s.from + s.dur, edge: 'out' as const });
   let moved = false;
   beginDrag(e, {
     cursor: 'ew-resize',
     move: (dx: any, _dy: any, ev: any) => {
       moved = true;
-      let dt = dx / T.pps;
-      if (shiftSnapping(ev)) dt = snapDelta(start, dt, side);
-      dt = api.util.snapF(dt, api.project.get().fps);
+      const requested = dx / T.pps;
+      const { delta, snapped } = shiftSnapping(ev) ? snapper.resolve(probes, requested) : snapper.release(requested);
+      const dt = snapped ? delta : api.util.snapF(delta, api.project.get().fps);
       start.forEach((s: any) => {
         if (side === 'in') {
           let nf = clamp(s.from + dt, 0, s.from + s.dur - 1 / api.project.get().fps);
