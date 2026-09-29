@@ -21,11 +21,20 @@
 import { createRpc, type Rpc, type RpcBudget } from '../../../shared/sandbox-rpc';
 import type { SandboxInit, SandboxKey, SandboxKeyEvent, SandboxPanelInfo, SandboxViewInit } from '../../sandbox/shim-api';
 import type { Disposable } from './api';
+import { importedFile } from './sandbox-schemas';
+import { userActivated } from './sandbox-links';
+
+/** How long a press on the app itself outweighs the app's activation for a focused view: as long as that activation lasts. */
+const HOST_PRESS_MS = 5_000;
 
 export interface ViewLink {
   rpc: Rpc;
   /** Event interest this view registered; released with the view. */
   registrations: Map<string, Disposable>;
+  /** The host's own reading: this view's frame has focus in a focused window. Nothing the view sends changes it. */
+  focused?(): boolean;
+  /** Focused, and the app's activation is a person's click or key press in this frame, not on the app around it. */
+  acted?(): boolean;
 }
 
 export interface ViewHost {
@@ -71,13 +80,30 @@ export function mountSandboxView(host: ViewHost, panel: SandboxPanelInfo, body: 
   }
   const frame = document.createElement('iframe');
   frame.className = 'ext-panel-frame';
-  frame.setAttribute('sandbox', 'allow-scripts');
+  // allow-forms only lets a submit reach the panel's handlers: boot.ts cancels it and form-action 'none' refuses it.
+  frame.setAttribute('sandbox', 'allow-scripts allow-forms');
   frame.title = panel.title;
   frame.dataset.view = panel.id;
   let live: { link: ViewLink; token: string } | null = null;
   const focus = (focused: boolean, field = false): void => host.focus?.(focused, field);
-  frame.addEventListener('focus', () => focus(true));
+  /* The app's activation cannot say where the press landed. A press on a
+     control that keeps focus off itself (it cancels pointerdown) leaves this
+     frame focused, so a real press on the app after the frame took focus
+     means the activation is the app's, until it lapses. Presses inside the
+     frame never reach this window. Focus the app hands back while it handles
+     its own press (a palette or menu closing restores it) is the app's too. */
+  let focusedAt = -Infinity, pressedAt = -Infinity, pressing = false;
+  frame.addEventListener('focus', () => { if (!pressing) focusedAt = performance.now(); focus(true); });
   frame.addEventListener('blur', () => focus(false));
+  const press = (event: Event): void => {
+    if (!event.isTrusted) return;
+    pressedAt = performance.now();
+    if (!pressing) { pressing = true; setTimeout(() => { pressing = false; }); }
+  };
+  // The window's capture phase comes first: no app listener can stop a press before it.
+  const app = frame.ownerDocument.defaultView ?? frame.ownerDocument;
+  const PRESSES = ['pointerdown', 'pointerup', 'click', 'keydown', 'keyup'];
+  for (const type of PRESSES) app.addEventListener(type, press, true);
 
   const disconnect = (): void => {
     if (!live) return;
@@ -100,7 +126,9 @@ export function mountSandboxView(host: ViewHost, panel: SandboxPanelInfo, body: 
     const toView = new MessageChannel();
     const brokered = new MessageChannel();
     const token = crypto.randomUUID();
-    const link = { registrations: new Map<string, Disposable>() } as ViewLink;
+    const focused = (): boolean => frame.ownerDocument.hasFocus() && frame.ownerDocument.activeElement === frame;
+    const link = { registrations: new Map<string, Disposable>(), focused,
+      acted: () => focused() && userActivated() && !(pressedAt > focusedAt && performance.now() - pressedAt < HOST_PRESS_MS) } as ViewLink;
     link.rpc = createRpc(toView.port1, {
       ...host.handlers(link),
       /* The kernel accepts only this extension's bindings. Port messages are
@@ -123,7 +151,7 @@ export function mountSandboxView(host: ViewHost, panel: SandboxPanelInfo, body: 
         if (host.state) host.state(panel.id, 'error', message);
         else host.report(new Error(`Panel "${panel.id}": ${message}`));
       }
-    }, 10_000, { budget: host.budget, onSustainedLimit: host.budgetExceeded, onRemoteHandleRelease: host.releaseRemoteHandle });
+    }, 10_000, { budget: host.budget, unmetered: importedFile, onSustainedLimit: host.budgetExceeded, onRemoteHandleRelease: host.releaseRemoteHandle });
     host.links.add(link);
     live = { link, token };
     host.connectRuntime(panel.id, token, brokered.port2);
@@ -155,6 +183,7 @@ export function mountSandboxView(host: ViewHost, panel: SandboxPanelInfo, body: 
       if (frame.ownerDocument.activeElement === frame) focus(false);
       observer?.disconnect();
       removalObserver?.disconnect();
+      for (const type of PRESSES) app.removeEventListener(type, press, true);
       frame.removeEventListener('load', connect);
       disconnect();
       frame.remove();

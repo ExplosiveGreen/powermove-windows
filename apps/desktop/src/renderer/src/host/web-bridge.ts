@@ -265,6 +265,7 @@ function createBridge(link: ReconnectingLink, hello: WebHello, storeSnapshot: Re
       const detail = request.detail ? `\n\n${request.detail}` : '';
       return window.confirm(`${request.message}${detail}`);
     },
+    clipboardWriteText: (text) => navigator.clipboard.writeText(text),
 
     render: {
       start: (options) => link.invoke(IPC.renderStart, options),

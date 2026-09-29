@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createKernel } from '../kernel/registries';
+import { createKernel, settledWhen, withWhenCheck } from '../kernel/registries';
 import { paletteEntries } from './palette-model';
 
 function model(kernel = createKernel()) {
@@ -76,6 +76,69 @@ describe('palette entries with kernel contributions', () => {
 
     expect(entries).toHaveLength(60);
     expect(entries.filter((entry) => entry.cat === 'Ext')).toHaveLength(1);
+  });
+
+  it('lands an asynchronous provider in place, after the rows that answered at once', async () => {
+    const PM = model();
+    PM.Kernel.registerPaletteProvider('sandboxed', async (query: string) => [{ id: `s:${query}`, label: 'Sandboxed', category: 'Ext', run: () => {} }]);
+    PM.Kernel.registerPaletteProvider('trusted', () => [{ id: 't:1', label: 'Trusted', category: 'Ext', run: () => {} }]);
+    const late = vi.fn();
+
+    const now = paletteEntries(PM, '', late);
+
+    expect(now.map((entry) => entry.id)).toEqual(['command:undo', 't:1']);
+    await vi.waitFor(() => expect(late).toHaveBeenCalledOnce());
+    expect(late.mock.calls[0]![0].map((entry: { id: string }) => entry.id)).toEqual(['command:undo', 's:', 't:1']);
+  });
+
+  it('keeps a command whose when() answers later at its place, only if it answers true', async () => {
+    const PM = model();
+    PM.commands = {
+      first: { id: 'first', label: 'First', cat: 'A', run: () => {} },
+      shown: { id: 'shown', label: 'Shown later', cat: 'A', when: async () => true, run: () => {} },
+      hidden: { id: 'hidden', label: 'Hidden later', cat: 'A', when: async () => false, run: () => {} },
+      last: { id: 'last', label: 'Last', cat: 'A', run: () => {} }
+    };
+    const late = vi.fn();
+
+    expect(paletteEntries(PM, '', late).map((entry) => entry.id)).toEqual(['command:first', 'command:last']);
+    await vi.waitFor(() => expect(late).toHaveBeenCalledOnce()); // the false answer changes nothing
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(late).toHaveBeenCalledOnce();
+    expect(late.mock.calls[0]![0].map((entry: { id: string }) => entry.id)).toEqual(['command:first', 'command:shown', 'command:last']);
+  });
+
+  it('shows a sandboxed command by its last when() answer at once, and moves only when the fresh one differs', async () => {
+    const PM = model();
+    const answers = new Map<string, boolean>([['kept', true], ['dropped', false]]);
+    for (const id of ['kept', 'dropped']) {
+      const { when, check } = settledWhen(async () => answers.get(id)!);
+      PM.Kernel.commands.register('sandboxed', withWhenCheck({ id, label: id, run: () => {}, when }, check));
+    }
+    PM.commands = Object.fromEntries(['kept', 'dropped'].map(id => [id, { id, label: id, cat: 'A', when: () => PM.Kernel.commands.get(id).when(), run: () => {} }]));
+    const late = vi.fn();
+
+    // Nothing answered yet: both show, in place.
+    expect(paletteEntries(PM, '', late).map((entry) => entry.id)).toEqual(['command:kept', 'command:dropped']);
+    await vi.waitFor(() => expect(late).toHaveBeenCalledOnce());
+    expect(late.mock.calls[0]![0].map((entry: { id: string }) => entry.id)).toEqual(['command:kept']);
+
+    // Now the last answers stand in for the fresh ones until they land.
+    late.mockClear();
+    answers.set('dropped', true);
+    expect(paletteEntries(PM, '', late).map((entry) => entry.id)).toEqual(['command:kept']);
+    await vi.waitFor(() => expect(late).toHaveBeenCalledOnce());
+    expect(late.mock.calls[0]![0].map((entry: { id: string }) => entry.id)).toEqual(['command:kept', 'command:dropped']);
+  });
+
+  it('asks when() only of commands that match the query', () => {
+    const PM = model();
+    const when = vi.fn(() => true);
+    PM.commands = { other: { id: 'other', label: 'Other', cat: 'A', when, run: () => {} } };
+
+    paletteEntries(PM, 'undo');
+
+    expect(when).not.toHaveBeenCalled();
   });
 
   it('drops provider entries with no run function', () => {

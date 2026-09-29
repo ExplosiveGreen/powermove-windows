@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Category, Handle, IsoDate, Moderation, Permission, Sha1, Sha256, Slug, Uuid, VarDecl, Version, Visibility } from './common';
+import { Category, Handle, IsoDate, Links, Moderation, Permission, Sha1, Sha256, Slug, Uuid, VarDecl, Version, Visibility } from './common';
 
 /* `verified`: Powermove vouches for who this publisher is (the blue check),
    set only by an admin. Defaults false so a registry that predates it reads
@@ -20,7 +20,7 @@ export const ListingDto = z.object({
 export type ListingDto = z.infer<typeof ListingDto>;
 export const ManifestSummaryDto = z.object({
   id: Slug, name: z.string(), version: Version, apiVersion: z.number().int().positive(),
-  contributes: z.array(z.string()), vars: z.array(VarDecl), permissions: z.array(Permission), forkedFrom: z.string().nullable(), description: z.string().nullable()
+  contributes: z.array(z.string()), vars: z.array(VarDecl), permissions: z.array(Permission), links: Links, forkedFrom: z.string().nullable(), description: z.string().nullable()
 });
 export type ManifestSummaryDto = z.infer<typeof ManifestSummaryDto>;
 export const ReleaseDto = z.object({

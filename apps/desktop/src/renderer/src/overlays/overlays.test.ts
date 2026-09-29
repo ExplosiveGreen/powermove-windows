@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { installSvelteOverlays, unmountSvelteOverlays } from './install';
 import { paletteEntries, scorePaletteMatch } from './palette';
+import { withWhenCheck } from '../kernel/registries';
 
 let PM: Record<string, any>;
 
@@ -273,6 +274,67 @@ describe('installSvelteOverlays', () => {
     expect(document.querySelector('.drop')).not.toBeNull();
   });
 
+  it('opens a menu whose items arrive later, unless another menu or a close came first', async () => {
+    const trigger = document.querySelector<HTMLButtonElement>('#trigger')!;
+    const later = (label: string) => {
+      let answer!: (items: unknown[]) => void;
+      return { items: new Promise<unknown[]>(resolve => { answer = resolve; }), answer: () => answer([{ label }]) };
+    };
+    const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+
+    const first = later('First target');
+    PM.menu(trigger, first.items);
+    expect(document.querySelector('.drop')).toBeNull();
+    first.answer();
+    await settle();
+    expect(document.querySelector('.drop')?.textContent).toContain('First target');
+
+    // Asked for A, then B opened before A answered: A never shows.
+    const stale = later('Stale target');
+    PM.menu(trigger, stale.items);
+    PM.menu(trigger, [{ label: 'Current target' }]);
+    stale.answer();
+    await settle();
+    expect(document.querySelectorAll('.drop')).toHaveLength(1);
+    expect(document.querySelector('.drop')?.textContent).toContain('Current target');
+
+    const dismissed = later('Dismissed');
+    PM.menu(trigger, dismissed.items);
+    PM.closeMenus();
+    dismissed.answer();
+    await settle();
+    expect(document.querySelector('.drop')).toBeNull();
+
+    PM.menu(trigger, Promise.resolve([]));
+    await settle();
+    expect(document.querySelector('.drop')).toBeNull();
+  });
+
+  it('drops a menu whose items arrive after a press, a key or a selection change', async () => {
+    const trigger = document.querySelector<HTMLButtonElement>('#trigger')!;
+    const selection = new Set<() => void>();
+    PM.bus = { on: (event: string, fn: () => void) => { if (event === 'sel') selection.add(fn); return () => selection.delete(fn); } };
+    const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+    const pending = async (act: () => void) => {
+      let answer!: (items: unknown[]) => void;
+      PM.menu(trigger, new Promise<unknown[]>(resolve => { answer = resolve; }));
+      await settle(); // the right-click that asked is over
+      act();
+      answer([{ label: 'Delete' }]);
+      await settle();
+      const drop = document.querySelector('.drop');
+      PM.closeMenus();
+      return drop;
+    };
+
+    expect(await pending(() => {})).not.toBeNull();
+    expect(await pending(() => document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 2 })))).toBeNull();
+    expect(await pending(() => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift', bubbles: true })))).not.toBeNull();
+    expect(await pending(() => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true })))).toBeNull();
+    expect(await pending(() => { for (const fn of [...selection]) fn(); })).toBeNull();
+    expect(selection.size).toBe(0);
+  });
+
   it('closes a menu on an outside pointer and restores its trigger', () => {
     vi.useFakeTimers();
     const trigger = document.querySelector<HTMLButtonElement>('#trigger')!;
@@ -527,6 +589,44 @@ describe('installSvelteOverlays', () => {
     expect(document.querySelector('.toast[data-toast-error="true"]')).toBeTruthy();
   });
 
+  it('closes each toast exactly once, however it leaves', async () => {
+    vi.useFakeTimers();
+    const closed: string[] = [];
+    const onClose = (name: string) => () => closed.push(name);
+    const run = vi.fn();
+    const onDismiss = vi.fn();
+    PM.toast('Timed', 100, { onClose: onClose('timed') });
+    vi.advanceTimersByTime(100);
+    PM.toast('Keyed', 100, { key: 'k', sticky: true, onClose: onClose('keyed-1') });
+    PM.toast('Keyed again', 100, { key: 'k', sticky: true, onClose: onClose('keyed-2') });
+    PM.toast('Keyed again', 100, { key: 'k', sticky: true, onClose: onClose('keyed-3') });
+    PM.toast(null, 100, { onClose: onClose('never shown') });
+    flushSync();
+    expect(closed).toEqual(['timed', 'keyed-1', 'keyed-2', 'never shown']);
+    PM.dismissToast('k');
+    expect(closed.at(-1)).toBe('keyed-3');
+
+    PM.toast('With action', 100, { sticky: true, dismissible: true, action: { label: 'Open', run }, onDismiss, onClose: onClose('action') });
+    PM.toast('Duplicate', 100, { sticky: true, dismissible: true, onClose: onClose('dismissed') });
+    PM.toast('Duplicate', 100, { sticky: true, dismissible: true, onClose: onClose('duplicate') });
+    flushSync();
+    expect(closed.at(-1)).toBe('duplicate'); // an identical notice is not stacked, so it closes at once
+    document.querySelector<HTMLButtonElement>('.toast .toast-action')?.click();
+    flushSync();
+    expect(run).toHaveBeenCalledOnce();
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(closed.at(-1)).toBe('action');
+    document.querySelector<HTMLButtonElement>('.toast .toast-dismiss')?.click();
+    flushSync();
+    expect(closed.at(-1)).toBe('dismissed');
+
+    PM.toast('Left for teardown', 100, { sticky: true, onClose: onClose('cleared') });
+    flushSync();
+    await unmountSvelteOverlays();
+    expect(closed.at(-1)).toBe('cleared');
+    expect(closed).toHaveLength(9);
+  });
+
   it('tells an extension alert apart from an editor error', () => {
     vi.useFakeTimers();
     // The same wording from an extension is that extension's alert: the editor
@@ -606,6 +706,98 @@ describe('installSvelteOverlays', () => {
     expect(document.querySelector('#palette')).toBeNull();
     expect(document.querySelector('#scrim')?.classList.contains('on')).toBe(false);
     expect(document.querySelector<HTMLElement>('#projects-screen')?.inert).toBe(false);
+  });
+});
+
+describe('palette with asynchronous providers', () => {
+  it('shows a late answer only while its query is still the one typed', async () => {
+    const kernel = { paletteProviders: () => [{ ownerId: 'sandboxed', provider }] };
+    const answers = new Map<string, (entries: unknown[]) => void>();
+    function provider(query: string) {
+      return new Promise(resolve => answers.set(query, resolve));
+    }
+    PM.Kernel = kernel;
+    PM.commands.palette.run();
+    flushSync();
+    const input = document.querySelector<HTMLInputElement>('#palette input[role="combobox"]')!;
+    const type = (value: string) => { input.value = value; input.dispatchEvent(new InputEvent('input', { bubbles: true })); flushSync(); };
+    const labels = () => [...document.querySelectorAll('#palette [role="option"]')].map(option => option.textContent?.trim());
+    const entry = (label: string) => [{ id: label, label, category: 'Ext', run: vi.fn() }];
+
+    type('stale');
+    type('fresh');
+    answers.get('fresh')!(entry('Fresh answer'));
+    await vi.waitFor(() => { flushSync(); expect(labels()).toContain('Fresh answer'); });
+    answers.get('stale')!(entry('Stale answer'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    flushSync();
+    expect(labels()).toEqual(['Fresh answer']);
+
+    type('fresher');
+    expect(labels()).not.toContain('Fresh answer');
+  });
+});
+
+describe('palette with sandboxed command when()', () => {
+  function sandboxedCommand(id: string, label: string, last: boolean) {
+    let answer!: (value: boolean) => void;
+    const check = { last: () => last, ask: vi.fn(() => new Promise<boolean>(resolve => { answer = resolve; })) };
+    PM.commands[id] = { id, label, cat: 'Edit', run: vi.fn() };
+    return { check, answer: async (value: boolean) => { answer(value); await new Promise(resolve => setTimeout(resolve, 0)); flushSync(); } };
+  }
+  function open(checks: Record<string, ReturnType<typeof sandboxedCommand>['check']>) {
+    PM.Kernel = { paletteProviders: () => [], commands: { get: (id: string) => checks[id] ? withWhenCheck({ id }, checks[id]!) : undefined } };
+    PM.commands.palette.run();
+    flushSync();
+    const input = document.querySelector<HTMLInputElement>('#palette input[role="combobox"]')!;
+    return {
+      type(value: string) { input.value = value; input.dispatchEvent(new InputEvent('input', { bubbles: true })); flushSync(); },
+      enter() { input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); },
+      labels: () => [...document.querySelectorAll('#palette [role="option"]')].map(option => option.textContent?.trim())
+    };
+  }
+
+  it('shows a sandboxed command at once by its last answer', async () => {
+    const clean = sandboxedCommand('ext.clean', 'Clean up layers', true);
+    const palette = open({ 'ext.clean': clean.check });
+    palette.type('clean');
+    expect(palette.labels()).toEqual(['Clean up layers']);
+    await clean.answer(true); // same answer: nothing moves
+    expect(palette.labels()).toEqual(['Clean up layers']);
+    palette.enter();
+    expect(PM.cmd).toHaveBeenCalledWith('ext.clean');
+  });
+
+  it('runs the highlighted row on Enter after a late answer moves it', async () => {
+    const tidy = sandboxedCommand('ext.tidy', 'New solid tidy', false);
+    PM.commands = { 'ext.tidy': PM.commands['ext.tidy'], ...PM.commands }; // listed before New solid
+    const palette = open({ 'ext.tidy': tidy.check });
+    palette.type('new solid');
+    expect(palette.labels()).toEqual(['New solid ⌘Y']);
+    await tidy.answer(true); // lands above the highlighted row
+    expect(palette.labels()).toEqual(['New solid tidy', 'New solid ⌘Y']);
+    expect(document.querySelector('#palette [role="option"][aria-selected="true"]')?.textContent?.trim()).toBe('New solid ⌘Y');
+    palette.enter();
+    expect(PM.cmd).toHaveBeenCalledWith('newSolid');
+    expect(PM.cmd).not.toHaveBeenCalledWith('ext.tidy');
+  });
+
+  it('highlights nothing when the highlighted row goes, and Enter waits for the person', async () => {
+    const tidy = sandboxedCommand('ext.tidy', 'New solid tidy', true);
+    PM.commands = { 'ext.tidy': PM.commands['ext.tidy'], ...PM.commands };
+    const palette = open({ 'ext.tidy': tidy.check });
+    palette.type('new solid');
+    expect(palette.labels()).toEqual(['New solid tidy', 'New solid ⌘Y']);
+    await tidy.answer(false); // the highlighted row leaves
+    expect(palette.labels()).toEqual(['New solid ⌘Y']);
+    expect(document.querySelector('#palette [role="option"][aria-selected="true"]')).toBeNull();
+    palette.enter();
+    expect(PM.cmd).not.toHaveBeenCalled();
+    expect(document.querySelector('#palette')).not.toBeNull();
+    document.querySelector('#palette input[role="combobox"]')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+    flushSync();
+    palette.enter();
+    expect(PM.cmd).toHaveBeenCalledExactlyOnceWith('newSolid');
   });
 });
 

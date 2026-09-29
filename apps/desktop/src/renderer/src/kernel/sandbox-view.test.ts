@@ -45,7 +45,7 @@ async function start(): Promise<Harness> {
   vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('network mocked'))));
   const kernel = createKernel();
   const live = { revision: 7 };
-  const project = { get: () => ({ id: 'test' }), revision: () => live.revision, selection: () => ({ layers: [], keys: [], chan: null }), time: () => 0, playing: () => false, apply: vi.fn(() => ({ ok: true })), select: vi.fn(), setTime: vi.fn(), play: vi.fn(), pause: vi.fn(), undo: vi.fn(), redo: vi.fn(), snapshot: async () => '' } as unknown as ProjectAPI;
+  const project = { get: () => ({ id: 'test', layers: [] }), revision: () => live.revision, selection: () => ({ layers: [], keys: [], chan: null }), time: () => 0, playing: () => false, apply: vi.fn(() => ({ ok: true })), select: vi.fn(), setTime: vi.fn(), play: vi.fn(), pause: vi.fn(), undo: vi.fn(), redo: vi.fn(), snapshot: async () => '' } as unknown as ProjectAPI;
   const deps = { pm: {}, state: { doc: {}, sel: {}, transport: {}, perf: {} }, project,
     ui: { controls: {}, toast: vi.fn(), confirm: async () => true, menu: vi.fn(), modal: vi.fn(), icon: () => '' },
     assets: { pick: async () => [], import: async () => ({ id: 'x', name: 'x', kind: 'image' }), get: () => undefined, readText: async () => '' },
@@ -97,7 +97,7 @@ it('docks a sandboxed Svelte panel as a frame panel with host chrome, refreshes 
   const { element, frame } = await openPanel(h);
   expect(element.classList.contains('frame')).toBe(true);
   expect(element.querySelector('header .ptitle')?.textContent).toBe('Sandbox panel');
-  expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
+  expect(frame.getAttribute('sandbox')).toBe('allow-scripts allow-forms');
   expect(frame.className).toBe('ext-panel-frame');
   expect(frame.title).toBe('Sandbox panel');
 

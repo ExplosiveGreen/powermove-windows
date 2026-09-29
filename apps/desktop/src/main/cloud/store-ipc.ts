@@ -238,6 +238,7 @@ export function buildLibrary(input: LibraryInput): LibraryItemDto[] {
       modified
     };
     if (origin) item.origin = { coordinate: origin.coordinate, version: origin.version, repoId: origin.repoId, releaseId: origin.releaseId };
+    if (record.manifest?.links?.length) item.links = [...record.manifest.links];
     if (record.manifest?.forkedFrom) item.forkedFrom = record.manifest.forkedFrom;
     const published = provenance?.published;
     if (published) {

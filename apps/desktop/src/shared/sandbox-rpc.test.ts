@@ -157,3 +157,27 @@ it('meters unsolicited replies and caps handles across connected ports', async (
   }
   expect(report).toHaveBeenCalledTimes(1);
 });
+
+it('skips only the one Blob the unmetered rule names, and still meters everything else in the call', async () => {
+  const channel = new MessageChannel();
+  const sizes = vi.fn((file: Blob) => file.size);
+  const sender = createRpc(channel.port1 as unknown as MessagePort, {}, 1000);
+  const receiver = createRpc(channel.port2 as unknown as MessagePort, { take: sizes, echo: (value: unknown) => value }, 1000,
+    { unmetered: (method, args) => method === 'take' && args[0] instanceof Blob ? args[0] : undefined });
+  close.push(() => { sender.close(); receiver.close(); });
+  const big = new File([new Uint8Array(3 * 1024 * 1024)], 'photo.png', { type: 'image/png' });
+  expect(await sender.call('take', big)).toBe(3 * 1024 * 1024);
+  // The same Blob anywhere else, a second Blob, or another method are metered as before.
+  await expect(sender.call('echo', big)).rejects.toMatchObject({ code: 'resource_limit' });
+  await expect(sender.call('take', big, new Blob([new Uint8Array(2 * 1024 * 1024)]))).rejects.toMatchObject({ code: 'resource_limit' });
+  await expect(sender.call('take', big, 'x'.repeat(1024 * 1024))).rejects.toMatchObject({ code: 'resource_limit' });
+  expect(sizes).toHaveBeenCalledTimes(1);
+});
+it('ignores an unmetered rule that names something other than a Blob', async () => {
+  const channel = new MessageChannel();
+  const sender = createRpc(channel.port1 as unknown as MessagePort, {}, 1000);
+  const receiver = createRpc(channel.port2 as unknown as MessagePort, { take: () => true }, 1000,
+    { unmetered: (_method, args) => args as unknown as Blob });
+  close.push(() => { sender.close(); receiver.close(); });
+  await expect(sender.call('take', 'x'.repeat(1024 * 1024))).rejects.toMatchObject({ code: 'resource_limit' });
+});

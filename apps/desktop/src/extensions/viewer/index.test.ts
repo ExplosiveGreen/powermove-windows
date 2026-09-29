@@ -63,7 +63,7 @@ function apiHarness(services = serviceHarness().services) {
     util: { clamp: (value: number, min: number, max: number) => Math.max(min, Math.min(max, value)) },
     ui: { icon: () => '<svg></svg>', drag: vi.fn() },
     dnd: { hasFxDrag: () => false, readFxDrag: () => null },
-    menus: { collect: () => [] },
+    menus: { collect: () => [], gather: async () => [] },
     events: { on: vi.fn(() => { const dispose = vi.fn(); eventDisposers.push(dispose); return { dispose }; }) },
     space3d: { is3DLayer: () => false },
     media: { assets: { get: () => undefined } },

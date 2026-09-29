@@ -55,12 +55,15 @@ import { registerHapticsIpc } from './haptics';
 import { registerContextMenuIpc } from './context-menu';
 import { registerCloudMediaIpc } from './cloud-media';
 import { registerConfirmIpc } from './native-confirm';
+import { registerClipboardIpc } from './clipboard';
+import { userInput } from './user-input';
 import { MediaProxyService, playbackConverter, previewConverter, imageSequenceConverter, stillImageConverter, registerMediaProxyIpc } from './media-proxy';
 import { registerNativeEditIpc } from './native-edit';
 import { installMenu, installRendererMenuShortcutRouting } from './menu';
 import { openProjectForWindow, registerSaveIpc } from './save';
 import { ProjectFiles } from './project-files';
 import { registerShellIpc } from './shell';
+import { registerRemoteMediaIpc } from './remote-media';
 import { CONTENT_SECURITY_POLICY, SANDBOX_CONTENT_SECURITY_POLICY, extensionSandboxCsp, sandboxFrameNavigationAllowed, sandboxHostOwner, sandboxProcessesToKill, type ContentsFrames } from './security-policy';
 import { SANDBOX_DOCUMENT, isSandboxHost, sandboxDocumentId, sandboxHost } from '../shared/sandbox-origin';
 import { EXTENSION_ID } from '../shared/extensions';
@@ -483,6 +486,7 @@ function createWindow(options: EditorWindowOptions = {}): BrowserWindow {
   window.on('focus', () => editors.touch(window));
   window.webContents.once('did-finish-load', drainPendingOpenFiles);
   installRendererMenuShortcutRouting(window.webContents);
+  userInput.track(window.webContents, forget => window.on('blur', forget));
   let sandboxFocus = { focused: false, field: false, extensionId: '' };
   const onSandboxFocus = (event: Electron.IpcMainEvent, value: unknown): void => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || !value || typeof value !== 'object') return;
@@ -979,7 +983,11 @@ if (!hasSingleInstanceLock) {
     registerFontsIpc(ipcMain, ctx);
     registerContextMenuIpc(ipcMain, ctx);
     registerConfirmIpc(ipcMain, ctx);
+    registerClipboardIpc(ipcMain, ctx);
     registerCloudMediaIpc(ipcMain, ctx);
+    const remoteMedia = registerRemoteMediaIpc(ipcMain, ctx);
+    // e2e swaps DNS and the socket for fakes; only an isolated background test profile exposes it.
+    if (isBackgroundTest) (globalThis as { __powermoveRemoteMedia?: unknown }).__powermoveRemoteMedia = remoteMedia;
     registerAgentNotifications(ipcMain, ctx);
     registerNativeEditIpc(ipcMain, ctx);
     registerLogIpc(ipcMain, ctx);

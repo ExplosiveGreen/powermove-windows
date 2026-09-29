@@ -9,6 +9,8 @@ import type { PowermoveBridge } from '../../../shared/ipc';
 
 type MenuInstance = ReturnType<typeof mount> & { element(): HTMLElement };
 
+const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Fn']);
+
 function nativeMenuBridge(): NonNullable<PowermoveBridge['menu']> | null {
   try {
     const menu = bridge()?.menu;
@@ -30,11 +32,42 @@ export class MenuController {
   private outside: ((event: PointerEvent) => void) | null = null;
   private outsideTimer = 0;
   private trigger: HTMLElement | null = null;
+  /* Bumped by every open and close: a menu whose items are still arriving
+     opens only if nothing opened or closed menus since it was asked for. */
+  private generation = 0;
 
   constructor(private readonly PM: OverlayPM) {}
 
-  open(anchor: HTMLElement, items: MenuItem[], options: MenuOptions = {}): HTMLElement {
+  /** `items` may be a Promise (contributions that answer asynchronously); the
+      menu then opens when it settles with any, unless another open or a close
+      came first, or the person pressed, typed or changed the selection
+      meanwhile: its items act on what was true when it was asked. */
+  open(anchor: HTMLElement, items: MenuItem[] | PromiseLike<MenuItem[]>, options: MenuOptions = {}): HTMLElement {
     this.close(false);
+    if (!Array.isArray(items)) {
+      const asked = this.generation;
+      const stale = (): void => { if (asked === this.generation) this.generation += 1; };
+      const typed = (event: KeyboardEvent): void => { if (!MODIFIER_KEYS.has(event.key)) stale(); };
+      let offSelection: (() => void) | undefined;
+      // From the next task on, so the press that asked for this menu is not one.
+      const listening = window.setTimeout(() => {
+        document.addEventListener('pointerdown', stale, true);
+        document.addEventListener('keydown', typed, true);
+        const off = this.PM.bus?.on?.('sel', stale);
+        offSelection = typeof off === 'function' ? off : undefined;
+      }, 0);
+      const settled = (): void => {
+        window.clearTimeout(listening);
+        document.removeEventListener('pointerdown', stale, true);
+        document.removeEventListener('keydown', typed, true);
+        offSelection?.();
+      };
+      void Promise.resolve(items).then((ready) => {
+        settled();
+        if (asked === this.generation && ready.length) this.open(anchor, ready, options);
+      }, settled);
+      return document.createElement('div');
+    }
     this.removeForeignMenus();
     this.trigger = focusTarget(anchor);
     const rect = anchor.getBoundingClientRect();
@@ -95,6 +128,7 @@ export class MenuController {
   }
 
   close(restoreFocus = false): void {
+    this.generation += 1;
     window.clearTimeout(this.outsideTimer);
     if (this.outside) document.removeEventListener('pointerdown', this.outside, true);
     const registeredOutside = this.PM._menuOutside as ((event: PointerEvent) => void) | null | undefined;

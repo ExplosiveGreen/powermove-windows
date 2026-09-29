@@ -3610,12 +3610,11 @@ function onCtx(e: any) {
   const layerId = graphPoint?.distance < 8
     ? T._graph?.target?.L?.id ?? null
     : hr && hr.row.kind === 'layer' ? hr.row.L.id : null;
-  const contributed = [
-    ...(layerId ? api.menus.collect('layer:context', { layerId }) : []),
-    ...api.menus.collect('timeline:context', { kind: rowKind, layerId, time: x2t(x) }),
-  ];
-  if (contributed.length) items.push('-' as any, ...contributed);
-  if (items.length) api.ui.menu({ x: e.clientX, y: e.clientY }, items);
+  const contributed = Promise.all([
+    layerId ? api.menus.gather('layer:context', { layerId }) : [],
+    api.menus.gather('timeline:context', { kind: rowKind, layerId, time: x2t(x) }),
+  ]).then(lists => lists.flat());
+  api.ui.menu({ x: e.clientX, y: e.clientY }, contributed.then(extra => extra.length ? [...items, '-' as any, ...extra] : items));
 }
 
 /* ── edge navigation ───────────────────────────────────── */

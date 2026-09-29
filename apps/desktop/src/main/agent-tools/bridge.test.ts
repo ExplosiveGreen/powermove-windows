@@ -350,6 +350,42 @@ describe('native Powermove agent tool bridge', () => {
     owner.destroyed = true;
   });
 
+  it('marks the window driven by the agent in main and the renderer for all of computer_use_panel', async () => {
+    const ipc = new FakeIpcMain();
+    const log: string[] = [];
+    let driving = 0;
+    const input = { drive: vi.fn(() => { driving += 1; log.push('drive'); return () => { driving -= 1; log.push('release'); }; }) };
+    const owner = new FakeWebContents(ipc) as FakeWebContents & Record<string, unknown>;
+    owner.send = (channel: string, payload: AgentToolRequestEvent | boolean) => {
+      if (channel === IPC.agentToolInput) { log.push(`renderer ${payload}`); return; }
+      const request = payload as AgentToolRequestEvent;
+      log.push(request.tool);
+      const text = request.tool === '__prepare_panel_input' ? { points: [{ x: 5, y: 6 }] }
+        : request.tool === '__panel_bounds' ? { x: 0, y: 0, width: 10, height: 10 } : {};
+      queueMicrotask(() => ipc.emit(IPC.agentToolResponse, { sender: owner }, {
+        runId: request.runId, callId: request.callId, ok: true, revision: 1, content: [{ type: 'text', text: JSON.stringify(text) }]
+      }));
+    };
+    owner.sendInputEvent = (event: { type: string }) => log.push(`${event.type}${driving ? ' (driven)' : ''}`);
+    const image = { isEmpty: () => false, getSize: () => ({ width: 10, height: 10 }), toJPEG: () => Buffer.from('jpeg') };
+    owner.capturePage = async () => ({ ...image, resize: () => image });
+    const bridge = new PowermoveAgentToolBridge(ipc as never, { mcpServerPath: '', timeoutMs: 2_000, userInput: input });
+    bridges.push(bridge);
+    const session = await bridge.openSession({ runId: 'native-run-drive', owner: owner as never, baseRevision: 0 });
+    await bridge.callTool(session, 'computer_use_panel', { panelId: 'ext.panel', action: 'click', points: [{ x: 5, y: 6 }] });
+    expect(input.drive).toHaveBeenCalledExactlyOnceWith(owner);
+    expect(log).toEqual([
+      'drive', 'renderer true', '__prepare_panel_input',
+      'mouseMove (driven)', 'mouseDown (driven)', 'mouseUp (driven)',
+      'get_project_state', '__panel_bounds', 'release', 'renderer false'
+    ]);
+    log.length = 0;
+    owner.sendInputEvent = () => { throw new Error('no input'); };
+    await expect(bridge.callTool(session, 'computer_use_panel', { panelId: 'ext.panel', action: 'click', points: [{ x: 5, y: 6 }] })).rejects.toThrow('no input');
+    expect(log).toEqual(['drive', 'renderer true', '__prepare_panel_input', 'release', 'renderer false']);
+    owner.destroyed = true;
+  });
+
   it('rejects unknown tools before they reach the renderer', async () => {
     const ipc = new FakeIpcMain();
     const owner = new FakeWebContents(ipc);

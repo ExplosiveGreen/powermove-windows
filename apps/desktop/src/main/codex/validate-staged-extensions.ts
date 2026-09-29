@@ -8,9 +8,13 @@ import { compileExtension } from '../extensions/compiler';
 import type { AgentWorkspace } from './workspace';
 import { AgentResultValidationError } from './result-repair';
 
-/** Check generated source with the same compiler used by the live mod loader. */
+/**
+ * Check generated source with the same compiler used by the live mod loader.
+ * Pass a stage snapshot (withStageSnapshot): its bundles land outside the
+ * agent-writable workspace, and what was checked is what publishes.
+ */
 export async function validateStagedExtensions(
-  layout: Pick<AgentWorkspace, 'stagingDirectory' | 'runDirectory'>,
+  layout: Pick<AgentWorkspace, 'stagingDirectory'> & { compiledDirectory: string },
   changes: readonly AgentExtensionChange[]
 ): Promise<void> {
   for (const change of changes) {
@@ -31,7 +35,7 @@ export async function validateStagedExtensions(
     const { blocked } = scanFiles(texts);
     if (blocked.length) throw new AgentResultValidationError(blocked.map((finding) => credentialLine(change.id, finding)).join('\n'));
     for (const finding of permissionFindings(texts, manifest.manifest)) console.warn(`[extension ${change.id}] ${finding.text}`);
-    const compiled = await compileExtension({ dir, entry: manifest.manifest.entry || 'index.ts', outDir: path.join(layout.runDirectory, '.compiled') });
+    const compiled = await compileExtension({ dir, entry: manifest.manifest.entry || 'index.ts', outDir: layout.compiledDirectory });
     if (!compiled.ok) throw new AgentResultValidationError(`${change.id} failed compilation: ${compiled.error}. Repair its staged source. Nothing was published.`);
   }
 }

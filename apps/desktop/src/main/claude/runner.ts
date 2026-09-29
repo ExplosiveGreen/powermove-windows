@@ -6,7 +6,7 @@ import path from 'node:path';
 import type { CodexRunRequest, CodexRunResult, CodexTraceEvent } from '../../shared/ipc';
 import { isRecord } from '../../shared/guards';
 import { collectArtifacts } from '../codex/artifacts';
-import { publishExtensionChanges } from '../codex/change-history';
+import { publishExtensionChanges, withStageSnapshot } from '../codex/change-history';
 import { AgentResultValidationError, repairAgentResult } from '../codex/result-repair';
 import { validateStagedExtensions } from '../codex/validate-staged-extensions';
 import { consumeToken } from '../codex/consent';
@@ -32,6 +32,7 @@ import { ClaudeEventParser } from './events';
 import { isolatedClaudeEnvironment, prepareIsolatedClaudeHome } from './isolation';
 import type { NativeMcpServerConfig } from '../agent-tools/spec';
 import { imageExtension } from '../image-extension';
+import { agentCredentialPaths } from '../agent-network';
 
 const DEFAULT_TIMEOUT_MS = 3_600_000;
 const MAX_DIAGNOSTIC_BYTES = 2 * 1024 * 1024;
@@ -153,10 +154,15 @@ export class ClaudeRunner {
         options.externalMcpServers ?? loadUserMcpServers('claude')
       ]);
       if (this.cancelled.has(req.id)) return failure('The Claude run was cancelled.', true);
+      // Claude's own shells source snapshots from its runtime home, so only its
+      // logins and other projects' transcripts there are denied.
+      const deniedReadsFor = async (cwd: string) => req.access === 'computer'
+        ? [] : agentCredentialPaths(options.userData, { codexHome: 'all', claudeHome: { cwd } });
 
       if (req.mode === 'editor') {
         const editor = await writeEditorImages(req);
         editorDirectory = editor.directory;
+        const deniedReads = await deniedReadsFor(editor.directory);
         const attempt = await this.execute(req, state, binary, configDirectory, editor.directory, buildClaudeArgv({
           schema: req.schema ?? { type: 'object' },
           prompt: req.prompt,
@@ -166,7 +172,8 @@ export class ClaudeRunner {
           sessionId: null,
           access: 'editor',
           nativeTools: options.nativeTools,
-          externalMcpServers
+          externalMcpServers,
+          deniedReads
         }), null, options);
         if (this.cancelled.has(req.id)) return failure('The Claude run was cancelled.', true);
         if (attempt.code !== 0 || attempt.resultError) return failure(humanizeFailure(attempt, 'Claude generation failed.'));
@@ -187,6 +194,7 @@ export class ClaudeRunner {
         apiPackFiles
       });
       state.layout = layout;
+      const deniedReads = await deniedReadsFor(layout.root);
       let sessionId = await readSession(layout.sessionPath);
       let attempt: Attempt | null = null;
       const executeAutonomous = async (prompt: string, resumeId: string | null) => {
@@ -208,7 +216,8 @@ export class ClaudeRunner {
             extensionsDir: layout.extensionsDir
           }),
           nativeTools: options.nativeTools,
-          externalMcpServers
+          externalMcpServers,
+          deniedReads
         }), layout, options);
         if (this.cancelled.has(req.id)) throw new Error('The Claude run was cancelled.');
         return result;
@@ -249,9 +258,12 @@ export class ClaudeRunner {
         parsed.projectId = req.projectId;
         parsed.access = authority;
         const extensions = parseAgentExtensionChanges(parsed.extensions);
-        await validateStagedExtensions(layout, extensions ?? []);
-        if (this.cancelled.has(req.id)) throw new Error('The Claude run was cancelled.');
-        const changeSet = await publishExtensionChanges(layout, extensions ?? []);
+        // One private copy is checked and published; later stage writes cannot ship.
+        const changeSet = await withStageSnapshot(layout, async snapshot => {
+          await validateStagedExtensions(snapshot, extensions ?? []);
+          if (this.cancelled.has(req.id)) throw new Error('The Claude run was cancelled.');
+          return publishExtensionChanges(snapshot, extensions ?? []);
+        }, (extensions ?? []).map(change => change.id));
         return { parsed, extensions, changeSet };
       }, async prompt => {
         repairingResult = true;

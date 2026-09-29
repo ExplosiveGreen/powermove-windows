@@ -122,8 +122,10 @@ export interface CommandDefinition {
   /** Display hint only; bind keys with `keybindings.bind`. */
   kb?: string | null;
   run: (...args: unknown[]) => unknown;
-  /** Return false to hide from palette/menus (still runnable by id). */
-  when?: () => boolean;
+  /** Return false to hide from palette/menus (still runnable by id). A
+   *  sandboxed extension's may return a Promise: the palette asks it on every
+   *  open, and every other reader gets its last answer (`true` before any). */
+  when?: () => boolean | Promise<boolean>;
 }
 
 export interface CommandsAPI {
@@ -131,7 +133,8 @@ export interface CommandsAPI {
   /** Returns a Promise when the extension runs sandboxed (Store installs). */
   run(id: string, ...args: unknown[]): unknown;
   has(id: string): boolean;
-  list(): CommandDefinition[];
+  /** Every command; `when` here always answers synchronously, so `!c.when || c.when()` filters. */
+  list(): Array<CommandDefinition & { when?: () => boolean }>;
 }
 
 /**
@@ -292,6 +295,14 @@ export interface AssetsAPI {
   pick(options?: { accept?: string; multiple?: boolean }): Promise<File[]>;
   /** Import into Powermove's durable project media store. The file remains after layer Undo. */
   import(file: File, options?: { layerDefinition?: string }): Promise<AssetRecord>;
+  /**
+   * Download an https image, video or audio file (at most 512 MiB) and import it
+   * like `import`; resolves to the new asset's id. Sandboxed, it needs `assets`
+   * and `network` and runs one download at a time. Powermove fetches it without
+   * credentials or cookies, from public addresses only, following at most 5
+   * https redirects, and imports it only if it decodes as media.
+   */
+  importUrl(url: string): Promise<string>;
   /** Returns a Promise when the extension runs sandboxed (Store installs). */
   get(id: string): AssetRecord | undefined;
   /** Read a text asset from the live cache or durable media store. */
@@ -318,9 +329,11 @@ export interface ThemeDefinition {
 export interface ThemeAPI {
   register(def: ThemeDefinition): Disposable;
   activate(id: string): void;
+  /** Reactive (see {@link ProjectAPI}): re-runs its readers when the theme changes. */
   active(): string;
   list(): ThemeDefinition[];
-  /** Kernel scheme preference (System/Light/Dark) as chosen in Settings. */
+  /** Kernel scheme preference (System/Light/Dark) as chosen in Settings; sandboxed, the scheme the panel shows
+   * (`light` or `dark`). Reactive (see {@link ProjectAPI}). */
   scheme(): 'light' | 'dark' | 'system';
   setScheme(mode: 'light' | 'dark' | 'system'): void;
 }
@@ -334,7 +347,9 @@ export interface PaletteEntry {
   kb?: string | null;
   run(): unknown;
 }
-export type PaletteProvider = (query: string) => PaletteEntry[];
+/** Called for every query. A Promise lands in the palette when it settles,
+ *  if the palette still shows the query it was asked for. */
+export type PaletteProvider = (query: string) => PaletteEntry[] | Promise<PaletteEntry[]>;
 
 export type MenuLocation = 'titlebar:right' | 'panel:context' | 'layer:context' | 'timeline:context' | 'viewer:context';
 
@@ -344,9 +359,15 @@ export type MenuContribution =
   | { label: string; icon?: string; kb?: string | null; on?: boolean; disabled?: boolean; run?: () => unknown };
 
 export interface MenusAPI {
-  contribute(location: MenuLocation, items: (ctx: Record<string, unknown>) => MenuContribution[]): Disposable;
-  /** Everything contributed for a location, in registration order. */
+  /** Called on every open with that open's `ctx`. A Promise is waited for at
+   *  most 100 ms; items that arrive later are left out of that open. */
+  contribute(location: MenuLocation, items: (ctx: Record<string, unknown>) => MenuContribution[] | Promise<MenuContribution[]>): Disposable;
+  /** Everything contributed for a location, in registration order. Only
+   *  synchronous contributions: asynchronous ones answer the menus they open. */
   collect(location: MenuLocation, ctx?: Record<string, unknown>): MenuContribution[];
+  /** Everything contributed for one open, asynchronous contributions
+   *  included, once they answered or 100 ms passed. Hand it to `ui.menu`. */
+  gather(location: MenuLocation, ctx?: Record<string, unknown>): Promise<MenuContribution[]>;
 }
 
 export interface StatusItem {
@@ -376,20 +397,37 @@ export interface Selection {
   chan: string | null;
 }
 
+/**
+ * Reactive reads: `latest`, `time`, `playing`, `revision` and `selection` here, `time` and `playing` on
+ * `transport`, `active` and `scheme` on `theme`. Read inside a Svelte template, `$derived` or `$effect`, one
+ * re-runs that reader whenever its value changes, so there is no `events.on` + `$state` to wire by hand; the
+ * subscription starts with the first such reader and ends with the last. Called anywhere else it returns the
+ * plain value and subscribes nothing.
+ *
+ * `time()` re-runs its readers on every frame during playback, like the editor's own playhead. Narrow what
+ * depends on it with `$derived` (`const second = $derived(Math.floor(api.project.time()))` updates its readers
+ * once a second), or sample it on an interval outside a reactive context while `playing()`.
+ */
 export interface ProjectAPI {
   /** Current project object graph; mutate through `apply`. Returns a Promise when the extension runs sandboxed
    * (Store installs): a deep-frozen snapshot without `edits`, asset blob/source fields or `library`/`notes`
    * secrets, cached until the project changes. Needs no permission. */
   get(): Project;
-  /** Synchronous in the sandbox; needs no permission. */
+  /** The project, reactively. In-realm the live object `get()` returns (edited in place, so read the fields you
+   * need in the same reactive expression); readers re-run on every `project:changed`. Sandboxed, the snapshot
+   * this document pulled last, `undefined` until the first pull (or while the project is too large to
+   * snapshot): a reader starts a pull and re-runs when it lands, and each change pulls once more while one
+   * reads. Always synchronous; needs no permission. */
+  latest(): Project | undefined;
+  /** Reactive; synchronous in the sandbox; needs no permission. */
   revision(): number;
   /** Typed, validated, undoable edit. `meta.origin` is forced to `ext:<id>`. Returns a Promise when sandboxed. */
   apply(commands: EditCommand | EditCommand[], meta?: Omit<EditMeta, 'origin'>): EditResult;
-  /** Synchronous in the sandbox; needs no permission. */
+  /** Reactive; synchronous in the sandbox; needs no permission. */
   selection(): Selection;
   /** Returns a Promise when the extension runs sandboxed (Store installs). */
   select(layerIds: string[], add?: boolean): void;
-  /** Synchronous in the sandbox; needs no permission. */
+  /** Reactive (every frame during playback); synchronous in the sandbox; needs no permission. */
   time(): number;
   /** Returns a Promise when the extension runs sandboxed (Store installs). */
   setTime(t: number): void;
@@ -397,7 +435,7 @@ export interface ProjectAPI {
   play(): void;
   /** Returns a Promise when the extension runs sandboxed (Store installs). */
   pause(): void;
-  /** Synchronous in the sandbox; needs no permission. */
+  /** Reactive; synchronous in the sandbox; needs no permission. */
   playing(): boolean;
   /** Returns a Promise when the extension runs sandboxed (Store installs). */
   undo(): void;
@@ -508,6 +546,7 @@ export interface SetTimeOptions { raw?: boolean; force?: boolean }
  * Transport owns mutable playhead, playback and preview-quality state. Changing time or playback emits the backing transport events and invalidates rendering/UI; `invalidate` preserves the legacy immediate-render and coalesced UI invalidation behavior.
  */
 export interface TransportAPI {
+  /** Reactive (every frame during playback; see {@link ProjectAPI}). */
   time(): number;
   /** Transport controls return Promises when the extension runs sandboxed (Store installs). */
   setTime(time: number, options?: SetTimeOptions): void;
@@ -517,6 +556,7 @@ export interface TransportAPI {
   pause(): void;
   /** Returns a Promise when the extension runs sandboxed (Store installs). */
   toggle(): void;
+  /** Reactive (see {@link ProjectAPI}). */
   playing(): boolean;
   /** Returns a Promise when the extension runs sandboxed (Store installs). */
   step(frames: number): void;
@@ -786,7 +826,7 @@ export interface ControlsAPI {
  * UI exposes kernel controls, overlays, menus and pointer helpers. Most members only mutate transient interface state; parent picking can apply an edit, shader opening mutates workspace state, and gesture coordinates the backing edit/history transaction.
  */
 export interface UIAPI {
-  /** Only toast, confirm and icon are sandbox-safe; other UI members require full access. */
+  /** Only toast, confirm, openExternal, icon and copy are sandbox-safe; other UI members require full access. */
   /** Requires the full-access permission for Store extensions. */
   readonly controls: ControlsAPI;
   toast(
@@ -814,8 +854,20 @@ export interface UIAPI {
     }
   ): void;
   confirm(title: string, body?: string): Promise<boolean>;
-  /** Requires the full-access permission for Store extensions. */
-  menu(anchor: HTMLElement | { x: number; y: number }, items: MenuContribution[]): void;
+  /**
+   * Open an https URL (at most 2 KB, no credentials) in the person's browser.
+   * Resolves false when they decline. Sandboxed, one call may be pending and
+   * at most one runs every 2 s; origins in the manifest's `links` open without
+   * asking when the extension declares `network`, and any other URL is shown
+   * in full for the person to confirm first.
+   */
+  openExternal(url: string): Promise<boolean>;
+  /** Store extensions only: writes plain text to the clipboard from a panel that has focus. Needs the clipboard permission; at most once a second. */
+  copy?(text: string): Promise<void>;
+  /** Requires the full-access permission for Store extensions. A Promise of
+   *  items opens the menu when it settles with any, unless another menu
+   *  opened or menus closed first. */
+  menu(anchor: HTMLElement | { x: number; y: number }, items: MenuContribution[] | Promise<MenuContribution[]>): void;
   /** Requires the full-access permission for Store extensions. */
   modal(opts: { title?: string; body?: HTMLElement | string; width?: number; actions?: Array<{ label: string; pri?: boolean; run?: () => unknown }> }): { close(): void; body: HTMLElement };
   /** Icon SVG markup by name from the kernel set. Returns a Promise when sandboxed. */

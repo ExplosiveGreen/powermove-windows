@@ -37,6 +37,9 @@ export type ToastOptions = {
   action?: { label: string; run: () => void };
   /** Called when the user dismisses the toast explicitly (not on replace or timeout). */
   onDismiss?: () => void;
+  /** Called once when the notice leaves, however it goes: action, dismissal,
+      timeout, replacement or clear, or when it is never shown. */
+  onClose?: () => void;
 };
 
 export type MenuAction = {

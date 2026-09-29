@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { CLIPBOARD_TEXT_MAX_CHARS } from '../../../shared/ipc';
+import { EXTENSION_URL_MAX } from '../../../shared/extension-url';
 
 const id = z.string().min(1).max(128);
 const label = z.string().min(1).max(512);
@@ -35,6 +37,8 @@ export function parseRegistration(kind: string, value: unknown): Record<string, 
 }
 
 const anyArgs = z.array(data).max(32);
+/* A toast's callbacks arrive as the calling document's handles (shim-api.ts). */
+const toastOptions = z.object({ action: shape({ label, run: handle }).optional(), onDismiss: handle.optional() }).catchall(data);
 const oneId = z.tuple([id]);
 const storageKey = z.string().min(1).max(1024);
 export const invokeSchemas: Record<string, z.ZodType> = {
@@ -42,14 +46,20 @@ export const invokeSchemas: Record<string, z.ZodType> = {
   'project.apply': anyArgs, 'project.select': anyArgs, 'project.setTime': z.tuple([z.number().finite()]),
   'project.play': z.tuple([]), 'project.pause': z.tuple([]), 'project.undo': z.tuple([]), 'project.redo': z.tuple([]), 'project.snapshot': anyArgs,
   'transport.step': z.tuple([z.number().finite()]),
-  'assets.pick': anyArgs, 'assets.import': z.tuple([z.custom<File>(value => typeof File !== 'undefined' && value instanceof File), data.optional()]), 'assets.get': oneId, 'assets.readText': oneId,
+  'assets.pick': anyArgs, 'assets.import': z.tuple([z.custom<File>(value => typeof File !== 'undefined' && value instanceof File), data.optional()]), 'assets.get': oneId, 'assets.readText': oneId, 'assets.importUrl': z.tuple([z.string().max(EXTENSION_URL_MAX)]),
   'storage.get': z.tuple([storageKey]), 'storage.set': z.tuple([storageKey, data]), 'storage.delete': z.tuple([storageKey]),
-  'ui.toast': anyArgs, 'ui.confirm': anyArgs, 'ui.icon': anyArgs,
-  'panels.open': anyArgs, 'panels.close': oneId, 'panels.refresh': oneId,
+  'ui.toast': z.tuple([data, toastOptions.optional()]), 'ui.confirm': anyArgs, 'ui.icon': anyArgs, 'ui.copy': z.tuple([z.string().max(CLIPBOARD_TEXT_MAX_CHARS)]), 'ui.openExternal': z.tuple([z.string().max(EXTENSION_URL_MAX)]),
+  'panels.open': anyArgs, 'panels.close': oneId, 'panels.refresh': oneId, 'panels.isOpen': oneId,
   'keybindings.unbind': oneId, 'theme.activate': oneId,
   'palette.open': anyArgs, 'media.getImportDefaults': z.tuple([]),
   'events.emit': z.tuple([id, data]), 'extensions.setUp': oneId
 };
+/** The File argument 0 of an `assets.import` call carries: the RPC byte limit skips it, and the handler caps it on `file.size` before a byte is read. */
+export function importedFile(method: unknown, args: unknown[]): File | undefined {
+  if (method !== 'invoke' || args[0] !== 'assets' || args[1] !== 'import' || !Array.isArray(args[2])) return undefined;
+  const file: unknown = args[2][0];
+  return typeof File !== 'undefined' && file instanceof File ? file : undefined;
+}
 export function parseInvoke(namespace: string, method: string, args: unknown): unknown[] {
   const schema = invokeSchemas[`${namespace}.${method}`];
   if (!schema) throw new Error(`Sandbox method unavailable: ${namespace}.${method}`);

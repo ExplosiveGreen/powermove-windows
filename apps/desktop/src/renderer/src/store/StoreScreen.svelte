@@ -14,7 +14,7 @@
     KINDS, KIND_LABEL, KIND_PLURAL,
     actionErrorText, artFor, coordinate, detailAction, detailFromDto, groupLibrary, includesText, isKind,
     libraryAction, libraryItemFor, listingFromDto, loadError, makerText, needsAttention, needsSetup, needsTrust, ownsListing,
-    parseLineage, permissionLines, publishErrorText, requiresText, secondaryPublish, statusIsHot, statusText, storeBridge,
+    linkHosts, parseLineage, permissionLines, publishErrorText, requiresText, secondaryPublish, statusIsHot, statusText, storeBridge,
     type Action, type Lineage, type LoadError, type StoreDetail, type StoreKind, type StoreListing, type StorePage, type StorePM,
     type VersionEntry
   } from './data';
@@ -1247,6 +1247,7 @@
   {@const contributes = data?.contributes.length ? data.contributes : item?.contributes ?? []}
   {@const apiVersion = data?.apiVersion ?? preview?.apiVersion ?? null}
   {@const access = permissionLines(data?.permissions ?? preview?.permissions ?? item?.permissions)}
+  {@const opens = data ? linkHosts(data.links, data.permissions) : linkHosts(item?.links, item?.permissions)}
   {@const coord = data ? coordinate(data) : preview ? coordinate(preview) : item?.origin?.coordinate ?? (account?.handle && item ? `${account.handle}/${item.localId}` : item?.localId ?? '')}
   {@const updated = data?.updated ?? preview?.updated ?? null}
   {@const installedOlder = item?.origin && data && item.origin.version !== data.version ? item.origin.version : null}
@@ -1468,6 +1469,7 @@
       {#if coord && !(item && item.group === 'yours' && !item.published)}<div class="st-kv"><span>Identifier</span><b>{coord}</b></div>{/if}
       {#if storeLineage}<div class="st-kv"><span>Forked from</span><b>{storeLineage.handle}/{storeLineage.slug}@{storeLineage.version}</b></div>{/if}
       {#if contributes.length}<div class="st-kv"><span>Includes</span><b>{includesText(contributes)}</b></div>{/if}
+      {#if opens.length}<div class="st-kv"><span>Opens without asking</span><b>{opens.join(', ')}</b></div>{/if}
       {#if apiVersion !== null}<div class="st-kv"><span>Compatibility</span><b>{requiresText(apiVersion)}</b></div>{/if}
     </div>
     {#if item?.group !== 'builtin' && (data || item?.group === 'store')}

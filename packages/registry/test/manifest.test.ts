@@ -45,6 +45,21 @@ test('fork origin forms', () => {
   expect(bad({ forkedFrom: 'a-handle/store-id@1.2.3' }).ok).toBe(true);
   expect(bad({ forkedFrom: 'x'.repeat(161) })).toEqual({ ok: false, error: 'invalid "forkedFrom"' });
 });
+test('apiVersion 3 links are up to five canonical https origins', () => {
+  const links = ['https://replicate.com', 'https://docs.example.org', 'https://xn--bcher-kva.example:8443'];
+  expect(bad({ apiVersion: 3, links })).toMatchObject({ ok: true, manifest: { links } });
+  expect(bad({ apiVersion: 3 })).toMatchObject({ ok: true, manifest: expect.not.objectContaining({ links: expect.anything() }) });
+  expect(bad({ apiVersion: 2, links: [] })).toEqual({ ok: false, error: '"links" requires apiVersion 3' });
+  const error = 'invalid "links" (up to 5 origins like "https://example.com")';
+  for (const value of [
+    null, 'https://example.com', [1], Array.from({ length: 6 }, (_, index) => `https://a${index}.example.com`),
+    ['https://example.com', 'https://example.com'],
+    ['http://example.com'], ['wss://example.com'], ['https://example.com/'], ['https://example.com/path'], ['https://example.com?q'],
+    ['https://Example.com'], ['https://example.com:443'], ['https://user@example.com'], ['https://bücher.example'], ['https://example.com.'],
+    ['https://*.example.com'], ['https://localhost'], ['https://app.localhost'], ['https://printer.local'], ['https://intranet'],
+    ['https://127.0.0.1'], ['https://10.0.0.1'], ['https://[::1]'], [`https://${'a'.repeat(200)}.com`]
+  ]) expect(bad({ apiVersion: 3, links: value })).toEqual({ ok: false, error });
+});
 test('apiVersion 3 permissions parse and version gate', () => {
   expect(bad({ apiVersion: 3, permissions: ['network', 'clipboard', 'assets', 'project:write', 'full-access'] })).toMatchObject({
     ok: true, manifest: { apiVersion: 3, permissions: ['network', 'clipboard', 'assets', 'project:write', 'full-access'] }
