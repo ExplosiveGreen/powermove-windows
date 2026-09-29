@@ -14,7 +14,7 @@ import { loginShellPath } from './login-shell-path';
 import { killStrays, ProcessFamily } from './process-family';
 import { agentResultSchema } from './codex/instructions';
 import { agentWorkspaceUserData, type AgentWorkspace } from './codex/workspace';
-import { agentCredentialPaths, agentNetworkProxy, agentProxyEnvironment, agentSeatbeltRules, AGENT_SHELL_NETWORK_HOSTS } from './agent-network';
+import { agentCredentialPaths } from './agent-network';
 import type { PowermoveAgentToolSpec } from './agent-tools/spec';
 
 const object = (properties: Record<string, unknown>, required: string[]) => ({ type: 'object', additionalProperties: false, properties, required });
@@ -27,7 +27,7 @@ export const COMPATIBLE_WORKSPACE_TOOLS: readonly PowermoveAgentToolSpec[] = [
   { name: 'list_files', description: 'List a workspace directory. Paths may be absolute or relative to the workspace.', inputSchema: object({ path: { type: 'string' } }, ['path']) },
   { name: 'read_file', description: 'Read a UTF-8 file, or return an image for visual inspection. Use offset/limit to page large text files. Read shipped API types and samples before implementing extensions.', inputSchema: object({ path: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 100000 } }, ['path']) },
   { name: 'write_file', description: 'Create or replace a UTF-8 file. Creates parent directories. Write extensions only in the supplied staging directory and deliverables in the run artifact directory. Read existing files before replacing them.', inputSchema: object({ path: { type: 'string' }, text: { type: 'string', maxLength: 1000000 } }, ['path', 'text']) },
-  { name: 'run_command', description: `Run a shell command in the project workspace. Use for searching, editing, scripts, tests and downloads. Project access restricts filesystem writes to this workspace and downloads to HTTPS from ${AGENT_SHELL_NETWORK_HOSTS.join(', ')}; Computer access allows broader operations. Commands time out after 30 seconds unless timeoutMs allows up to 600 seconds. For longer work such as renders or installs, set background: true and follow the job with command_status. Processes a command leaves running stop when it exits; background jobs stop when complete_task runs or the run ends. Output is bounded. Never repeat a timed-out mutation without inspecting its result.`, inputSchema: object({ command: { type: 'string', maxLength: 100000 }, timeoutMs: { type: 'integer', minimum: 1, maximum: COMMAND_TIMEOUT_MS }, background: { type: 'boolean' } }, ['command']) },
+  { name: 'run_command', description: 'Run a shell command in the project workspace. Use for searching, editing, scripts, tests, downloads and web research (curl). Commands have full internet access. Project access restricts filesystem writes to this workspace; Computer access allows broader operations. Commands time out after 30 seconds unless timeoutMs allows up to 600 seconds. For longer work such as renders or installs, set background: true and follow the job with command_status. Processes a command leaves running stop when it exits; background jobs stop when complete_task runs or the run ends. Output is bounded. Never repeat a timed-out mutation without inspecting its result.', inputSchema: object({ command: { type: 'string', maxLength: 100000 }, timeoutMs: { type: 'integer', minimum: 1, maximum: COMMAND_TIMEOUT_MS }, background: { type: 'boolean' } }, ['command']) },
   { name: 'command_status', description: 'Check a background job from run_command: its state, exit code and recent output. Set waitMs to wait up to 120 seconds for it to finish, or stop: true to stop it and everything it started.', inputSchema: object({ jobId: { type: 'string' }, waitMs: { type: 'integer', minimum: 0, maximum: 120000 }, stop: { type: 'boolean' } }, ['jobId']) },
   { name: 'compile_extension', description: 'Compile a staged extension with Powermove’s real compiler. Returns compilation errors for repair. This does not activate it; after completing this run, Powermove loads it and continues the task for live verification.', inputSchema: object({ id: { type: 'string', pattern: EXTENSION_ID.source } }, ['id']) },
   { name: 'complete_task', description: 'Finish the run with its summary, typed project commands, artifacts and all staged extension changes. Validates and publishes the staged extensions. Return commands: [] for edits already applied through live tools. Powermove loads extensions before applying dependent commands and continues with live verification. If this tool fails, repair the reported problem and call it again.', inputSchema: agentResultSchema() }
@@ -342,17 +342,16 @@ export async function startWorkspaceCommand(root: string, access: 'project' | 'c
   signal.throwIfAborted();
   const real = await realpath(root);
   const env = await commandEnvironment(real, access);
-  // Project access downloads only from the shared allowlist, through the
-  // loopback proxy, and cannot read credential material.
-  const proxy = access === 'project' ? await agentNetworkProxy() : null;
-  if (proxy) Object.assign(env, agentProxyEnvironment(proxy.port));
-  const agentRules = proxy ? agentSeatbeltRules(proxy.port,
-    await agentCredentialPaths(agentWorkspaceUserData(real), { codexHome: 'all' })) : '';
+  // Project access cannot read credential material.
+  const deniedReads = access === 'project' ? await agentCredentialPaths(agentWorkspaceUserData(real), { codexHome: 'all' }) : [];
+  const readRules = deniedReads.length ? `(deny file-read*${deniedReads.map(file => ` (subpath ${JSON.stringify(file)})`).join('')})` : '';
   // Its own mark finds what this command started, even processes that left
   // its group and folder; the run's mark finds them at the run end.
   const mark = sandboxMark();
   const marks = [mark, ...(options.runMark ? [options.runMark] : [])];
-  const profile = `(version 1)(allow default)${agentRules}(deny appleevent-send)`
+  // Project access keeps unrestricted outbound network for research,
+  // downloads and dev servers; only the filesystem is confined.
+  const profile = `(version 1)(allow default)(allow network-outbound)${readRules}(deny appleevent-send)`
     + `(deny mach-lookup ${marks.map(name => `(global-name ${JSON.stringify(name)})`).join(' ')})`
     + `(deny file-write*)(allow file-write* (subpath ${JSON.stringify(await realpath(root))}) (literal "/dev/null") (literal "/dev/tty")`
     // Inherited stdio only; a broad /dev subpath would expose devices.

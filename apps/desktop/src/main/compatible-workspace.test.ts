@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import net from 'node:net';
 import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, access, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -222,22 +223,36 @@ it.runIf(process.platform === 'darwin')('points bun and npm caches into the work
   expect(env.output).toBe([cache('bun'), cache('npm'), cache('xdg'), cache('pip')].join('|'));
 });
 
-it.runIf(process.platform === 'darwin')('downloads in Project access only from the shared allowlist, through the proxy', async () => {
+it.runIf(process.platform === 'darwin')('gives Project commands direct network with no proxy, listening sockets and LaunchServices', async () => {
   const ws = await workspace();
-  const status = (url: string, flags = '') => runWorkspaceCommand(ws.layout.root, 'project',
-    `curl -sS ${flags} --max-time 20 -o /dev/null -w "%{http_code}" ${url}`, 30_000, signal());
-  const allowed = await status('-I https://images.pexels.com');
-  expect(allowed.exitCode, allowed.output).toBe(0);
-  expect(Number(allowed.output)).toBeGreaterThan(0);
-  // The proxy refuses other hosts, including write-capable package registries.
+  const env = await runWorkspaceCommand(ws.layout.root, 'project', 'env', 5000, signal());
+  expect(env.output).not.toMatch(/^(?:HTTPS?_PROXY|ALL_PROXY|NO_PROXY|NODE_USE_ENV_PROXY)=/im);
+  // Any port, not only a proxy's: a local server stands in for a remote host.
+  const server = net.createServer(socket => socket.end('reached'));
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const port = (server.address() as net.AddressInfo).port;
+    const script = `const net = require('node:net');
+      const listen = host => new Promise(done => { const server = net.createServer();
+        server.once('error', error => done(error.code)); server.listen(0, host, () => server.close(() => done('listening'))); });
+      const reach = () => new Promise(done => { const socket = net.connect(${port}, '127.0.0.1');
+        let text = ''; socket.on('data', chunk => text += chunk); socket.on('end', () => done(text)); socket.on('error', error => done(error.code)); });
+      (async () => console.log(JSON.stringify({ any: await listen('0.0.0.0'), loopback: await listen('127.0.0.1'), reach: await reach() })))();`;
+    const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+    const result = await runWorkspaceCommand(ws.layout.root, 'project', `${quote(process.execPath)} -e ${quote(script)}`, 10_000, signal());
+    expect(JSON.parse(result.output)).toEqual({ any: 'listening', loopback: 'listening', reach: 'reached' });
+  } finally { await new Promise(resolve => server.close(resolve)); }
+  // lsappinfo only reads LaunchServices state, unlike `open`, which would launch an app.
+  const front = await new Promise<string>(resolve => execFile('/usr/bin/lsappinfo', ['front'], (_error, stdout) => resolve(stdout)));
+  if (front.includes('ASN:')) expect((await runWorkspaceCommand(ws.layout.root, 'project', '/usr/bin/lsappinfo front', 5000, signal())).output).toContain('ASN:');
+});
+
+it.runIf(process.platform === 'darwin')('downloads in Project access from any public host', async () => {
+  const ws = await workspace();
   for (const url of ['https://example.com', 'https://registry.npmjs.org/is-number']) {
-    const refused = await status(url);
-    expect(refused.exitCode, refused.output).not.toBe(0);
-    expect(refused.output).toContain('403');
-  }
-  // Bypassing the proxy reaches nothing: no direct sockets, no DNS.
-  for (const url of ['https://images.pexels.com', 'https://1.1.1.1']) {
-    expect((await status(url, '--noproxy "*"')).exitCode).not.toBe(0);
+    const result = await runWorkspaceCommand(ws.layout.root, 'project', `curl -sS --max-time 20 -o /dev/null -w "%{http_code}" ${url}`, 30_000, signal());
+    expect(result.exitCode, result.output).toBe(0);
+    expect(result.output).toBe('200');
   }
 }, 60_000);
 
