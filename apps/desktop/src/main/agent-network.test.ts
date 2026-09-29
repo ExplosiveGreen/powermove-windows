@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
@@ -116,6 +116,77 @@ describe('agent network proxy', () => {
     const plain = await send(started.port, 'GET http://cdn.jsdelivr.net/ HTTP/1.1\r\nHost: cdn.jsdelivr.net\r\n\r\n');
     expect(plain.head).toMatch(/^HTTP\/1\.1 403/);
     expect(dialed).toEqual([]);
+  });
+
+  /** A tunnel left open after the proxy's reply. */
+  function open(port: number, target: string): Promise<{ socket: net.Socket; head: string; closed: Promise<void> }> {
+    return new Promise((resolve, reject) => {
+      const socket = net.connect(port, '127.0.0.1', () => socket.write(connect(target)));
+      const closed = new Promise<void>(done => socket.once('close', () => done()));
+      cleanup.push(async () => socket.destroy());
+      let data = '';
+      socket.on('data', chunk => {
+        data += chunk.toString('utf8');
+        if (data.includes('\r\n\r\n')) { socket.removeAllListeners('data'); resolve({ socket, head: data.split('\r\n\r\n')[0]!, closed }); }
+      });
+      socket.on('error', reject);
+    });
+  }
+
+  it('holds at most the tunnel cap open at once', async () => {
+    const echo = await upstream();
+    const started = await startAgentNetworkProxy({
+      resolve: async () => ['93.184.216.34'], connect: () => net.connect(echo, '127.0.0.1'), maxTunnels: 2
+    });
+    cleanup.push(() => started.close());
+    const first = await open(started.port, 'cdn.jsdelivr.net:443');
+    const second = await open(started.port, 'cdn.jsdelivr.net:443');
+    expect([first.head, second.head]).toEqual([expect.stringMatching(/^HTTP\/1\.1 200/), expect.stringMatching(/^HTTP\/1\.1 200/)]);
+    expect((await send(started.port, connect('cdn.jsdelivr.net:443'))).head).toMatch(/^HTTP\/1\.1 503/);
+    first.socket.destroy();
+    await first.closed;
+    await vi.waitFor(async () => expect((await open(started.port, 'cdn.jsdelivr.net:443')).head).toMatch(/^HTTP\/1\.1 200/));
+  });
+
+  it('drops connections past twice the tunnel cap before they send anything', async () => {
+    const started = await startAgentNetworkProxy({ resolve: async () => [], maxTunnels: 1 });
+    cleanup.push(() => started.close());
+    const sockets = Array.from({ length: 3 }, () => net.connect(started.port, '127.0.0.1'));
+    const closed = sockets.map(socket => { socket.on('error', () => {}); cleanup.push(async () => socket.destroy()); return new Promise<void>(done => socket.once('close', () => done())); });
+    await closed[2];
+    expect(sockets.slice(0, 2).map(socket => socket.destroyed)).toEqual([false, false]);
+  });
+
+  it('closes a tunnel once nothing moves through it', async () => {
+    const echo = await upstream();
+    const started = await startAgentNetworkProxy({
+      resolve: async () => ['93.184.216.34'], connect: () => net.connect(echo, '127.0.0.1'), idleTimeoutMs: 150
+    });
+    cleanup.push(() => started.close());
+    const tunnel = await open(started.port, 'cdn.jsdelivr.net:443');
+    expect(tunnel.head).toMatch(/^HTTP\/1\.1 200/);
+    const echoed = new Promise<string>(resolve => tunnel.socket.once('data', chunk => resolve(chunk.toString('utf8'))));
+    tunnel.socket.write('ping');
+    expect(await echoed).toBe('ping');
+    const opened = Date.now();
+    await tunnel.closed;
+    expect(Date.now() - opened).toBeGreaterThanOrEqual(100);
+  });
+
+  it('gives up on a host that does not resolve or answer in time', async () => {
+    const hanging: net.Socket[] = [];
+    const started = await startAgentNetworkProxy({
+      resolve: async host => host === 'cdn.jsdelivr.net' ? new Promise<string[]>(() => {}) : ['93.184.216.34'],
+      // A socket that never connects, like a blackholed address.
+      connect: () => { const socket = new net.Socket(); hanging.push(socket); return socket; },
+      connectTimeoutMs: 100
+    });
+    cleanup.push(() => started.close());
+    for (const target of ['cdn.jsdelivr.net:443', 'unpkg.com:443']) {
+      expect((await send(started.port, connect(target))).head, target).toMatch(/^HTTP\/1\.1 504/);
+    }
+    expect(hanging).toHaveLength(1);
+    expect(hanging[0]!.destroyed).toBe(true);
   });
 
   it('points every common proxy variable at loopback', () => {

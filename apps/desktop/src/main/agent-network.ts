@@ -83,6 +83,9 @@ export interface AgentNetworkProxyOptions {
   hosts?: readonly string[];
   resolve?: (host: string) => Promise<string[]>;
   connect?: (address: string, port: number) => net.Socket;
+  maxTunnels?: number;
+  connectTimeoutMs?: number;
+  idleTimeoutMs?: number;
 }
 
 export interface AgentNetworkProxy {
@@ -90,22 +93,32 @@ export interface AgentNetworkProxy {
   close(): Promise<void>;
 }
 
+// Every Project command shares one proxy, so a runaway or hostile shell cannot
+// hold more tunnels than this, or keep one open while nothing moves.
+const MAX_TUNNELS = 64;
 const CONNECT_TIMEOUT_MS = 20_000;
+const IDLE_TIMEOUT_MS = 60_000;
 const resolveHost = async (host: string) => (await lookup(host, { all: true, verbatim: true })).map(entry => entry.address);
 
 /** HTTP CONNECT proxy on loopback that tunnels only to allowlisted hosts on
  * port 443 at public addresses. Sandboxed shells can reach nothing else. */
 export async function startAgentNetworkProxy(options: AgentNetworkProxyOptions = {}): Promise<AgentNetworkProxy> {
-  const { hosts = AGENT_SHELL_NETWORK_HOSTS, resolve = resolveHost, connect = (address, port) => net.connect({ host: address, port }) } = options;
-  const refuse = (socket: net.Socket, reason: string) => {
-    if (socket.writable) socket.end(`HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n${reason}\n`);
+  const {
+    hosts = AGENT_SHELL_NETWORK_HOSTS, resolve = resolveHost, connect = (address, port) => net.connect({ host: address, port }),
+    maxTunnels = MAX_TUNNELS, connectTimeoutMs = CONNECT_TIMEOUT_MS, idleTimeoutMs = IDLE_TIMEOUT_MS
+  } = options;
+  const refuse = (socket: net.Socket, reason: string, status = '403 Forbidden') => {
+    if (socket.writable) socket.end(`HTTP/1.1 ${status}\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n${reason}\n`);
     else socket.destroy();
   };
+  let tunnels = 0;
   const server = createServer((request, response) => {
     response.writeHead(403, { 'Content-Type': 'text/plain', Connection: 'close' });
     response.end(`Powermove allows shell downloads only over HTTPS from: ${hosts.join(', ')}.\n`);
     request.resume();
   });
+  // Sockets that have not sent CONNECT yet are bounded too; headersTimeout closes them.
+  server.maxConnections = maxTunnels * 2;
   server.on('clientError', (_error, socket) => socket.destroy());
   server.on('connect', (request, client: net.Socket, head: Buffer) => {
     client.on('error', () => client.destroy());
@@ -113,24 +126,33 @@ export async function startAgentNetworkProxy(options: AgentNetworkProxyOptions =
     const host = target?.[1]?.replace(/^\[|\]$/g, '') ?? '';
     if (!target || Number(target[2]) !== 443) return refuse(client, 'Powermove allows shell connections only to port 443.');
     if (!agentHostAllowed(host, hosts)) return refuse(client, `${host} is not on Powermove's download allowlist: ${hosts.join(', ')}.`);
+    if (tunnels >= maxTunnels) return refuse(client, `Powermove allows at most ${maxTunnels} shell connections at once.`, '503 Service Unavailable');
+    tunnels += 1;
+    client.once('close', () => { tunnels -= 1; });
+    // Resolving and connecting share one deadline.
+    let upstream: net.Socket | null = null;
+    const deadline = setTimeout(() => { upstream?.destroy(); refuse(client, `Timed out reaching ${host}.`, '504 Gateway Timeout'); }, connectTimeoutMs);
+    client.once('close', () => { clearTimeout(deadline); upstream?.destroy(); });
     void resolve(host).then(addresses => {
+      if (client.destroyed || !client.writable) return;
       const address = addresses.find(isPublicAddress);
-      if (!address || client.destroyed) return refuse(client, `${host} does not resolve to a public address.`);
-      const upstream = connect(address, 443);
+      if (!address) return refuse(client, `${host} does not resolve to a public address.`);
+      const socket = upstream = connect(address, 443);
       let established = false;
-      const close = () => { upstream.destroy(); client.destroy(); };
-      upstream.setTimeout(CONNECT_TIMEOUT_MS, () => upstream.destroy(new Error('timed out')));
-      upstream.once('connect', () => {
+      const close = () => { socket.destroy(); client.destroy(); };
+      socket.once('connect', () => {
         established = true;
-        upstream.setTimeout(0);
+        clearTimeout(deadline);
+        // Reads and writes both count as activity on either socket.
+        socket.setTimeout(idleTimeoutMs, close);
+        client.setTimeout(idleTimeoutMs, close);
         client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-        if (head.length) upstream.write(head);
-        upstream.pipe(client);
-        client.pipe(upstream);
+        if (head.length) socket.write(head);
+        socket.pipe(client);
+        client.pipe(socket);
       });
-      upstream.on('error', () => established ? close() : refuse(client, `Could not reach ${host}.`));
-      upstream.on('close', () => { if (established) close(); });
-      client.on('close', () => upstream.destroy());
+      socket.on('error', () => established ? close() : refuse(client, `Could not reach ${host}.`));
+      socket.on('close', () => { if (established) close(); });
     }, () => refuse(client, `Could not resolve ${host}.`));
   });
   await new Promise<void>((resolveListen, reject) => {
