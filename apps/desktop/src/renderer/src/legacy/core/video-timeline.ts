@@ -1,4 +1,5 @@
-import { sequencePlaybackTime, sequenceStreamTime } from '../../../../shared/image-sequence';
+import { sequenceStreamTime } from '../../../../shared/image-sequence';
+import { videoPlaybackTime } from '../../../../shared/video-timing';
 import { sourceTime } from './retiming';
 import { resolveContent } from './content-properties';
 
@@ -28,7 +29,7 @@ export function videoClipsAt(PM: any, time: number): VideoClip[] {
           const asset = PM.assets.get(d.asset);
           if (asset?.el) clips.push({ layer, asset, id, time: at,
             streamAt: sequenceStreamTime(asset, source) ?? null,
-            at: sequencePlaybackTime(asset, source) ?? PM.clamp(source, 0, Math.max(0, (asset.dur || 0) - .04)), rate: nextRate });
+            at: videoPlaybackTime(asset, source), rate: nextRate });
         } else {
           const sub = comp.comps?.[d.comp] || PM.proj.comps?.[d.comp];
           if (sub) visit(sub, source, id + '/', nextRate, depth + 1);

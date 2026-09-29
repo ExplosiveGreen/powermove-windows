@@ -1,3 +1,4 @@
+import { webmTimestampScale } from '../../../../shared/video-timing';
 import { createCloudMedia, cloudSourcePaths, readLocalMediaSource } from '../core/cloud-media';
 import { prepareVideoPreview } from '../core/video-preview';
 import { disposeVideoInstances } from '../core/video-instances';
@@ -775,6 +776,7 @@ async function prepareAsset({ id, name, kind, blob, meta = {}, onStage }: any) {
       dur: dur || meta.dur || 0, size: sourceBlob.size || meta.size || 0,
       playbackProxy: playbackProxyUsed,
       playbackProxyVersion,
+      ...(kind === 'video' ? { videoTimestampScale: await webmTimestampScale(sourceBlob) } : {}),
       persistBlob: sourceBlob,
       ...(imageSequence ? { imageSequence } : {}),
       ...(imageFormat ? { format: imageFormat } : {}),

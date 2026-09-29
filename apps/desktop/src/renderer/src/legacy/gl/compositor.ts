@@ -1,7 +1,7 @@
 import { videoClipsAt } from '../core/video-timeline';
 import { previewSeekFrame, seekPreviewVideo } from '../core/video-seek';
 import { layerVideoElement, videoInstanceTextureKey } from '../core/video-instances';
-import { sequencePlaybackTime } from '../../../../shared/image-sequence';
+import { videoPlaybackTime } from '../../../../shared/video-timing';
 import { GPUTiming } from './gpu-timing';
 import { performanceMonitor } from '../../runtime/performance-monitor';
 import { is3DLayer, planeMatrix, planeContains, depthOrderedLayers, inversePlane, affinePlane } from '../core/space-3d';
@@ -919,7 +919,7 @@ function contentQuad(L: any, T: any, W: any, H: any, clip?: RasterWindow) {
     let el = preparedVideo || playbackFrame?.source || liveVideo, sw = a.w || 1, sh = a.h || 1;
     if (L.type === 'video') {
       const videoTime = useVideoPreviews ? (previewVideoTimes.get(videoPath + L.id) ?? T) : T;
-      const vt = sequencePlaybackTime(a, sourceTime(PM,L,videoTime)) ?? PM.clamp(sourceTime(PM,L,videoTime), 0, Math.max(0, a.dur - .04));
+      const vt = videoPlaybackTime(a, sourceTime(PM,L,videoTime));
       if (!preparedVideo && !playbackFrame && useVideoPreviews) captured = previewSeekFrame(liveVideo, vt);
       if (captured) el = captured.canvas;
       if (rememberingPreview && PM.playing && !preparedVideo && !playbackFrame && !captured) {

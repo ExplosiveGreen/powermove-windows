@@ -3,7 +3,7 @@ import { previewVideoElement } from './video-preview';
 import { layerVideoElement, pruneVideoInstances } from './video-instances';
 import { cancelPreviewVideoSeek, seekPreviewVideo } from './video-seek';
 import { capturePlaybackVideoFrame, clearPlaybackVideoFrames, startPlaybackVideoFrames, stopPlaybackVideoFrames, playbackVideoFrameAt, type PlaybackVideoFrame } from './video-playback-frames';
-import { sequencePlaybackTime } from '../../../../shared/image-sequence';
+import { videoPlaybackTime } from '../../../../shared/video-timing';
 import { prepareFrame } from './frame-preparation';
 import { renderOpaqueFrame } from './frame-capture';
 import { installPreviewCache } from './preview-cache';
@@ -170,7 +170,7 @@ function scrubVideos(T: any) {
     if (plannedVideoClips(layer.from).length > 1) buffer(el);
     ensureMediaPaused(el);
     const at = sourceTime(PM, layer, layer.from);
-    seekPreviewVideo(el, sequencePlaybackTime(asset, at) ?? PM.clamp(at, 0, Math.max(0, (asset.dur || 0) - .04)), .0005);
+    seekPreviewVideo(el, videoPlaybackTime(asset, at), .0005);
   }
 
   // Prepare the loop entrance only if it owns a different decoder. Seeking an
