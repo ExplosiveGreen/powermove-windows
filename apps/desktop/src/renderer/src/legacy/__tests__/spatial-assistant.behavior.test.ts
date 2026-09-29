@@ -1250,6 +1250,7 @@ it('seals live thoughts and marks running tools continued when stopped', () => {
   PM.AgentUI.submit('Inspect this');
   assistant.lifecycle.reduceTrace({ kind: 'thought', text: 'Inspecting' });
   assistant.lifecycle.reduceTrace({ kind: 'tool-start', itemId: 'live-tool', toolName: 'edit', label: 'edit · app.ts' });
+  assistant.lifecycle.reduceTrace({ kind: 'answer', text: 'Working on it' });
   PM.AgentUI.update({ flush: true });
 
   PM.AgentUI.stop();
@@ -1260,6 +1261,7 @@ it('seals live thoughts and marks running tools continued when stopped', () => {
   assert.ok(archived, 'stop archives the trace as a conversation entry');
   assert.equal(archived.steps.find(step => step.kind === 'thought')?.live, false);
   assert.equal(archived.steps.find(step => step.kind === 'tool')?.status, 'continued');
+  assert.equal(archived.steps.find(step => step.kind === 'text')?.text, 'Working on it');
 });
 
 it('caps traces at 200 steps by dropping old thought and tool rows before text', () => {

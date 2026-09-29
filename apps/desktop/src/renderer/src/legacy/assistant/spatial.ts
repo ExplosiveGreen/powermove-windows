@@ -1454,7 +1454,8 @@ function stopSession(session: any) {
   active?.abort();
   sealTrace(session);
   session.steps = []; session.activity = ''; session.plan = null; session.phase = 'conversation';
-  archiveTrace(false, session);
+  // No replacement turn follows a stop, so everything the agent said stays.
+  archiveTrace(true, session);
   touch(session, { focusComposer: true });
 }
 
@@ -1620,8 +1621,8 @@ function sealTrace(session: any = activeSession()) {
 
 /* Move the finished run's trace into the conversation so the activity trail
    stays visible (supermove keeps per-message steps). Text is kept whenever it
-   is the reply — a run that spoke, or a steering checkpoint — and dropped only
-   when a separate assistant turn replaces it (stop, plans, errors). */
+   is the reply — a run that spoke, a steering checkpoint, or a stop — and
+   dropped only when a separate assistant turn replaces it (plans, errors). */
 function archiveTrace(preserveText = false, session: any = activeSession(), steering = false) {
   sealTrace(session);
   const steps: any = session.trace.filter((step: any) => step.kind !== 'text' || (preserveText && step.text.trim()));
