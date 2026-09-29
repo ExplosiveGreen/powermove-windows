@@ -28,10 +28,10 @@ export const REQUIRED_CODEX_FLAGS = [
 export const PROJECT_PERMISSION_PROFILE = 'powermove';
 
 /**
- * The sandbox is final: `never` stops the model from asking for an
- * unsandboxed command, and there is no approval reviewer to grant one. No
- * legacy `sandbox_mode` either, which would override a permission profile.
- * The profile extends Codex's workspace sandbox and with shell network lets
+ * `--approve-for-me` without its legacy `sandbox_mode="workspace-write"`,
+ * which would override a permission profile: a command the sandbox blocks
+ * may ask to run outside it, and Codex's automatic reviewer decides. The
+ * profile extends Codex's workspace sandbox and with shell network lets
  * commands reach any host. They follow `exec` because root-level approval
  * and profile overrides do not reach it; the legacy
  * `sandbox_workspace_write.network_access` switch did not either.
@@ -43,7 +43,8 @@ export const PROJECT_PERMISSION_PROFILE = 'powermove';
 export function projectSandboxArgv(options: { shellNetwork: boolean; workspaceRoots: readonly string[] }): string[] {
   const profile = `permissions.${PROJECT_PERMISSION_PROFILE}`;
   const config = [
-    'approval_policy="never"',
+    'approvals_reviewer="auto_review"',
+    'approval_policy="on-request"',
     `default_permissions=${JSON.stringify(PROJECT_PERMISSION_PROFILE)}`,
     `${profile}.extends=":workspace"`
   ];
@@ -103,7 +104,7 @@ function nativeMcpArgv(config?: NativeMcpServerConfig): string[] {
     '--config', `mcp_servers.powermove.command=${JSON.stringify(config.command)}`,
     '--config', `mcp_servers.powermove.args=${JSON.stringify(config.args)}`,
     '--config', 'mcp_servers.powermove.required=true',
-    // `never` would otherwise refuse the run-scoped tools, which carry no annotations.
+    // Run-scoped tools carry no annotations; approve them without a review.
     '--config', 'mcp_servers.powermove.default_tools_approval_mode="approve"',
     '--config', 'mcp_servers.powermove.startup_timeout_sec=30',
     '--config', 'mcp_servers.powermove.tool_timeout_sec=120'

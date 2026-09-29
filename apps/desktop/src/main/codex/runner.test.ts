@@ -302,6 +302,7 @@ describe('CodexRunner lifecycle', () => {
       expect(launchedArgs.join(' ')).not.toMatch(/network_proxy|network\.domains/);
       expect(launchedArgs).toContain(`default_permissions="${PROJECT_PERMISSION_PROFILE}"`);
       expect(launchedArgs).not.toContain('--approve-for-me');
+      expect(launchedArgs).toEqual(expect.arrayContaining(['approvals_reviewer="auto_review"', 'approval_policy="on-request"']));
       expect(launchedArgs.find(arg => arg.startsWith(`permissions.${PROJECT_PERMISSION_PROFILE}.filesystem`))).toBeUndefined();
       expect(launchedArgs.join(' ')).not.toMatch(/="deny"|auth\.json|\.ssh/);
       const workspace = await realpath(agentWorkspaceRoot(userData, 'runner-project'));

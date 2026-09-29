@@ -77,7 +77,8 @@ describe('Codex CLI adapter', () => {
       '/user-data/extensions',
       'exec',
       '--skip-git-repo-check',
-      '--config', 'approval_policy="never"',
+      '--config', 'approvals_reviewer="auto_review"',
+      '--config', 'approval_policy="on-request"',
       '--config', 'default_permissions="powermove"',
       '--config', 'permissions.powermove.extends=":workspace"',
       '--config', 'projects={"/workspace"={trust_level="untrusted"}}',
@@ -181,7 +182,7 @@ describe('Codex CLI adapter', () => {
     ]);
   });
 
-  it('never lets a sandboxed run ask for an unsandboxed command, and keeps Powermove tools approved', () => {
+  it('lets a sandboxed run ask the automatic reviewer for an unsandboxed command, and keeps Powermove tools approved', () => {
     const common = {
       schemaPath: '/workspace/schema.json', outputPath: '/workspace/result.json', prompt: 'Build',
       imagePaths: [], model: null, reasoningEffort: null, extensionsDir: '/user-data/extensions', instructions: 'AGENT INSTRUCTIONS',
@@ -189,8 +190,12 @@ describe('Codex CLI adapter', () => {
     };
     for (const sessionId of [null, 'thread-123']) {
       const argv = buildAutonomousArgv({ ...common, access: 'project', shellNetwork: true, sessionId });
-      expect(argv).toContain('approval_policy="never"');
-      expect(argv.join(' ')).not.toMatch(/on-request|approvals_reviewer|auto_review/);
+      const reviewer = argv.indexOf('approvals_reviewer="auto_review"');
+      // exec options, so `exec resume` gets them too.
+      expect(reviewer).toBeGreaterThan(argv.indexOf(sessionId ? 'resume' : 'exec'));
+      expect(argv[argv.indexOf('approval_policy="on-request"') - 1]).toBe('--config');
+      expect(argv).not.toContain('approval_policy="never"');
+      expect(argv).not.toContain('--approve-for-me');
       expect(argv).toContain('mcp_servers.powermove.default_tools_approval_mode="approve"');
     }
   });
