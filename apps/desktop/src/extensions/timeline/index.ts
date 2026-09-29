@@ -37,6 +37,14 @@ const TIMELINE_STYLES = `
 #tl-head .tl-graph-slot{margin-left:auto}
 #tl-head .tl-graph-slot .iconbtn.on{color:var(--on-accent);background:var(--accent)}
 #tl-head .tl-graph-slot .iconbtn.on:hover{background:var(--accent-hover)}
+#tl-head .tl-graph-slot{gap:1px}
+#tl-head .tl-graph-slot>.iconbtn:not(.tl-view-button){margin-right:5px}
+#tl-head .tl-view-button,#tl-head[data-density] .tl-view-button{width:26px;border-radius:0;color:var(--tx-2)}
+#tl-head .tl-view-button svg,#tl-head[data-density] .tl-view-button svg{width:15px;height:15px}
+#tl-head .tl-view-button.first{border-radius:var(--r-sm) 0 0 var(--r-sm)}
+#tl-head .tl-view-button.last{border-radius:0 var(--r-sm) var(--r-sm) 0}
+#tl-head .tl-view-button:not(.on):hover{color:var(--tx)}
+#tl-head .tl-graph-slot .tl-view-button.on{color:var(--on-accent);background:var(--accent)}
 #tl-time{font-family:var(--f-mono);font-size:var(--fs-md);letter-spacing:0;color:var(--tx-2);font-variant-numeric:tabular-nums;margin-left:4px;padding:0 2px;white-space:nowrap;cursor:ew-resize}
 #tl-time.edit{color:var(--accent)}
 #tl-canvas-wrap{flex:1;position:relative;min-height:0;overflow:hidden}

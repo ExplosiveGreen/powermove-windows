@@ -206,4 +206,69 @@ test.describe('@viewer selection-preserving direct manipulation', () => {
     expect(after.selected).toEqual([setup.leftId, setup.rightId]);
     expect(session.diagnostics.pageErrors).toEqual([]);
   });
+  test('clicks select groups first, Cmd goes deeper, and hover previews the target', async ({ session }) => {
+    await session.openEditor();
+    const { page } = session;
+    await page.waitForFunction(() => Boolean((window as any).PM?.Kernel.services.get('viewer')?.ov && (window as any).PM?.GL?.gl));
+    const ids = await page.evaluate(() => {
+      const PM = (window as any).PM;
+      const tool = PM.Kernel.services.get('tool');
+      const project = PM.mkProject({ name: 'Group picking', w: 640, h: 360, fps: 30, dur: 4, bg: '#000000' });
+      const solid = (name: string, x: number, y: number, color: string) => {
+        const layer = PM.mkLayer('solid', { name, dur: 4, d: { color, w: 120, h: 120 } }, project);
+        layer.p['position.x'].v = x;
+        layer.p['position.y'].v = y;
+        return layer;
+      };
+      const a = solid('A', 40, 40, '#FF6B1A'), b = solid('B', 200, 40, '#3FCF8E'), loose = solid('Loose', 400, 40, '#4C8DFF');
+      project.layers = [a, b, loose];
+      PM.replaceProject(project);
+      const group = PM.groupLayers([a.id, b.id], 'Pair');
+      tool.tool = 'select';
+      PM.setTime(1, { raw: true, force: true });
+      PM.selectLayers([]);
+      PM.Kernel.services.get('viewer').layout();
+      return { a: a.id, b: b.id, loose: loose.id, group: group.id };
+    });
+    const frame = await page.locator('#stage-inner').boundingBox();
+    if (!frame) throw new Error('viewer frame is unavailable');
+    const shown = await page.evaluate(() => (window as any).PM.Kernel.services.get('viewer').shown);
+    const at = (x: number, y: number) => ({ x: frame.x + x * shown, y: frame.y + y * shown });
+    const inA = at(100, 100), inB = at(260, 100), inLoose = at(460, 100);
+    const selected = () => page.evaluate(() => [...(window as any).PM.sel.layers]);
+    const hovered = () => page.evaluate(() => (window as any).PM.Kernel.services.get('viewer').hoverLayerId());
+
+    await page.mouse.move(inA.x, inA.y);
+    await expect.poll(hovered).toBe(ids.group);
+    await page.keyboard.down('Meta');
+    await expect.poll(hovered).toBe(ids.a);
+    await page.keyboard.up('Meta');
+    await expect.poll(hovered).toBe(ids.group);
+
+    await page.mouse.click(inA.x, inA.y);
+    expect(await selected()).toEqual([ids.group]);
+    await expect.poll(hovered).toBeNull();
+
+    await page.mouse.move(inLoose.x, inLoose.y);
+    await expect.poll(hovered).toBe(ids.loose);
+    await page.mouse.click(inLoose.x, inLoose.y);
+    expect(await selected()).toEqual([ids.loose]);
+
+    await page.keyboard.down('Meta');
+    await page.mouse.click(inA.x, inA.y);
+    await page.keyboard.up('Meta');
+    expect(await selected()).toEqual([ids.a]);
+
+    await page.mouse.move(inB.x, inB.y);
+    await expect.poll(hovered).toBe(ids.b);
+    await page.mouse.click(inB.x, inB.y);
+    expect(await selected()).toEqual([ids.b]);
+
+    await page.mouse.click(inLoose.x, inLoose.y);
+    await page.mouse.click(inA.x, inA.y);
+    expect(await selected()).toEqual([ids.group]);
+    await page.mouse.dblclick(inA.x, inA.y);
+    expect(await selected()).toEqual([ids.a]);
+    expect(session.diagnostics.pageErrors).toEqual([]);
+  });
 });

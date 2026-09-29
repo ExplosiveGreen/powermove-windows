@@ -7,7 +7,7 @@ import {
   createViewerRuntime, layerContainsPoint, layerWorldPivot,
   localRotationForWorldDirection, multiplyLinear, resolveSelectionGeometry, resizeCursorForHandle,
   previewRenderSize, previewRenderViewport, effectViewportPadding, effectViewportSafe, resizeLocksAspect, rotateLinear, selectionTransformRoots, solveLocalTransformForWorldLinear,
-  selectionBoundsCenter, shapeBoxFromDrag, transformPointAround, viewerWheelMode, zoomPanForPoint,
+  selectionBoundsCenter, resolvePickTarget, drillTarget, shapeBoxFromDrag, transformPointAround, viewerWheelMode, zoomPanForPoint,
 } from './viewer';
 import type { PreviewViewport } from './viewer';
 import type { PowermoveAPI, Space3DAPI, ViewerService } from 'powermove';
@@ -732,5 +732,48 @@ describe('canvas selection contrast', () => {
     expect(selectionOutlineColor({bg:'#FFFFFF'})).toBe('#000000');
     expect(selectionOutlineColor({bg:'#000000'})).toBe('#ffffff');
     expect(selectionOutlineColor({bg:'#000000',backgroundFill:{type:'solid',stops:[{color:'#123456'}]}})).toBe('#edcba9');
+  });
+});
+
+describe('group-aware pick targets', () => {
+  // outer > inner > leaf, plus a sibling in outer and a loose layer.
+  const outer: any = { id: 'outer', type: 'group' };
+  const inner: any = { id: 'inner', type: 'group', group: 'outer' };
+  const leaf: any = { id: 'leaf', type: 'shape', group: 'inner' };
+  const sibling: any = { id: 'sibling', type: 'shape', group: 'outer' };
+  const loose: any = { id: 'loose', type: 'shape' };
+  const layers = [outer, inner, leaf, sibling, loose];
+  const chain = (layer: any): any[] => {
+    const result: any[] = [];
+    for (let g = layer.group && layers.find(l => l.id === layer.group); g; g = g.group && layers.find(l => l.id === g.group)) result.push(g);
+    return result;
+  };
+  const apiWith = (selected: string[]) => ({
+    selection: { layers: () => selected },
+    groups: { ancestors: chain },
+    model: { layer: (id: string) => layers.find(l => l.id === id) },
+  }) as unknown as PowermoveAPI;
+
+  it('selects the outermost group first and the leaf when deep', () => {
+    expect(resolvePickTarget(apiWith([]), leaf)?.id).toBe('outer');
+    expect(resolvePickTarget(apiWith([]), leaf, { deep: true })?.id).toBe('leaf');
+    expect(resolvePickTarget(apiWith([]), loose)?.id).toBe('loose');
+    expect(resolvePickTarget(apiWith([]), null)).toBeNull();
+  });
+
+  it('opens the groups that already contain the selection', () => {
+    expect(resolvePickTarget(apiWith(['sibling']), leaf)?.id).toBe('inner');
+    expect(resolvePickTarget(apiWith(['leaf']), sibling)?.id).toBe('sibling');
+    expect(resolvePickTarget(apiWith(['inner']), leaf)?.id).toBe('inner');
+    expect(resolvePickTarget(apiWith(['outer']), leaf)?.id).toBe('outer');
+    expect(resolvePickTarget(apiWith(['loose']), leaf)?.id).toBe('outer');
+  });
+
+  it('drills one level below the deepest selected ancestor', () => {
+    expect(drillTarget(apiWith(['outer']), leaf)?.id).toBe('inner');
+    expect(drillTarget(apiWith(['inner']), leaf)?.id).toBe('leaf');
+    expect(drillTarget(apiWith(['leaf']), leaf)).toBeNull();
+    expect(drillTarget(apiWith(['loose']), leaf)).toBeNull();
+    expect(drillTarget(apiWith([]), leaf)).toBeNull();
   });
 });

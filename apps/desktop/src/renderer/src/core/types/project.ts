@@ -158,6 +158,14 @@ export interface ShapeContent {
   w: number;
   h: number;
   radius: number;
+  /** Per-corner radii apply when `independentCorners` is on; a missing corner uses `radius`. */
+  independentCorners?: boolean;
+  radiusTL?: number;
+  radiusTR?: number;
+  radiusBR?: number;
+  radiusBL?: number;
+  /** Corner smoothing percentage, 0 (circular arcs) to 100. */
+  smoothing?: number;
   stroke: number;
   strokeColor: string;
   points: number;

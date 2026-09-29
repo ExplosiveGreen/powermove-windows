@@ -8,6 +8,9 @@ export interface AgentThread {
   composerDraft: string;
   attachments: Array<Record<string, any>>;
   scope: string;
+  provider?: string;
+  model?: string;
+  reasoningEffort?: string;
 }
 
 interface ThreadArchive { version: 1; activeId: string; threads: AgentThread[] }
@@ -109,6 +112,9 @@ export class AgentThreads {
           .map(m => ({ ...m, entering: false, ...(m.attachments ? { attachments: m.attachments.map(item => this.restoreAttachment(item)) } : {}) })),
         attachments: Array.isArray(t.attachments) ? t.attachments.filter(isRecord).map(item => this.restoreAttachment(item)) : [],
         scope: typeof t.scope === 'string' ? t.scope : 'workspace',
+        provider: typeof t.provider === 'string' ? t.provider : undefined,
+        model: typeof t.model === 'string' ? t.model : undefined,
+        reasoningEffort: typeof t.reasoningEffort === 'string' ? t.reasoningEffort : undefined,
         title: typeof t.title === 'string' ? t.title : threadTitle(t.conversation),
         updatedAt: Number.isFinite(t.updatedAt) ? t.updatedAt : 0,
       })) : [];

@@ -14,6 +14,7 @@ import { evaluatedValue, isProperty, resolveContent } from '../core/content-prop
 /* Ported from js/gl/compositor.js — behavior-preserving. */
 import type { PMRegistry } from '../registry';
 import { extensionLayerFragment } from '../../kernel/extension-layers';
+import { cornerInset } from './corner-geometry';
 import { uncoveredRasterRegions, previewShapeRaster, previewTextRaster, rasterIntersectsViewport, shapeRasterGeometry, type RasterWindow } from './shape-raster-window';
 
 /**
@@ -1488,7 +1489,7 @@ GL.renderProject = (proj: any, T: any, W: any, H: any, opt: any = {}) => {
       const d = resolveContent(PM, layer, T), m = scaledWorld(layer, T, W, H);
       if (d.shape !== 'rect' || !/^#[0-9a-f]{6}$/i.test(d.color) || Math.abs(m[1]) > 1e-9 || Math.abs(m[2]) > 1e-9) continue;
       const geometry = shapeRasterGeometry(d, continuousRasterScale(m));
-      const inset = Math.max(0, Math.min(Number(d.radius) || 0, d.w / 2, d.h / 2))
+      const inset = cornerInset(d)
         + Math.max(0, Number(d.stroke) || 0) / 2 + 8 / geometry.density;
       const hw = (d.w / 2 - inset) * Math.abs(m[0]), hh = (d.h / 2 - inset) * Math.abs(m[3]);
       const x = Math.max(0, Math.ceil(m[4] - hw)), y = Math.max(0, Math.ceil(m[5] - hh));

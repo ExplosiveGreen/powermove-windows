@@ -15,6 +15,36 @@ async function waitForViewer(page: any): Promise<void> {
 }
 
 test.describe('@viewer composition recovery', () => {
+  test('keeps rendered pixels on the visible canvas across extension reloads', async ({ session }) => {
+    await session.openEditor();
+    const { page } = session;
+    await waitForViewer(page);
+    await page.evaluate(() => {
+      const PM = (window as any).PM;
+      PM.replaceProject(PM.mkProject({ name: 'Reload preview', w: 640, h: 360, dur: 4, bg: '#D92D20' }));
+      PM.Kernel.services.get('viewer').returnToComposition();
+    });
+    const sample = () => page.evaluate(() => {
+      const PM = (window as any).PM;
+      const canvas = document.querySelector('#gl');
+      const gl = PM.GL.gl as WebGL2RenderingContext;
+      const pixel = new Uint8Array(4);
+      gl.readPixels(gl.drawingBufferWidth / 2, gl.drawingBufferHeight / 2, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+      return { visible: canvas === gl.canvas, color: [...pixel].slice(0, 3) };
+    });
+    await expect.poll(sample).toEqual({ visible: true, color: [217, 45, 32] });
+    for (let reload = 0; reload < 3; reload++) {
+      await page.evaluate(async () => {
+        const PM = (window as any).PM;
+        await PM.Kernel.loader.reload('viewer');
+        await PM.Kernel.loader.whenIdle();
+        PM.invalidate();
+      });
+      await expect.poll(sample).toEqual({ visible: true, color: [217, 45, 32] });
+    }
+    expect(session.diagnostics.pageErrors).toEqual([]);
+  });
+
   test('offers a one-click return only after explicit panning fully loses the composition', async ({ session }) => {
     await session.openEditor();
     const { page } = session;

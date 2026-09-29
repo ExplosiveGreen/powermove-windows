@@ -478,6 +478,7 @@ function captureThread() {
   Object.assign(thread, {
     conversation: S.conversation, composerDraft: S.composerDraft,
     attachments: S.attachments, scope: S.scope, title,
+    provider: S.provider, model: S.model, reasoningEffort: S.reasoningEffort,
   });
   if (touched) thread.updatedAt = Date.now();
 }
@@ -507,6 +508,18 @@ function persistThreads() {
   threadSaveError = !threads.save();
 }
 
+/** Each thread keeps the provider, model and effort it was last using. */
+function restoreThreadModel(thread: any): void {
+  const { provider, model } = thread;
+  if (!AGENT_PROVIDERS.some((item: any) => item.id === provider) || typeof model !== 'string') return;
+  if (provider === 'claude') ensureClaudeModelChoice(model);
+  if (!AGENT_MODELS[provider as keyof typeof AGENT_MODELS]?.some(item => item.id === model)) return;
+  S.provider = provider;
+  S.model = model;
+  const effort = REASONING_EFFORTS.includes(thread.reasoningEffort) ? thread.reasoningEffort : S.reasoningEffort;
+  S.reasoningEffort = modelEffort(provider, selectedModelName(provider, model), effort) || effort;
+}
+
 function restoreThread() {
   const thread = threads.active;
   const session = sessionFor(thread.id);
@@ -525,6 +538,7 @@ function restoreThread() {
     composerDraft: thread.composerDraft, attachments: thread.attachments, scope: thread.scope,
     context: null, region: null, pendingEntering: false,
   });
+  restoreThreadModel(thread);
   if (!sessionBusy(session)) {
     Object.assign(session, { regionImage: null, requestAttachments: [], requestText: '', stepsExpanded: false });
   }

@@ -31,7 +31,7 @@ function serviceHarness(): { services: ServicesAPI; disposeAll(): void } {
 function apiHarness(services = serviceHarness().services) {
   let panel: PanelDefinition | undefined;
   let context: object | null = null;
-  const init = vi.fn(() => { context = {}; return true; });
+  const init = vi.fn((canvas: HTMLCanvasElement) => { context = { canvas }; return true; });
   const resize = vi.fn(() => true);
   const eventDisposers: Array<ReturnType<typeof vi.fn>> = [];
   const disposeCallbacks: Array<() => void> = [];
@@ -78,6 +78,28 @@ function apiHarness(services = serviceHarness().services) {
 }
 
 describe('viewer extension', () => {
+  it('reattaches the renderer canvas after a module update with a new service facade', async () => {
+    const original = apiHarness();
+    activateExtension(original.api);
+    const body = document.createElement('div');
+    original.panel!.build!(body, { spec: {} });
+    const canvas = body.querySelector('#gl');
+    const stage = original.viewer()!.stage;
+    original.dispose();
+    body.replaceChildren();
+
+    vi.resetModules();
+    const replacement = apiHarness();
+    replacement.api.render.gl = original.api.render.gl;
+    const { default: activateUpdated } = await import('./index');
+    activateUpdated(replacement.api);
+    replacement.panel!.build!(body, { spec: {} });
+
+    expect(body.querySelector('#gl')).toBe(canvas);
+    expect(replacement.viewer()!.stage).toBe(stage);
+    expect(original.init).toHaveBeenCalledTimes(1);
+    replacement.dispose();
+  });
   beforeEach(() => {
     vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 1);
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({} as never));

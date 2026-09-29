@@ -10,11 +10,14 @@ export function fontAnchorOffset(reference: any, bounds: any, ax: number, ay: nu
 }
 
 export function captureFontAnchor(PM: any, layer: any, command: any) {
-  if (layer?.type !== 'text' || layer.d.fontAnchorBounds || !PM.raster) return;
+  if (layer?.type !== 'text' || !PM.raster) return;
   const fields = command.type === 'set_content' ? Object.keys(command.patch || {})
     : ['set_property', 'replace_keyframes', 'set_expression'].includes(command.type)
       ? [String(command.path || command.channel || '').replace(/^c\./, '')] : [];
-  if (!fields.some(key => ['font', 'weight', 'size', 'tracking', 'leading', 'align', 'italic', 'boxWidth', 'boxHeight'].includes(key) || key.startsWith('fontAxis.'))) return;
+  // Alignment moves the text's origin, so the pivot follows it (left edge for left, middle for center).
+  if (fields.includes('align')) { delete layer.d.fontAnchorBounds; return; }
+  if (layer.d.fontAnchorBounds) return;
+  if (!fields.some(key => ['font', 'weight', 'size', 'tracking', 'leading', 'italic', 'boxWidth', 'boxHeight'].includes(key) || key.startsWith('fontAxis.'))) return;
   const measuredLayer = layer.d.animators?.length ? { ...layer, d: { ...layer.d, animators: [] } } : layer;
   const bounds = PM.raster(measuredLayer, 1, command.time ?? PM.time)?.selection;
   if (bounds) layer.d.fontAnchorBounds = { x0: bounds.x0, y0: bounds.y0, x1: bounds.x1, y1: bounds.y1 };

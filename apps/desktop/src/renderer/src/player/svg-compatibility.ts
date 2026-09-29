@@ -24,6 +24,7 @@ export function inspectSvgExport(project: any) {
     }
     if (layer.type === 'shape') {
       if (layer.d.paths?.length || !['rect', 'ellipse'].includes(layer.d.shape)) reject('this shape geometry requires WebGL');
+      if (!fixed(layer.d.independentCorners, false) || !fixed(layer.d.smoothing, 0)) reject('per-corner radii and corner smoothing require WebGL');
       if (layer.d.fill && layer.d.fill.type !== 'solid') reject('gradient fills require WebGL');
     }
   }

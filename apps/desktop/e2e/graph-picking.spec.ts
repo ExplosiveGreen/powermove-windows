@@ -106,7 +106,7 @@ test('vertical scrolling pans the graph without scrolling rows or editing animat
   expect(session.diagnostics.pageErrors).toEqual([]);
 });
 
-test('selected curves expose all their keys, and clearing selection clears hit targets', async ({ session }, info) => {
+test('selected curves expose all their keys and remain editable after clearing selection', async ({ session }, info) => {
   const { page } = session;
   await graphFixture(page);
   await page.evaluate(() => {
@@ -124,7 +124,7 @@ test('selected curves expose all their keys, and clearing selection clears hit t
   await expect.poll(() => page.evaluate(() => { const PM = (window as any).PM, timeline = PM.Kernel.services.get('timeline'); return timeline._graph?.series.map((axis: any) => axis.key); })).toEqual(['scale.x', 'scale.y']);
   await page.locator('#panel-timeline').screenshot({ path: info.outputPath('selected-scale-dark.png') });
   await page.evaluate(() => { const PM = (window as any).PM; PM.sel.keys = []; PM.bus.emit('sel'); PM.invalidate(); });
-  await expect.poll(() => page.evaluate(() => { const PM = (window as any).PM, timeline = PM.Kernel.services.get('timeline'); return timeline._graph; })).toBeNull();
+  await expect.poll(() => page.evaluate(() => { const PM = (window as any).PM, timeline = PM.Kernel.services.get('timeline'); return timeline._graph?.series.map((axis: any) => axis.key); })).toEqual(['scale.x', 'scale.y']);
   expect(session.diagnostics.pageErrors).toEqual([]);
 });
 

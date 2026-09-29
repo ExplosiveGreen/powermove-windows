@@ -52,6 +52,7 @@ const PRESETS: Record<string, number[]> = {
   backIn:      [.36, 0, .66, -.56],  backOut:  [.34, 1.56, .64, 1],  backInOut: [.68, -.6, .32, 1.6],
   /* Powermove house curve — decisive entry, long settle. */
   power:       [.62, .05, 0, 1],
+  swish:       [.8, 0, .2, 1],
   snap:        [.9, 0, .1, 1],
   glide:       [.16, .84, .24, 1],
 };

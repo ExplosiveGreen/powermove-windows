@@ -1,4 +1,6 @@
-export type RasterWindow = { x: number; y: number; width: number; height: number };
+import { cornerInset } from './corner-geometry';
+
+export type RasterWindow ={ x: number; y: number; width: number; height: number };
 
 /** Keep the crop on the original bitmap's pixel grid, including ceil rounding. */
 export function shapeRasterGeometry(d: any, scale: number) {
@@ -35,7 +37,7 @@ export function previewShapeRaster(d: any, scale: number, m: readonly number[], 
 
   // A viewport wholly inside a rounded rectangle sees only its uniform fill.
   // Exclude strokes, corners and raster sampling margins conservatively.
-  const inset = Math.max(0, Math.min(Number(d.radius) || 0, d.w / 2, d.h / 2))
+  const inset = cornerInset(d)
     + Math.max(0, Number(d.stroke) || 0) / 2 + 8 / geometry.density;
   if (d.shape === 'rect' && /^#[0-9a-f]{6}$/i.test(d.color)
       && x0 > -d.w / 2 + inset && x1 < d.w / 2 - inset

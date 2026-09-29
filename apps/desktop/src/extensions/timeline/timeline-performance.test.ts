@@ -139,17 +139,22 @@ it.each(['up', 'cancel'])('scrubs at pointer precision, selects project frames, 
   }
   expect(new Set(positions).size).toBe(120);
   expect(bounds).not.toHaveBeenCalled();
-  // Magnetic snapping controls both the selected frame and pointer feedback;
+  // Directional latching controls both the selected frame and pointer feedback;
   // releasing Shift restores the raw pointer position immediately.
   drag.move(267, 0, { clientX: startX + 267, shiftKey: true });
+  value.flush();
+  expect(value.state.time).toBe(9.9);
+  expect(value.timeline.snapGuide).toBeNull();
+  drag.move(269.7, 0, { clientX: startX + 269.7, shiftKey: true });
   value.moves.mockClear(); value.flush();
   // Snaps to the strip's last visible frame, not the exclusive out edge.
   expect(value.state.time).toBeCloseTo(10 - 1 / 30, 9);
   expect(value.moves.mock.calls.find(([, y]) => y === 7)![0]).toBeCloseTo(value.timeline.gut + 299 + .5);
   window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift' }));
   value.moves.mockClear(); value.flush();
-  expect(value.state.time).toBe(9.9);
-  expect(value.moves.mock.calls.find(([, y]) => y === 7)![0]).toBeCloseTo(value.timeline.gut + 297 + .5);
+  expect(value.state.time).toBe(10);
+  expect(value.timeline.snapGuide).toBeNull();
+  expect(value.moves.mock.calls.find(([, y]) => y === 7)![0]).toBeCloseTo(value.timeline.gut + 299.7 + .5);
   drag.move(30.25, 0, { clientX: startX + 30.25 }); value.flush();
   drag[finish](); value.moves.mockClear(); value.flush();
   expect(value.moves.mock.calls.find(([, y]) => y === 7)![0]).toBeCloseTo(value.timeline.gut + value.state.time * 30 + .5);

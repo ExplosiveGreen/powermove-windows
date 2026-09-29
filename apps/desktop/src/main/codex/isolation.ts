@@ -6,6 +6,7 @@ import { prepareUserResources } from '../agent-tools/user-resources';
 export const ISOLATED_CODEX_HOME_NAME = 'codex-runtime';
 export const POWERMOVE_AUTH_OWNER_FILE = '.powermove-auth-owned';
 export const POWERMOVE_AUTH_STORE_CONFIG = 'cli_auth_credentials_store = "file"';
+const SUPPRESS_UNSTABLE_WARNING_CONFIG = 'suppress_unstable_features_warning = true';
 const preparingHomes = new Map<string, Promise<string>>();
 
 /** User resources are shared; the user login only bootstraps private auth once. */
@@ -39,10 +40,14 @@ async function ensurePrivateCredentialStore(runtimeHome: string): Promise<void> 
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
-  const setting = /^[ \t]*cli_auth_credentials_store[ \t]*=.*$/mu;
-  const next = setting.test(current)
-    ? current.replace(setting, POWERMOVE_AUTH_STORE_CONFIG)
-    : `${POWERMOVE_AUTH_STORE_CONFIG}\n${current}`;
+  let next = current;
+  for (const [key, line] of [
+    ['cli_auth_credentials_store', POWERMOVE_AUTH_STORE_CONFIG],
+    ['suppress_unstable_features_warning', SUPPRESS_UNSTABLE_WARNING_CONFIG],
+  ] as const) {
+    const setting = new RegExp(`^[ \\t]*${key}[ \\t]*=.*$`, 'mu');
+    next = setting.test(next) ? next.replace(setting, line) : `${line}\n${next}`;
+  }
   if (next !== current) await writeFile(configFile, next, { mode: 0o600 });
   await chmod(configFile, 0o600);
 }

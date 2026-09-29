@@ -27,3 +27,14 @@ it('captures typography bounds in the edit transaction and restores them with Un
   PM.hist.undo();
   expect(PM.L(layer.id).d.fontAnchorBounds).toBeUndefined();
 });
+
+it('drops the preserved anchor when alignment changes so the pivot follows the alignment origin', () => {
+  const PM = makePM('core/easing', 'core/model', 'core/selection', 'core/anim', 'core/history', 'core/editing');
+  PM.proj = PM.mkProject({ dur: 5 }); PM.time = 0;
+  const layer = PM.mkLayer('text'); PM.proj.layers = [layer]; PM.ProjectIndex.invalidate();
+  PM.raster = () => ({ selection: { x0: 0, x1: 100, y0: 0, y1: 40 } });
+  PM.Edit.apply({ type: 'set_property', target: layer.id, path: 'c.size', value: 200, preserveHandEdits: false });
+  expect(layer.d.fontAnchorBounds).toBeDefined();
+  PM.Edit.apply({ type: 'set_content', target: layer.id, patch: { align: 'left' }, preserveHandEdits: false });
+  expect(PM.L(layer.id).d.fontAnchorBounds).toBeUndefined();
+});

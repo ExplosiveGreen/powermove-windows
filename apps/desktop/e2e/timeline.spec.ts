@@ -105,8 +105,10 @@ test('the easing grid applies a curve to both Scale dimensions and preserves lin
   const point = await scaleKeyPoint(page, 3);
   await page.mouse.click(point.x, point.y, { button: 'right' });
   const grid = page.locator('[role="menu"].curve-grid');
-  await expect(grid.locator('.curve-option')).toHaveCount(8);
-  await expect(grid.locator('.curve-line')).toHaveCount(8);
+  for (const name of ['Linear', 'Ease in', 'Ease out', 'Easy ease']) {
+    await expect(grid.getByRole('menuitem', { name, exact: true })).toBeVisible();
+  }
+  await expect(grid.locator('.curve-line')).toHaveCount(await grid.locator('.curve-option').count());
   const boxes = await grid.locator('.curve-option').evaluateAll(elements => elements.map(el => {
     const b = el.getBoundingClientRect(); return { x: b.x, y: b.y };
   }));
@@ -560,7 +562,7 @@ test('middle-button dragging pans the timeline viewport horizontally', async ({ 
   expect(session.diagnostics.pageErrors).toEqual([]);
 });
 
-test('Shift pressed during a playhead drag snaps live to clip edges and keyframes', async ({ session }) => {
+test('Shift pressed during a playhead drag latches when crossing clip edges and keyframes', async ({ session }) => {
   await session.openEditor();
   const { page } = session;
   await page.waitForFunction(() => { const PM = (window as any).PM; const timeline = PM.Kernel.services.get('timeline'); return Boolean(timeline?.cv); });
@@ -584,6 +586,7 @@ test('Shift pressed during a playhead drag snaps live to clip edges and keyframe
       x: box.x + timeline.gut + raw * timeline.pps,
       y: box.y + timeline.ruler - 6,
       target,
+      crossingX: box.x + timeline.gut + (target + .04) * timeline.pps,
     });
     return [point(1.93, 2), point(3.33, 3.4), point(4.93, 5 - 1 / 30)];
   });
@@ -595,10 +598,13 @@ test('Shift pressed during a playhead drag snaps live to clip edges and keyframe
     expect(Math.abs(raw - point.target)).toBeGreaterThan(0.02);
 
     await page.keyboard.down('Shift');
+    expect(await page.evaluate(() => (window as any).PM.time)).toBeCloseTo(raw, 6);
+    await page.mouse.move(point.crossingX, point.y);
     await expect.poll(() => page.evaluate(() => (window as any).PM.time)).toBeCloseTo(point.target, 6);
 
     await page.keyboard.up('Shift');
-    await expect.poll(() => page.evaluate(() => (window as any).PM.time)).toBeCloseTo(raw, 6);
+    await expect.poll(() => page.evaluate(() => (window as any).PM.Kernel.services.get('timeline').snapGuide)).toBeNull();
+    expect(await page.evaluate(() => (window as any).PM.time)).toBeGreaterThan(point.target);
     await page.mouse.up();
   }
   expect(session.diagnostics.pageErrors).toEqual([]);

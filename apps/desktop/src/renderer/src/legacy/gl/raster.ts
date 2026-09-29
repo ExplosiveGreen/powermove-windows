@@ -14,6 +14,7 @@ import { createVariableFontRenderer, variationEntries, variationSettings } from 
 export { variationEntries as textVariationEntries, variationSettings as formatFontVariationSettings } from '../../typography/font-renderer';
 import { resolveContent } from '../core/content-properties';
 import { shapeRasterGeometry, type RasterWindow } from './shape-raster-window';
+import { cornerRadii, isUniformCircular, roundedRectPath } from './corner-geometry';
 /* Ported from js/gl/raster.js — behavior-preserving. */
 import type { PMRegistry } from '../registry';
 import { parseObj } from '../../kernel/obj';
@@ -508,7 +509,13 @@ function rasterShape(d: any, scale: any, crop?: RasterWindow) {
     c.beginPath(); c.moveTo(0, H / 2); c.lineTo(W, H / 2);
     c.lineWidth = Math.max(1, d.stroke || 6); c.strokeStyle = d.color; c.lineCap = 'round'; c.stroke();
     return { cv, w, h: hh, anchorX: pad, anchorY: pad, selection, uv };
-  } else rr(c, 0, 0, W, H, d.radius || 0);
+  } else if (isUniformCircular(d)) rr(c, 0, 0, W, H, d.radius || 0);
+  else {
+    const outline = new Path2D(roundedRectPath(d));
+    c.fill(outline);
+    if (d.stroke > 0) c.stroke(outline);
+    return { cv, w, h: hh, anchorX: pad, anchorY: pad, selection, uv };
+  }
   c.fill();
   if (d.stroke > 0) c.stroke();
   return { cv, w, h: hh, anchorX: pad, anchorY: pad, selection, uv };
@@ -526,7 +533,7 @@ PM.raster = (L: any, scale: any = 1, time: any = PM.time, uploaded?: (key: strin
     : scale;
   const key = (L.d.paths?.length ? 'paths|'+JSON.stringify(L.d.paths.map((path:any)=>({values:pathValues(PM,L,path,time),matrix:groupMatrix(PM,L,path,time)})))+'|'+scale : L.type === 'text'
     ? 't|' + [d.text, d.boxWidth, d.boxHeight, d.font, d.weight, d.size, d.tracking, d.leading, d.color, d.align, d.italic, variationSettings(d), JSON.stringify(controls), rasterScale].join('|')
-    : 's|' + [d.shape, d.color, d.w, d.h, d.radius, d.stroke, d.strokeColor, d.points, rasterScale].join('|'))
+    : 's|' + [d.shape, d.color, d.w, d.h, d.radius, d.independentCorners ? cornerRadii(d).join(',') : '', d.smoothing, d.stroke, d.strokeColor, d.points, rasterScale].join('|'))
     + (crop ? `|crop:${crop.x},${crop.y},${crop.width},${crop.height}` : '');
   // Typography anchoring may need a separate, unanimated CPU measurement.
   // Keep that path intact; otherwise the renderer can reuse uploaded pixels

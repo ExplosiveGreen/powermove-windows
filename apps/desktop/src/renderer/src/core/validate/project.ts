@@ -369,6 +369,10 @@ function staticContentFor(type: LayerType, raw: unknown, comp: Pick<Comp, 'w' | 
           ? source.shape as (typeof shapes)[number] : 'rect',
         color: stringOr(source.color, '#E8E2CF'), w: finite(source.w, 480), h: finite(source.h, 480),
         radius: finite(source.radius, 24), stroke: finite(source.stroke),
+        ...(source.independentCorners ? { independentCorners: true } : {}),
+        ...Object.fromEntries(['radiusTL', 'radiusTR', 'radiusBR', 'radiusBL', 'smoothing']
+          .filter(key => source[key] !== undefined && !isProperty(source[key]))
+          .map(key => [key, key === 'smoothing' ? Math.min(100, Math.max(0, finite(source[key]))) : Math.max(0, finite(source[key]))])),
         strokeColor: stringOr(source.strokeColor, '#ffffff'), points: finite(source.points, 5)
       };
     }

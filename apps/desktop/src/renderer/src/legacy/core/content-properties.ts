@@ -6,7 +6,7 @@ export function isProperty(value: any): boolean {
 export const contentFields: Record<string, string[]> = {
   text: ['text', 'font', 'weight', 'size', 'tracking', 'leading', 'align', 'color', 'italic', 'boxWidth', 'boxHeight'],
   solid: ['color', 'w', 'h', 'radius'],
-  shape: ['color', 'shape', 'w', 'h', 'radius', 'stroke', 'strokeColor', 'points'],
+  shape: ['color', 'shape', 'w', 'h', 'radius', 'radiusTL', 'radiusTR', 'radiusBR', 'radiusBL', 'smoothing', 'stroke', 'strokeColor', 'points'],
   image: ['fit', 'w', 'h'],
   video: ['fit', 'w', 'h', 'trim', 'speed', 'timeRemap', 'sourceTime'],
   audio: ['trim', 'gain', 'fadeIn', 'fadeOut'],
@@ -37,7 +37,7 @@ export function resolveContent(PM: any, layer: any, time: number): any {
 }
 
 export function contentLabel(key: string): string {
-  const names: Record<string, string> = { w: 'Width', h: 'Height', text: 'Text', font: 'Font', weight: 'Weight', size: 'Size', tracking: 'Tracking', leading: 'Leading', align: 'Align', color: 'Color', italic: 'Italic', boxWidth: 'Text Box Width', boxHeight: 'Text Box Height', shape: 'Shape', radius: 'Corner radius', stroke: 'Stroke', strokeColor: 'Stroke color', points: 'Points', fit: 'Fit', trim: 'Trim start', speed: 'Speed', gain: 'Gain', fadeIn: 'Fade in', fadeOut: 'Fade out' };
+  const names: Record<string, string> = { w: 'Width', h: 'Height', text: 'Text', font: 'Font', weight: 'Weight', size: 'Size', tracking: 'Tracking', leading: 'Leading', align: 'Align', color: 'Color', italic: 'Italic', boxWidth: 'Text Box Width', boxHeight: 'Text Box Height', shape: 'Shape', radius: 'Corner radius', radiusTL: 'Top left radius', radiusTR: 'Top right radius', radiusBR: 'Bottom right radius', radiusBL: 'Bottom left radius', smoothing: 'Corner smoothing', stroke: 'Stroke', strokeColor: 'Stroke color', points: 'Points', fit: 'Fit', trim: 'Trim start', speed: 'Speed', gain: 'Gain', fadeIn: 'Fade in', fadeOut: 'Fade out' };
   return names[key] ?? key;
 }
 

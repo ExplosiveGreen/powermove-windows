@@ -71,7 +71,7 @@ const EASING_PRESETS = new Set([
   'linear', 'ease', 'easeIn', 'easeOut', 'easeInOut', 'quadIn', 'quadOut', 'quadInOut',
   'cubicIn', 'cubicOut', 'cubicInOut', 'quartIn', 'quartOut', 'quartInOut', 'expoIn',
   'expoOut', 'expoInOut', 'circIn', 'circOut', 'circInOut', 'backIn', 'backOut',
-  'backInOut', 'power', 'snap', 'glide'
+  'backInOut', 'power', 'swish', 'snap', 'glide'
 ]);
 
 const COMMAND_FIELDS: Record<(typeof COMMAND_TYPES)[number], readonly string[]> = {

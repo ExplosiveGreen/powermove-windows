@@ -377,12 +377,17 @@ describe('timeline extension', () => {
     pointer(canvas, x, y);
     const edge = (): number => side === 'in' ? layer.from : layer.from + layer.dur;
     drag.move(95, 0, { shiftKey: true });
+    expect(edge()).toBeLessThan(value.state.time);
+    expect(timeline.snapGuide).toBeNull();
+    drag.move(102, 0, { shiftKey: true });
     expect(edge()).toBe(value.state.time);
-    drag.move(95, 0, { shiftKey: true });
+    expect(timeline.snapGuide).toBe(value.state.time);
+    drag.move(108, 0, { shiftKey: true });
     expect(edge()).toBe(value.state.time);
     drag.move(95, 0, { shiftKey: false });
     expect(edge()).toBeCloseTo(value.state.time - 1 / 30);
     drag.up();
+    expect(timeline.snapGuide).toBeNull();
     expect(value.api.edit.commit).toHaveBeenCalledExactlyOnceWith('Trim clip');
   });
 
@@ -407,11 +412,16 @@ describe('timeline extension', () => {
     pointer(canvas, timeline.gut + 3.5 * timeline.pps, timeline.ruler + timeline.row / 2);
     // Out edge (5) lands on the playhead (6); the exact delta is not frame-rounded.
     drag.move(95, 0, { shiftKey: true });
+    expect(layer.from + layer.dur).toBeLessThan(6);
+    expect(timeline.snapGuide).toBeNull();
+    drag.move(102, 0, { shiftKey: true });
     expect(layer.from + layer.dur).toBe(6);
+    expect(timeline.snapGuide).toBe(6);
     drag.move(108, 0, { shiftKey: true });
     expect(layer.from + layer.dur).toBe(6);
     drag.move(120, 0, { shiftKey: true });
     expect(layer.from + layer.dur).not.toBe(6);
+    expect(timeline.snapGuide).toBeNull();
     // Without Shift the move is plain frame snapping.
     drag.move(95, 0, { shiftKey: false });
     expect(layer.from * 30).toBeCloseTo(Math.round(layer.from * 30));

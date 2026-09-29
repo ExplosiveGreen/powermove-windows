@@ -25,6 +25,8 @@ export function propertyMetadata(api: Pick<PowermoveAPI, 'effects' | 'model'>, l
   const metadata: Record<string, { step?: number; min?: number; max?: number }> = {
     w: { step: 1, min: 1 }, h: { step: 1, min: 1 }, size: { step: 1, min: 4 },
     tracking: { step: .5 }, leading: { step: .02 }, radius: { step: 1, min: 0 },
+    radiusTL: { step: 1, min: 0 }, radiusTR: { step: 1, min: 0 }, radiusBR: { step: 1, min: 0 }, radiusBL: { step: 1, min: 0 },
+    smoothing: { step: 1, min: 0, max: 100 },
     stroke: { step: .5, min: 0 }, points: { step: 1, min: 3, max: 24 },
     weight: { step: 1, min: 1, max: 1000 }, speed: { step: .05, min: .05 },
     gain: { step: .05, min: 0, max: 4 }, trim: { step: .05, min: 0 },
