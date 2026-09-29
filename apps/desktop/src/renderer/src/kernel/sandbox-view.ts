@@ -90,15 +90,20 @@ export function mountSandboxView(host: ViewHost, panel: SandboxPanelInfo, body: 
      control that keeps focus off itself (it cancels pointerdown) leaves this
      frame focused, so a real press on the app after the frame took focus
      means the activation is the app's, until it lapses. Presses inside the
-     frame never reach this window. */
-  let focusedAt = -Infinity, pressedAt = -Infinity;
-  frame.addEventListener('focus', () => { focusedAt = performance.now(); focus(true); });
+     frame never reach this window. Focus the app hands back while it handles
+     its own press (a palette or menu closing restores it) is the app's too. */
+  let focusedAt = -Infinity, pressedAt = -Infinity, pressing = false;
+  frame.addEventListener('focus', () => { if (!pressing) focusedAt = performance.now(); focus(true); });
   frame.addEventListener('blur', () => focus(false));
-  const press = (event: Event): void => { if (event.isTrusted) pressedAt = performance.now(); };
+  const press = (event: Event): void => {
+    if (!event.isTrusted) return;
+    pressedAt = performance.now();
+    if (!pressing) { pressing = true; setTimeout(() => { pressing = false; }); }
+  };
   // The window's capture phase comes first: no app listener can stop a press before it.
   const app = frame.ownerDocument.defaultView ?? frame.ownerDocument;
-  app.addEventListener('pointerdown', press, true);
-  app.addEventListener('keydown', press, true);
+  const PRESSES = ['pointerdown', 'pointerup', 'click', 'keydown', 'keyup'];
+  for (const type of PRESSES) app.addEventListener(type, press, true);
 
   const disconnect = (): void => {
     if (!live) return;
@@ -178,8 +183,7 @@ export function mountSandboxView(host: ViewHost, panel: SandboxPanelInfo, body: 
       if (frame.ownerDocument.activeElement === frame) focus(false);
       observer?.disconnect();
       removalObserver?.disconnect();
-      app.removeEventListener('pointerdown', press, true);
-      app.removeEventListener('keydown', press, true);
+      for (const type of PRESSES) app.removeEventListener(type, press, true);
       frame.removeEventListener('load', connect);
       disconnect();
       frame.remove();

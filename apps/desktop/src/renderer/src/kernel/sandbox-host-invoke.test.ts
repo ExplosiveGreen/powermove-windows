@@ -233,12 +233,35 @@ it('refuses ui.copy after a press on the app that left the panel focused, until 
   expect(clipboardWriteText).toHaveBeenCalledExactlyOnceWith('after');
   clock += 100; now += 1_000;
   pressOnApp();
-  // Focus that moves into the frame after the press is a press in the frame.
+  // Focus that moves into the frame after the press, in a later task, is a press in the frame.
+  await new Promise(resolve => setTimeout(resolve));
   view.frame.blur();
   clock += 100;
   view.frame.focus();
   await view.rpc.call('invoke', 'ui', 'copy', ['refocused']);
   expect(clipboardWriteText).toHaveBeenLastCalledWith('refocused');
+});
+
+it('refuses ui.copy when the app hands focus back to the panel while handling its own press', async () => {
+  let clock = 1_000_000;
+  vi.spyOn(performance, 'now').mockImplementation(() => clock);
+  let now = 5_000_000;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const { view, clipboardWriteText } = await copier(['clipboard']);
+  view.frame.focus();
+  clock += 10_000; now += 10_000;
+  // The palette takes focus, and closing it on Enter restores focus to the panel.
+  const input = document.createElement('input');
+  document.body.append(input);
+  input.focus();
+  clock += 2_000;
+  input.addEventListener('keydown', () => { input.remove(); view.frame.focus(); });
+  const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true });
+  Object.defineProperty(enter, 'isTrusted', { value: true });
+  input.dispatchEvent(enter);
+  clock += 50;
+  await expect(view.rpc.call('invoke', 'ui', 'copy', ['hijack'])).rejects.toMatchObject({ message: expect.stringContaining('click or key press') });
+  expect(clipboardWriteText).not.toHaveBeenCalled();
 });
 
 it('opens a listed link without a sheet only from a focused panel right after a real click or key press', async () => {
