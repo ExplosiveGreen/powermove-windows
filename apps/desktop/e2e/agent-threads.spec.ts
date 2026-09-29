@@ -1,5 +1,58 @@
 import { test, expect } from './helpers/app';
 
+test('background run badge stays compact when creating and switching threads', async ({ session }) => {
+  await session.openEditor();
+  const page = session.page;
+  await page.evaluate(() => {
+    const PM = (window as any).PM;
+    PM.SpatialAssistant.open();
+    PM.AgentHarness.observe = async () => ({ state: {}, times: [], images: [] });
+    PM.CodexBridge.request = () => new Promise(resolve => {
+      (window as any).__finishBackgroundRun = () => resolve({
+        text: JSON.stringify({ summary: 'Background work finished', commands: [], artifacts: [], externalActions: [], notes: [] })
+      });
+    });
+  });
+  const composer = page.getByRole('textbox', { name: 'Message Powermove agent', exact: true });
+  const picker = page.getByRole('button', { name: 'Switch thread', exact: true });
+  const badge = picker.locator('.thread-running');
+  const first = await page.evaluate(() => (window as any).PM.AgentUI.state.threadId);
+  await composer.fill('Keep working while I create another thread');
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => typeof (window as any).__finishBackgroundRun)).toBe('function');
+  await page.getByRole('button', { name: 'New thread', exact: true }).click();
+  await expect(composer).toHaveText('');
+  await expect(badge).toHaveText('1');
+
+  // Exercise actual Chromium layout: DOM-only tests cannot detect a stretched dot.
+  for (const width of [240, 400]) {
+    await page.locator('.thread-bar').evaluate((bar, width) => {
+      (bar as HTMLElement).style.width = `${width}px`;
+    }, width);
+    const dot = await badge.locator('.thread-dot').boundingBox();
+    expect(dot?.width).toBe(6);
+    expect(dot?.height).toBe(6);
+    expect((await badge.boundingBox())!.width).toBeLessThan(40);
+  }
+  await page.locator('.thread-bar').evaluate(bar => (bar as HTMLElement).style.removeProperty('width'));
+
+  await picker.click();
+  const workingThread = page.getByRole('option').filter({ hasText: 'Working…' });
+  await expect.poll(async () => (await workingThread.locator('.thread-dot').boundingBox())?.width).toBe(6);
+  await workingThread.click();
+  await expect.poll(() => page.evaluate(() => (window as any).PM.AgentUI.state.threadId)).toBe(first);
+  await expect(badge).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Stop current run', exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'New thread', exact: true }).click();
+  await expect(badge).toHaveText('1');
+  await page.evaluate(() => (window as any).__finishBackgroundRun());
+  await expect(badge).toHaveCount(0);
+  await expect(composer).toHaveText('');
+  await expect(page.getByRole('log')).not.toContainText('Background work finished');
+  expect(session.diagnostics.pageErrors).toEqual([]);
+});
+
 test('Command+A selects the full agent composer draft', async ({ session }) => {
   await session.openEditor();
   const page = session.page;

@@ -208,7 +208,7 @@
       onpointercancel={() => { dismissByPress = false; }}
       onclick={toggle}
     >
-      <span>{active?.title || 'New thread'}</span>
+      <span class="thread-title">{active?.title || 'New thread'}</span>
       {#if agentState.backgroundRuns}
         <span class="thread-running" title={`${agentState.backgroundRuns} thread${agentState.backgroundRuns === 1 ? '' : 's'} still working`}>
           <span class="thread-dot" aria-hidden="true"></span>{agentState.backgroundRuns}
@@ -309,7 +309,7 @@
     flex-shrink: 0;
   }
   .thread-trigger { display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0; height: 28px; padding: 0 2px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--tx-2); font: inherit; font-size: var(--fs-sm); text-align: left; cursor: default; }
-  .thread-trigger span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .thread-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .thread-chevron { width: 14px; height: 14px; flex-shrink: 0; }
   .thread-new { display: grid; place-items: center; width: 28px; height: 28px; flex-shrink: 0; padding: 6px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--tx-3); cursor: default; }
   .thread-trigger:hover:not(:disabled), .thread-new:hover:not(:disabled) { color: var(--tx-2); }
