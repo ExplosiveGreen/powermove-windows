@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from 'vitest';
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, access, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, access, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { COMPATIBLE_WORKSPACE_TOOLS, CompatibleWorkspace, runWorkspaceCommand } from './compatible-workspace';
@@ -39,6 +40,72 @@ it.runIf(process.platform === 'darwin')('writes files and compiles where a plant
   expect(JSON.parse(((await ws.call('compile_extension', { id: 'linked-out' }, signal()))[0] as any).text)).toMatchObject({ ok: true });
   expect(await readdir(outside)).toEqual([]);
 });
+
+it.runIf(process.platform === 'darwin')('reads and lists in the Project sandbox, so a folder swapped for a link to credentials never leaks them', async () => {
+  const ws = await workspace();
+  const home = await mkdtemp(path.join(os.tmpdir(), 'pm-api-home-')); directories.push(home);
+  const ssh = path.join(home, '.ssh');
+  await mkdir(ssh);
+  await writeFile(path.join(ssh, 'key'), 'secret-key');
+  await writeFile(path.join(ssh, 'only-in-ssh'), '');
+  const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+  // `a` is by turns a real folder, missing, and a link to ~/.ssh.
+  const swap = `const fs = require('node:fs'); fs.mkdirSync('real'); fs.writeFileSync('real/key', 'decoy'); fs.symlinkSync(${JSON.stringify(ssh)}, 'link');
+    for (;;) { fs.renameSync('real', 'a'); fs.renameSync('a', 'real'); fs.renameSync('link', 'a'); fs.renameSync('a', 'link'); }`;
+  const previous = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    await ws.call('run_command', { command: `${quote(process.execPath)} -e ${quote(swap)}`, background: true }, signal());
+    await expect.poll(() => lstat(path.join(ws.layout.root, 'link')).then(() => true, () => false)).toBe(true);
+    const results: string[] = [];
+    for (let index = 0; index < 150; index++) {
+      for (const [name, file] of [['read_file', 'a/key'], ['list_files', 'a']] as const) {
+        results.push(await ws.call(name, { path: file }, signal()).then(result => JSON.stringify(result), (error: Error) => error.message));
+      }
+    }
+    expect(results.filter(result => result.includes('secret-key') || result.includes('only-in-ssh'))).toEqual([]);
+    // The race ran: some reads found the real folder in place.
+    expect(results.some(result => result.includes('decoy'))).toBe(true);
+  } finally {
+    process.env.HOME = previous;
+    await ws.stopCommands();
+  }
+}, 120_000);
+
+it.runIf(process.platform === 'darwin')('reads text, pages and images and lists odd names through the Project sandbox', async () => {
+  const ws = await workspace();
+  const json = async (name: string, args: Record<string, unknown>) => JSON.parse(((await ws.call(name, args, signal()))[0] as any).text);
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff, 0x80, 0x0a]);
+  await writeFile(path.join(ws.layout.root, 'shot.png'), png);
+  const [image] = await ws.call('read_file', { path: 'shot.png' }, signal());
+  expect(image).toMatchObject({ type: 'image', mimeType: 'image/png' });
+  expect(Buffer.from((image as any).data)).toEqual(png);
+  await writeFile(path.join(ws.layout.root, 'notes.txt'), 'héllo wörld');
+  expect(await json('read_file', { path: 'notes.txt', offset: 1, limit: 4 })).toEqual({ text: 'éllo', offset: 1, totalChars: 11 });
+  await writeFile(path.join(ws.layout.root, 'limit.txt'), Buffer.alloc(8 * 1024 * 1024, 97));
+  expect((await json('read_file', { path: 'limit.txt', limit: 1 })).totalChars).toBe(8 * 1024 * 1024);
+  await writeFile(path.join(ws.layout.root, 'large.txt'), Buffer.alloc(8 * 1024 * 1024 + 1, 97));
+  await expect(ws.call('read_file', { path: 'large.txt' }, signal())).rejects.toThrow('no larger than 8 MB');
+  await expect(ws.call('read_file', { path: 'missing.txt' }, signal())).rejects.toThrow(/no such file/i);
+  const odd = path.join(ws.layout.root, 'odd');
+  await mkdir(path.join(odd, 'sub dir'), { recursive: true });
+  for (const name of ['line\nbreak', "%s\\0 -x '", '.hidden']) await writeFile(path.join(odd, name), '');
+  await symlink('sub dir', path.join(odd, 'linked'));
+  execFileSync('/usr/bin/mkfifo', [path.join(odd, 'pipe')]);
+  const listed = await json('list_files', { path: 'odd' });
+  expect(listed.total).toBe(6);
+  expect(listed.entries.sort((a: any, b: any) => a.name.localeCompare(b.name))).toEqual([
+    { name: "%s\\0 -x '", directory: false }, { name: '.hidden', directory: false }, { name: 'line\nbreak', directory: false },
+    { name: 'linked', directory: false }, { name: 'pipe', directory: false }, { name: 'sub dir', directory: true }
+  ].sort((a, b) => a.name.localeCompare(b.name)));
+  await writeFile(path.join(odd, 'sub dir', 'inner.txt'), 'inner');
+  expect(await json('list_files', { path: 'odd/linked' })).toEqual({ entries: [{ name: 'inner.txt', directory: false }], total: 1 });
+  expect((await json('read_file', { path: 'odd/linked/inner.txt' })).text).toBe('inner');
+  // Neither waits on a FIFO nor reads a folder.
+  for (const file of ['odd/pipe', 'odd']) await expect(ws.call('read_file', { path: file }, signal())).rejects.toThrow('regular file');
+  await expect(ws.call('list_files', { path: 'notes.txt' }, signal())).rejects.toThrow(/not a directory/i);
+  await expect(ws.call('list_files', { path: 'missing' }, signal())).rejects.toThrow(/no such file/i);
+}, 30_000);
 
 it('reports real compile errors before publishing and exports created artifacts', async () => {
   const ws = await workspace();

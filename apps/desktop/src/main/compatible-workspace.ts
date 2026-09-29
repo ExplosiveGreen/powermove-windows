@@ -21,6 +21,8 @@ const object = (properties: Record<string, unknown>, required: string[]) => ({ t
 const COMMAND_TIMEOUT_MS = 600_000;
 const MAX_BACKGROUND_JOBS = 4;
 const JOB_OUTPUT_CHARS = 20_000;
+const MAX_READ_BYTES = 8 * 1024 * 1024;
+const LIST_BYTES = 16 * 1024 * 1024;
 export const COMPATIBLE_WORKSPACE_TOOLS: readonly PowermoveAgentToolSpec[] = [
   { name: 'list_files', description: 'List a workspace directory. Paths may be absolute or relative to the workspace.', inputSchema: object({ path: { type: 'string' } }, ['path']) },
   { name: 'read_file', description: 'Read a UTF-8 file, or return an image for visual inspection. Use offset/limit to page large text files. Read shipped API types and samples before implementing extensions.', inputSchema: object({ path: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 100000 } }, ['path']) },
@@ -40,8 +42,9 @@ export class CompatibleWorkspace {
 
   constructor(readonly layout: AgentWorkspace, readonly access: 'project' | 'computer', readonly context: 'app' | 'project' = 'project') {}
 
-  private async start(command: string, timeoutMs: number, signal: AbortSignal, keepTail: boolean, input?: string): Promise<WorkspaceCommand> {
-    const started = await startWorkspaceCommand(this.layout.root, this.access, command, { timeoutMs, signal, keepTail, input, runMark: this.mark });
+  private async start(command: string | readonly string[], timeoutMs: number, signal: AbortSignal,
+    options: { keepTail?: boolean; input?: string; stdoutBytes?: number } = {}): Promise<WorkspaceCommand> {
+    const started = await startWorkspaceCommand(this.layout.root, this.access, command, { timeoutMs, signal, ...options, runMark: this.mark });
     this.commands.add(started);
     void started.done.finally(() => this.commands.delete(started)).catch(() => undefined);
     return started;
@@ -85,19 +88,45 @@ export class CompatibleWorkspace {
   async call(name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<AgentToolContent[]> {
     signal.throwIfAborted();
     const text = (value: unknown): AgentToolContent[] => [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }];
+    // Project reads and listings run in the command sandbox too: a folder
+    // swapped for a link after resolve() still cannot reach credentials.
+    const sandboxed = this.access === 'project' && process.platform === 'darwin';
     if (name === 'list_files') {
-      const entries = await readdir(await this.resolve(args.path), { withFileTypes: true });
-      return text({ entries: entries.slice(0, 1000).map(entry => ({ name: entry.name, directory: entry.isDirectory() })), total: entries.length });
+      const directory = await this.resolve(args.path);
+      let entries: { name: string; directory: boolean }[];
+      if (sandboxed) {
+        // NUL-separated, so any name survives. -H follows only a linked folder asked for;
+        // entries' -type d does not follow links, like readdir's Dirent.
+        const listed = await this.readInSandbox(directory, LIST_BYTES, signal, 'if [ -e "$1" ] && [ ! -d "$1" ]; then exit 3; fi; '
+          + `exec /usr/bin/find -H "$1" -mindepth 1 -maxdepth 1 \\( -type d -exec /usr/bin/printf 'd%s\\0' {} + \\) -o -exec /usr/bin/printf 'f%s\\0' {} +`);
+        if (listed.exitCode === 3) throw new Error(`Not a directory: ${directory}`);
+        const records = listed.stdout.toString('utf8').split('\0');
+        // The last record is empty, or cut short by the byte limit.
+        entries = records.slice(0, -1).map(record => ({ name: record.slice(record.lastIndexOf('/') + 1), directory: record[0] === 'd' }));
+      } else {
+        entries = (await readdir(directory, { withFileTypes: true })).map(entry => ({ name: entry.name, directory: entry.isDirectory() }));
+      }
+      return text({ entries: entries.slice(0, 1000), total: entries.length });
     }
     if (name === 'read_file') {
       const file = await this.resolve(args.path);
-      const info = await stat(file);
-      if (!info.isFile() || info.size > 8 * 1024 * 1024) throw new Error('Read a regular file no larger than 8 MB; use run_command to inspect larger files.');
+      const tooLarge = () => new Error('Read a regular file no larger than 8 MB; use run_command to inspect larger files.');
+      let data: Buffer;
+      if (sandboxed) {
+        const read = await this.readInSandbox(file, MAX_READ_BYTES + 1, signal,
+          `if [ -e "$1" ] && [ ! -f "$1" ]; then exit 3; fi; exec /usr/bin/head -c ${MAX_READ_BYTES + 1} -- "$1"`);
+        if (read.exitCode === 3 || read.stdout.byteLength > MAX_READ_BYTES) throw tooLarge();
+        data = read.stdout;
+      } else {
+        const info = await stat(file);
+        if (!info.isFile() || info.size > MAX_READ_BYTES) throw tooLarge();
+        data = await readFile(file);
+      }
       const mime = mimeTypeForPath(file);
       if (mime === 'image/png' || mime === 'image/jpeg') {
-        return [{ type: 'image', mimeType: mime, data: new Uint8Array(await readFile(file)) }];
+        return [{ type: 'image', mimeType: mime, data: new Uint8Array(data) }];
       }
-      const source = await readFile(file, 'utf8');
+      const source = data.toString('utf8');
       const offset = boundedInteger(args.offset, 0, 0, source.length);
       const limit = boundedInteger(args.limit, 30000, 1, 100000);
       return text({ text: source.slice(offset, offset + limit), offset, totalChars: source.length });
@@ -110,7 +139,7 @@ export class CompatibleWorkspace {
         // check above still cannot lead outside the workspace.
         const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
         const written = await settleCommand(await this.start(`/bin/mkdir -p -- ${quote(path.dirname(file))} && /bin/cat >| ${quote(file)}`,
-          30000, signal, false, args.text), signal);
+          30000, signal, { input: args.text }), signal);
         if (written.exitCode !== 0) throw new Error(`Could not write ${file}: ${written.output.trim()}`);
       } else {
         await mkdir(path.dirname(file), { recursive: true });
@@ -122,12 +151,12 @@ export class CompatibleWorkspace {
       if (typeof args.command !== 'string' || !args.command.trim() || args.command.length > 100000) throw new Error('Provide a nonempty command, at most 100,000 characters.');
       if (args.background !== undefined && typeof args.background !== 'boolean') throw new Error('background must be true or false.');
       if (!args.background) {
-        return text(await settleCommand(await this.start(args.command, boundedInteger(args.timeoutMs, 30000, 1, COMMAND_TIMEOUT_MS), signal, false), signal));
+        return text(await settleCommand(await this.start(args.command, boundedInteger(args.timeoutMs, 30000, 1, COMMAND_TIMEOUT_MS), signal), signal));
       }
       if ([...this.jobs.values()].filter(job => job.running).length >= MAX_BACKGROUND_JOBS) {
         throw new Error(`At most ${MAX_BACKGROUND_JOBS} background jobs can run at once. Wait for or stop one with command_status.`);
       }
-      const job = await this.start(args.command, boundedInteger(args.timeoutMs, COMMAND_TIMEOUT_MS, 1, COMMAND_TIMEOUT_MS), signal, true);
+      const job = await this.start(args.command, boundedInteger(args.timeoutMs, COMMAND_TIMEOUT_MS, 1, COMMAND_TIMEOUT_MS), signal, { keepTail: true });
       const jobId = `job-${this.jobs.size + 1}`;
       this.jobs.set(jobId, job);
       return text({ jobId, state: 'running' });
@@ -148,6 +177,13 @@ export class CompatibleWorkspace {
     }
     if (name === 'compile_extension') return text(await this.compile(args.id));
     throw new Error(`Unknown workspace tool: ${name}`);
+  }
+
+  /** Run `script` in the Project sandbox with `target` as $1; exit 3 is the caller's to report. */
+  private async readInSandbox(target: string, bytes: number, signal: AbortSignal, script: string) {
+    const result = await settleCommand(await this.start(['/bin/sh', '-c', script, 'sh', target], 30000, signal, { stdoutBytes: bytes }), signal);
+    if (result.exitCode !== 0 && result.exitCode !== 3) throw new Error(`Could not read ${target}: ${result.output.trim()}`);
+    return { exitCode: result.exitCode, stdout: result.stdout ?? Buffer.alloc(0) };
   }
 
   private async compile(id: unknown) {
@@ -284,7 +320,8 @@ async function commandEnvironment(root: string, access: 'project' | 'computer'):
   return env;
 }
 
-export type WorkspaceCommandResult = { output: string; exitCode: number | null; truncated: boolean };
+/** `stdout` is the raw standard output, kept apart from `output` when `stdoutBytes` is set. */
+export type WorkspaceCommandResult = { output: string; exitCode: number | null; truncated: boolean; stdout?: Buffer };
 type CommandEnding = 'timeout' | 'abort' | 'stop';
 
 /** A started command. `done` settles once it and everything it started are gone. */
@@ -298,8 +335,9 @@ export interface WorkspaceCommand {
 /** A mach service name no one registers; a sandbox that denies it marks its processes. */
 const sandboxMark = () => `com.powermove.command.${randomUUID()}`;
 
-export async function startWorkspaceCommand(root: string, access: 'project' | 'computer', command: string,
-  options: { timeoutMs: number; signal: AbortSignal; keepTail?: boolean; input?: string; runMark?: string }): Promise<WorkspaceCommand> {
+/** A string runs in zsh; an argv array runs as is, without shell startup files. */
+export async function startWorkspaceCommand(root: string, access: 'project' | 'computer', command: string | readonly string[],
+  options: { timeoutMs: number; signal: AbortSignal; keepTail?: boolean; input?: string; runMark?: string; stdoutBytes?: number }): Promise<WorkspaceCommand> {
   const { timeoutMs, signal } = options;
   signal.throwIfAborted();
   const real = await realpath(root);
@@ -323,7 +361,7 @@ export async function startWorkspaceCommand(root: string, access: 'project' | 'c
   const startedAt = Date.now();
   // The command creates its own scratch folder, so the sandbox, not main,
   // decides where a planted link may lead.
-  const shell = ['/bin/sh', '-c', 'mkdir -p -- "$TMPDIR" 2>/dev/null; exec /bin/zsh -c "$1"', 'zsh', command];
+  const shell = typeof command === 'string' ? ['/bin/sh', '-c', 'mkdir -p -- "$TMPDIR" 2>/dev/null; exec /bin/zsh -c "$1"', 'zsh', command] : [...command];
   const child = spawn(access === 'project' ? '/usr/bin/sandbox-exec' : shell[0]!,
     access === 'project' ? ['-p', profile, ...shell] : shell.slice(1),
     { cwd: root, env, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -354,7 +392,15 @@ export async function startWorkspaceCommand(root: string, access: 'project' | 'c
     truncated ||= output.length + next.length > 100000;
     output += next.slice(0, Math.max(0, 100000 - output.length));
   };
-  child.stdout.on('data', append); child.stderr.on('data', append);
+  // Raw stdout, for file contents; bytes past the limit are drained and dropped.
+  const stdout: Buffer[] = [];
+  let stdoutLength = 0;
+  const capture = (chunk: Buffer) => {
+    const room = options.stdoutBytes! - stdoutLength;
+    truncated ||= chunk.byteLength > room;
+    if (room > 0) { stdout.push(chunk.subarray(0, room)); stdoutLength += Math.min(room, chunk.byteLength); }
+  };
+  child.stdout.on('data', options.stdoutBytes === undefined ? append : capture); child.stderr.on('data', append);
   const done = new Promise<WorkspaceCommandResult & { ending: CommandEnding | null }>((resolve, reject) => {
     const cleanup = () => { clearTimeout(timer); signal.removeEventListener('abort', onAbort); running = false; };
     child.on('error', error => { cleanup(); void sweep(); reject(error); });
@@ -364,7 +410,8 @@ export async function startWorkspaceCommand(root: string, access: 'project' | 'c
       exited = true;
       void sweep().finally(() => setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); }, 250).unref());
     });
-    child.on('close', code => { cleanup(); exitCode = code; resolve({ output, exitCode: code, truncated, ending }); });
+    child.on('close', code => { cleanup(); exitCode = code; resolve({ output, exitCode: code, truncated, ending,
+      ...(options.stdoutBytes === undefined ? {} : { stdout: Buffer.concat(stdout) }) }); });
   });
   done.catch(() => undefined);
   return {
