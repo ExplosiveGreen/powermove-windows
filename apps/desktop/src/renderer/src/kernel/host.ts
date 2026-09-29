@@ -71,6 +71,7 @@ import { chordOfEvent } from './keychord';
 import { ASYNC_CONTRIBUTOR, runKernelCommand, settledWhen, withWhenCheck, type Kernel } from './registries';
 import { mountComponent } from './runtime-globals';
 import { performanceMonitor } from '../runtime/performance-monitor';
+import { extensionLoad } from '../runtime/extension-load';
 import { IMPORT_DEFAULTS_SERVICE, validatedImportDefaults } from './import-defaults';
 import { bridge as hostBridge } from './bridge';
 import { PANEL_FRAME, type PanelFrame } from './panel-frame';
@@ -218,7 +219,11 @@ export function createExtensionAPI(
       } catch (error) {
         return fail(error);
       } finally {
-        if (record.scope !== 'builtin') performanceMonitor.record({ id: `extension:${id}`, name: `${manifest.name} · ${label}`, kind: 'extension' }, performance.now() - start);
+        if (record.scope !== 'builtin') {
+          const elapsed = performance.now() - start;
+          performanceMonitor.record({ id: `extension:${id}`, name: `${manifest.name} · ${label}`, kind: 'extension' }, elapsed);
+          extensionLoad.record(id, elapsed);
+        }
       }
     };
   }

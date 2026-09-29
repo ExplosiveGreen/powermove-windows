@@ -827,6 +827,7 @@
   onpointerdown={(event) => { if (event.target === event.currentTarget) PM.LibraryUI?.close?.(); }}
   onkeydown={keydown}
 >
+  <div class="titlebar-overlay-drag" aria-hidden="true"></div>
   <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
   <section
     id="library-screen"

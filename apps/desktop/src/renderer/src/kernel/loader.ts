@@ -15,6 +15,7 @@ import type { VarsBridge } from '../../../shared/vars-ipc';
 import { MANIFEST_LIMITS, needsTrust } from '../../../shared/extensions';
 import { createExtensionAPI, type ExtensionHandle, type HostDeps } from './host';
 import { createSandboxRuntime, type SandboxRuntime } from './sandbox-host';
+import { extensionLoad, noticeSlowExtensions } from '../runtime/extension-load';
 
 /* The loader speaks about an extension rather than as one, so it stamps the
    attribution itself. `source` is host-side and not part of the extension's
@@ -348,6 +349,7 @@ export function createLoader(options: LoaderOptions): Loader {
     }
     kernel.disposeOwner(id);
     failures.delete(id);
+    extensionLoad.forget(id);
     if (entry) kernel.events.emit('extension:unloaded', { id });
   }
 
@@ -481,6 +483,21 @@ export function createLoader(options: LoaderOptions): Loader {
     });
   }
 
+  /* Name an extension the user added when it is costing the editor too much
+     (runtime/extension-load.ts). Built-ins are ours to fix, not theirs. */
+  const stopSlowNotices = noticeSlowExtensions({
+    nameOf: (id) => {
+      const record = recordFor(id);
+      return record && record.scope !== 'builtin' && active.has(id) ? nameOf(record, id) : null;
+    },
+    toast: (text, opts) => deps.ui.toast(text, opts as ToastArgs),
+    turnOff: async (id) => {
+      if (bridge) return void await bridge.setEnabled({ id, enabled: false });
+      patchRecord(id, { enabled: false });
+      await enqueue(() => deactivate(id));
+    }
+  });
+
   if (bridge) {
     try {
       unsubscribe = bridge.onChanged(onChanged);
@@ -501,6 +518,7 @@ export function createLoader(options: LoaderOptions): Loader {
     whenIdle: () => queue,
     async dispose() {
       disposed = true;
+      stopSlowNotices();
       unsubscribe?.();
       unsubscribe = null;
       await queue;

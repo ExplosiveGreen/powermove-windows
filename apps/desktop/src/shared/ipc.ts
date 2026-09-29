@@ -543,6 +543,9 @@ export interface LogRequest {
 }
 export type MenuCommand =
   | 'newProject'
+  | 'newComposition'
+  | 'compositionSettings'
+  | 'precompose'
   | 'save'
   | 'saveAs'
   | 'open'

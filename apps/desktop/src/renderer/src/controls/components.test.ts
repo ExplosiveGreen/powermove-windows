@@ -588,7 +588,10 @@ describe('picker drafts', () => {
     target.querySelector<HTMLButtonElement>('button.color-field')!.click();
     await tick();
 
-    document.body.querySelector<HTMLButtonElement>('[role="tab"]')!.click();
+    // Fill types own the tabs; the (shared) color space is a header menu here.
+    expect([...document.body.querySelectorAll('.fill-picker [role="tab"]')].map((tab) => tab.textContent)).toEqual(['Solid', 'Linear', 'Radial', 'None']);
+    document.body.querySelector<HTMLButtonElement>('.cp-space')!.click();
+    [...document.body.querySelectorAll<HTMLElement>('.pm-menu-item')].find((item) => item.textContent === 'sRGB')!.click();
     flushSync();
     const sv = document.body.querySelector<HTMLElement>('.cp-plane')!;
     vi.spyOn(sv, 'getBoundingClientRect').mockReturnValue({
@@ -604,8 +607,12 @@ describe('picker drafts', () => {
     }));
     expect(invalidate).toHaveBeenLastCalledWith('render');
 
-    document.body.querySelector<HTMLButtonElement>('.fill-picker footer .pri')!.click();
+    // Clicking away keeps the fill; there is no Apply button.
+    expect(document.body.querySelector('.fill-picker footer')).toBeNull();
+    document.body.querySelector<HTMLElement>('.fill-picker-layer')!.dispatchEvent(pointer('pointerdown', { pointerId: 2 }));
     expect(Edit.commit).toHaveBeenCalledWith('Fill');
+    flushSync();
+    expect(document.body.querySelector('.fill-picker')).toBeNull();
     expect(Edit.apply).not.toHaveBeenCalled();
   });
 
@@ -641,7 +648,7 @@ describe('picker drafts', () => {
     target.querySelector<HTMLButtonElement>('button.color-field')!.click();
     await tick();
     expect(document.body.querySelector<HTMLElement>('.fill-picker')!.style.top).not.toBe('0px');
-    document.body.querySelector<HTMLButtonElement>('.fill-picker footer .pri')!.click();
+    document.body.querySelector<HTMLButtonElement>('.fill-picker [aria-label="Close"]')!.click();
     expect(normalizeFill).toHaveBeenCalled();
     const command = Edit.apply.mock.calls[0]![0] as any;
     expect(command.value).toMatchObject({ type: 'linear', angle: 180 });
@@ -667,8 +674,11 @@ describe('picker drafts', () => {
     const stop = document.body.querySelector<HTMLInputElement>('.fill-stop-color')!;
     stop.value = '#12';
     stop.dispatchEvent(new InputEvent('input', { bubbles: true }));
-    document.body.querySelector<HTMLButtonElement>('.fill-picker footer .pri')!.click();
-    const command = Edit.apply.mock.calls[0]![0] as any;
-    expect(command.value.stops[0].color).toBe('#FF0000');
+    document.body.querySelector<HTMLElement>('.fill-picker-layer')!.dispatchEvent(pointer('pointerdown', { pointerId: 1 }));
+    // Nothing valid changed, so closing records no edit.
+    expect(Edit.apply).not.toHaveBeenCalled();
+    expect(Edit.dispatch).not.toHaveBeenCalled();
+    flushSync();
+    expect(document.body.querySelector('.fill-picker')).toBeNull();
   });
 });

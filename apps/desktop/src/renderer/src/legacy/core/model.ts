@@ -2,6 +2,7 @@ import { CHANNELS_3D } from './space-3d';
 /* Ported from js/core/model.js — behavior-preserving. */
 import { normalizeExportDefaults } from '../../core/export-defaults';
 import type { PMRegistry } from '../registry';
+import { install as installCompositions } from './compositions';
 import { installLayerGroups } from './layer-groups';
 import { installProjectIndex } from './project-index';
 import { timelineService } from './services';
@@ -176,8 +177,11 @@ PM.mkProject = (o: any = {}) => ({
   w: o.w || 1920, h: o.h || 1080, fps: o.fps || 30, dur: o.dur || 10,
   bg: o.bg || '#000000',
   backgroundFill: PM.normalizeFill(o.backgroundFill, o.bg || '#000000'),
+  /* The composition open in the Timeline; the others live in `comps`. */
+  compId: uid('C'),
+  compName: o.compName || o.name || 'Comp 1',
   layers: [],
-  comps: {},          // nested compositions, referenced by precomp layers (d.comp = comp id)
+  comps: {},          // every other composition, referenced by precomp layers (d.comp = comp id)
   assets: {},
   markers: [],
   work: [0, o.dur || 10],
@@ -221,21 +225,15 @@ PM.removeLayers = (ids: any) => {
   ids = PM.expandGroups(([] as any[]).concat(ids));
   PM.proj.layers = PM.proj.layers.filter((l: any) => !ids.includes(l.id));
   PM.proj.layers.forEach((l: any) => { if (ids.includes(l.parent)) l.parent = null; });
-  /* garbage-collect compositions that are no longer referenced by any precomp layer */
-  const referenced = new Set<any>();
-  const scan = (layers: any) => layers.forEach((l: any) => {
-    if (l.type === 'precomp' && l.d && l.d.comp) referenced.add(l.d.comp);
-  });
-  scan(PM.proj.layers);
-  Object.values(PM.proj.comps || {}).forEach((c: any) => scan(c.layers));
-  for (const cid of Object.keys(PM.proj.comps || {})) if (!referenced.has(cid)) delete PM.proj.comps[cid];
+  /* Compositions are project items: deleting the last layer that uses one
+     leaves it in the Project panel, as in After Effects. */
   PM.sel.layers = PM.sel.layers.filter((i: any) => !ids.includes(i));
   PM.ProjectIndex.invalidate();
   PM.bus.emit('layers');
 };
 
-// Compatibility entry point: new precomposes are editable timeline groups.
-PM.precompose = (ids: any, name: any) => PM.groupLayers(([] as any[]).concat(ids), name);
+installCompositions(PM);
+PM.precompose = (ids: any, name: any, options: any = {}) => PM.Comps.precompose(([] as any[]).concat(ids), { name, ...options });
 
 /** Resolve a precomp layer to its nested project (null when unresolved). */
 PM.compOf = (L: any) => {

@@ -2,6 +2,7 @@ import { CHANNELS_3D } from '../../legacy/core/space-3d';
 import { canAnimateContent, isProperty } from '../../legacy/core/content-properties';
 import { adoptTemporalEase } from '../anim/temporal-ease';
 import { compactEditLog } from '../edit-log';
+import { normalizeCompositions } from '../../legacy/core/compositions';
 import {
   BLEND_MODES,
   TYPE_META,
@@ -662,6 +663,7 @@ export function sanitizeProject(raw: unknown): Project {
       if (comp) project.comps[id] = comp;
     }
   }
+  normalizeCompositions(project, uid);
   project.layers = Array.isArray(source.layers)
     ? source.layers.map((layer, index) => sanitizeLayer(layer, index, project))
     : [];
@@ -676,7 +678,7 @@ export function sanitizeProject(raw: unknown): Project {
   }
   for (const layer of project.layers) {
     if (layer.parent && !ids.has(layer.parent)) layer.parent = null;
-    if (layer.type === 'precomp' && (!layer.d.comp || !project.comps[layer.d.comp])) layer.d.comp = null;
+    if (layer.type === 'precomp' && (!layer.d.comp || (layer.d.comp !== project.compId && !project.comps[layer.d.comp]))) layer.d.comp = null;
   }
   for (const comp of Object.values(project.comps)) {
     const compIds = new Set(comp.layers.map(layer => layer.id));

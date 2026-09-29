@@ -54,12 +54,12 @@ test('Settings › Project edits the live composition and its export settings', 
   }
 });
 
-test('New composition asks for the settings that matter before creating', async ({}, info) => {
+test('New project asks for the settings that matter before creating', async ({}, info) => {
   const session = await launchApp();
   try {
     const { page } = session;
     await page.evaluate(() => (window as any).PM.newProject());
-    const dialog = page.getByRole('dialog', { name: 'New composition', exact: true });
+    const dialog = page.getByRole('dialog', { name: 'New project', exact: true });
     await expect(dialog).toBeVisible();
 
     await dialog.getByLabel('Project name').fill('Square spot');
@@ -98,7 +98,7 @@ test('New composition asks for the settings that matter before creating', async 
     await expect(colorPicker.getByLabel('Background hex value')).toHaveValue('#0A84FF');
 
     // Dismissing the picker must not send focus back through a native colour
-    // input and reopen it. The New composition dialog remains in place.
+    // input and reopen it. The New project dialog remains in place.
     await page.mouse.click(8, 8);
     await expect(colorPicker).toHaveCount(0);
     await expect(dialog).toBeVisible();

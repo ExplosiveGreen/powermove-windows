@@ -4,6 +4,7 @@ import { createTimelineRuntime, timelinePanelOptions } from './timeline';
 import { adjacentKeyframe } from './keyframe-navigation';
 import { createPropertyReveal, propertyShortcuts } from './property-reveal';
 import { selectedLayers, trimAtStart } from './api-helpers';
+import { COMP_TABS_STYLES, mountCompTabs } from './comp-tabs';
 
 let activeApi: PowermoveAPI | null = null;
 
@@ -40,7 +41,7 @@ const TIMELINE_STYLES = `
 #tl-time.edit{color:var(--accent)}
 #tl-canvas-wrap{flex:1;position:relative;min-height:0;overflow:hidden}
 #tl-canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
-`;
+${COMP_TABS_STYLES}`;
 
 export function toggleLayerStrips(api: PowermoveAPI): void {
   const layers = selectedLayers(api);
@@ -127,8 +128,10 @@ export default function activate(api: PowermoveAPI): void {
      module instance's disposer so disabling/reloading the extension cannot
      leave its bus, window, observer, or DOM listeners alive. */
   const disposeRuntime = timeline.disposeRuntime;
+  let disposeTabs: (() => void) | null = null;
   api.onDispose(() => {
     if (activeApi === api) activeApi = null;
+    disposeTabs?.();
     disposeRuntime();
   });
   api.services.register('timeline', timeline);
@@ -165,8 +168,11 @@ export default function activate(api: PowermoveAPI): void {
       canvas.id = 'tl-canvas';
       wrap.appendChild(canvas);
 
-      body.replaceChildren(styles, head, wrap);
+      const tabs = document.createElement('div');
+      body.replaceChildren(styles, tabs, head, wrap);
       if (moveHandle) head.prepend(moveHandle);
+      disposeTabs?.();
+      disposeTabs = mountCompTabs(api, tabs);
 
       timeline.attachHead(head);
       timeline.attachCanvas(wrap);

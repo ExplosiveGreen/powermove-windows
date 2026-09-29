@@ -19,9 +19,26 @@
     path?: string;
   }
 
+  interface CompItem {
+    id: string;
+    name: string;
+    w: number;
+    h: number;
+    fps: number;
+    dur: number;
+    bg: string;
+    open: boolean;
+    uses: number;
+  }
+
   let { panelId }: PanelProps = $props();
 
   const PM = window.PM as Record<string, any>;
+  /* Compositions are project items, listed with the footage like AE's Project panel. */
+  const comps = $derived((doc.tick.project, doc.tick.structure, doc.tick.history, doc.proj,
+    (PM.Comps?.list?.() ?? []) as CompItem[]));
+  let selectedCompId = $state<string | null>(null);
+  let draggingCompId = $state<string | null>(null);
   const assets = $derived((doc.tick.assets, doc.proj, Object.values(doc.proj?.assets ?? {}) as Asset[]));
   let selectedAssetId = $state<string | null>(null);
   const activeAssetId = $derived(
@@ -128,7 +145,10 @@
     PM.menu(event.currentTarget, [
       { header: asset.name },
       ...(offline && PM.assets.cloud?.get(asset.id) ? [{ label: 'Download from cloud', run: () => PM.assets.cloud.download(asset.id) }] : []),
-      ...(offline ? [] : [{ label: 'Add to timeline', run: () => PM.cmd('addFromAsset', asset.id) }]),
+      ...(offline ? [] : [
+        { label: 'Add to timeline', run: () => PM.cmd('addFromAsset', asset.id) },
+        ...(asset.kind === 'audio' || asset.kind === 'model' ? [] : [{ label: 'New Comp from Selection', run: () => PM.cmd('newCompFromMedia', asset.id) }]),
+      ]),
       { label: offline ? 'Locate File…' : 'Replace File…', run: () => PM.pickFiles(false, { replaceAssetId: asset.id }) },
       ...(sourcePath ? [{ label: 'Reveal in Finder', run: () => revealAssetSource(asset) }] : []),
       '-',
@@ -195,6 +215,7 @@
   }
 
   function selectAsset(id: string, row?: HTMLElement): void {
+    selectedCompId = null;
     selectedAssetId = id;
     row?.focus();
     status = `Selected ${assets.find((asset) => asset.id === id)?.name ?? 'media'}`;
@@ -333,6 +354,7 @@
     const preview = PM.Kernel?.services.get('viewer')?.preview;
     const shouldClearPreview = selectedAssetId !== null || !!preview?.activeId;
     selectedAssetId = null;
+    selectedCompId = null;
     status = '';
     if (shouldClearPreview) preview?.clear?.();
     (document.activeElement as HTMLElement | null)?.blur?.();
@@ -344,6 +366,11 @@
      The source monitor itself is part of that ownership — its transport and
      close button must survive the press that reaches them. */
   function handleWindowPointerDown(event: PointerEvent): void {
+    if (selectedCompId) {
+      const card = event.target instanceof Element ? event.target.closest<HTMLElement>('.asset-card[data-comp-id]') : null;
+      if (card?.dataset.compId !== selectedCompId) selectedCompId = null;
+      return;
+    }
     if (!selectedAssetId) return;
     const target = event.target;
     if (!(target instanceof Element)) { clearSelection(); return; }
@@ -433,6 +460,81 @@
     }
   }
 
+  /* ── compositions ── */
+  function showProjectMenu(event: MouseEvent): void {
+    if ((event.target as Element).closest('.asset-card')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    PM.menu(event.currentTarget, [
+      { label: 'New Composition…', kb: '⌘N', run: () => PM.cmd('newComposition') },
+      { label: 'Import Media…', kb: '⌘I', run: () => PM.pickFiles() },
+    ], { x: event.clientX, y: event.clientY });
+  }
+
+  function compDetails(comp: CompItem): string {
+    const fps = Math.round(comp.fps * 100) / 100;
+    return `${comp.w}×${comp.h} · ${fps} fps · ${mediaDuration(comp.dur) || `${comp.dur}s`}`;
+  }
+
+  function selectComp(id: string, row?: HTMLElement): void {
+    selectedAssetId = null;
+    PM.Kernel?.services.get('viewer')?.preview?.clear?.();
+    selectedCompId = id;
+    row?.focus();
+    status = `Selected ${comps.find((comp) => comp.id === id)?.name ?? 'composition'}`;
+  }
+
+  function openComp(comp: CompItem): void {
+    PM.cmd('openComposition', comp.id);
+    status = `Opened ${comp.name}`;
+  }
+
+  function nestComp(comp: CompItem): void {
+    if (PM.cmd('addCompositionToTimeline', comp.id)) status = `Added ${comp.name} to ${PM.proj.compName}`;
+  }
+
+  function showCompMenu(event: MouseEvent, comp: CompItem): void {
+    event.preventDefault();
+    event.stopPropagation();
+    selectComp(comp.id, event.currentTarget as HTMLElement);
+    const nestable = PM.Comps.canNest(comp.id);
+    PM.menu(event.currentTarget, [
+      { header: comp.name },
+      { label: 'New Composition…', kb: '⌘N', run: () => PM.cmd('newComposition') },
+      { label: 'Open in Timeline', disabled: comp.open, run: () => openComp(comp) },
+      { label: 'Add to timeline', disabled: !nestable, run: () => nestComp(comp) },
+      '-',
+      { label: 'Composition Settings…', run: () => PM.cmd('compositionSettings', comp.id) },
+      { label: 'Duplicate', run: () => { const id = PM.cmd('duplicateComposition', comp.id); if (id) selectedCompId = id; } },
+      '-',
+      { label: 'Delete composition…', disabled: comps.length <= 1, run: () => PM.cmd('deleteComposition', comp.id) },
+    ], { x: event.clientX, y: event.clientY });
+  }
+
+  function handleCompDragStart(event: DragEvent, comp: CompItem): void {
+    if ((event.target as Element).closest('button')) { event.preventDefault(); return; }
+    const dt = event.dataTransfer;
+    if (!dt) return;
+    const payload = { id: comp.id, name: comp.name, kind: 'comp', dur: comp.dur };
+    dt.setData('application/x-powermove-asset', JSON.stringify(payload));
+    dt.effectAllowed = 'copy';
+    const tile = (event.currentTarget as HTMLElement).querySelector<HTMLElement>('.asset-preview');
+    if (tile) dt.setDragImage(tile, tile.offsetWidth / 2, tile.offsetHeight / 2);
+    draggingCompId = comp.id;
+    selectedCompId = comp.id;
+    PM.mediaDrag = payload;
+  }
+  function handleCompDragEnd(): void { draggingCompId = null; PM.mediaDrag = null; }
+
+  function handleCompKeydown(event: KeyboardEvent, comp: CompItem): void {
+    if (event.target !== event.currentTarget) return;
+    if (event.key === 'Enter') { event.preventDefault(); openComp(comp); }
+    else if (event.key === 'Delete' || event.key === 'Backspace') {
+      event.preventDefault(); event.stopPropagation();
+      PM.cmd('deleteComposition', comp.id);
+    } else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); clearSelection(); }
+  }
+
 </script>
 
 <div
@@ -447,8 +549,46 @@
   ondragover={handleDragOver}
   ondragleave={handleDragLeave}
   ondrop={handleDrop}
+  oncontextmenu={showProjectMenu}
 >
   <div class="asset-list" role="listbox" tabindex="-1" aria-label="Project media" bind:this={listElement} onpointerdown={handleListPointerDown}>
+    {#each comps as comp (comp.id)}
+      <div
+        class="asset-card is-comp"
+        class:is-dragging={draggingCompId === comp.id}
+        class:is-open={comp.open}
+        role="option"
+        tabindex="-1"
+        aria-selected={selectedCompId === comp.id}
+        aria-current={comp.open ? 'true' : undefined}
+        data-comp-id={comp.id}
+        draggable="true"
+        title={`${comp.name} · double-click to open, or drag into a timeline`}
+        ondragstart={(event) => handleCompDragStart(event, comp)}
+        ondragend={handleCompDragEnd}
+        onpointerdown={(event) => { if (event.button === 0 && !(event.target as Element).closest('button')) selectComp(comp.id, event.currentTarget as HTMLElement); }}
+        oncontextmenu={(event) => showCompMenu(event, comp)}
+        ondblclick={(event) => { if ((event.target as Element).closest('button')) return; event.preventDefault(); openComp(comp); }}
+        onkeydown={(event) => handleCompKeydown(event, comp)}
+      >
+        <span class="asset-preview comp" style={`--comp-bg:${comp.bg || '#000000'};--comp-ratio:${comp.w}/${comp.h}`}>
+          <span class="comp-frame" aria-hidden="true"></span>
+          <Icon {PM} name="layers" />
+          <span class="asset-badge">{mediaDuration(comp.dur) || `${comp.dur}s`}</span>
+          {#if comp.open}<span class="comp-open" role="img" aria-label="Open in the timeline"></span>{/if}
+          <span class="asset-actions">
+            <button class="asset-add" type="button" title="Add to timeline" aria-label={`Add ${comp.name} to timeline`} disabled={!(doc.tick.structure, PM.Comps.canNest(comp.id))}
+              onclick={(event) => { event.stopPropagation(); nestComp(comp); }}>
+              <Icon {PM} name="plus" />
+            </button>
+          </span>
+        </span>
+        <span class="asset-copy">
+          <b title={comp.name}>{comp.name}</b>
+          <small title={compDetails(comp)}>{compDetails(comp)}</small>
+        </span>
+      </div>
+    {/each}
     {#each assets as asset, index (asset.id)}
       {@const currentAsset = (doc.tick.assets, liveAsset(asset))}
       {@const posterSrc = (doc.tick.assets, posterUrl(asset))}

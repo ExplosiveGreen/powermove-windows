@@ -104,8 +104,8 @@ input::placeholder,textarea::placeholder{color:var(--tx-4)}
 /* Section surfaces keep their overflow/keyboard semantics while the product
    hides scrollbar chrome. Include descendants because panels such as Project
    own a nested scrolling list. The same CSS is copied into detached windows. */
-.panel,.panel *,.library-content,.spatial-preview,.pop-mirror,.pop-mirror *,.fill-picker-body{scrollbar-width:none}
-.panel::-webkit-scrollbar,.panel *::-webkit-scrollbar,.library-content::-webkit-scrollbar,.spatial-preview::-webkit-scrollbar,.pop-mirror::-webkit-scrollbar,.pop-mirror *::-webkit-scrollbar,.fill-picker-body::-webkit-scrollbar{display:none}
+.panel,.panel *,.library-content,.spatial-preview,.pop-mirror,.pop-mirror *,.fill-picker{scrollbar-width:none}
+.panel::-webkit-scrollbar,.panel *::-webkit-scrollbar,.library-content::-webkit-scrollbar,.spatial-preview::-webkit-scrollbar,.pop-mirror::-webkit-scrollbar,.pop-mirror *::-webkit-scrollbar,.fill-picker::-webkit-scrollbar{display:none}
 
 /* ── shell ─────────────────────────────────────────────── */
 #app{display:flex;flex-direction:column;height:100vh;background:transparent}
@@ -135,7 +135,8 @@ input::placeholder,textarea::placeholder{color:var(--tx-4)}
 .project-tab-scroll.fade-end{-webkit-mask-image:linear-gradient(to left,transparent,#000 28px);mask-image:linear-gradient(to left,transparent,#000 28px)}
 .project-tab-scroll.fade-start.fade-end{-webkit-mask-image:linear-gradient(to right,transparent,#000 28px,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(to right,transparent,#000 28px,#000 calc(100% - 28px),transparent)}
 #tabs :is([role="tab"],button):focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
-.titlebar-drag{flex:1 1 0;align-self:stretch;min-width:24px;pointer-events:auto;-webkit-app-region:drag}
+/* Keep a dependable grab target when tabs fill the strip at the minimum window width. */
+.titlebar-drag{flex:1 1 0;align-self:stretch;min-width:80px;pointer-events:auto;-webkit-app-region:drag}
 .titlebar-drag-traffic{position:absolute;left:0;top:0;bottom:0;width:var(--traffic-inset);flex:none}
 /* Served to a browser there are no traffic lights to leave room for. */
 .remote-app #titlebar{--traffic-inset:var(--pad)}
@@ -530,15 +531,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:11px;heigh
 .color-dialog :is(.fill-sv,.fill-hue){touch-action:none}
 .color-dialog :is(button,[role="slider"]):focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .sw{width:22px;height:18px;border-radius:var(--r-sm);background:var(--sw-fill,var(--sw-color,#808080));position:relative;flex:none}
-.fill-picker-layer{position:fixed;inset:0;z-index:460;background:transparent}
-.fill-picker{position:fixed;width:400px;max-height:min(560px,calc(100vh - 64px));display:flex;flex-direction:column;border:0;border-radius:var(--r-lg);background:var(--bg-float);box-shadow:var(--shadow-float);overflow:hidden}
-.fill-picker>header,.fill-picker>footer{height:40px;display:flex;align-items:center;gap:6px;padding:0 10px;border-bottom:1px solid var(--line)}
-.fill-picker>header b{flex:1;font-size:var(--fs-md)}.fill-picker>footer{justify-content:flex-end;border-top:1px solid var(--line);border-bottom:0}
-.fill-picker-body{padding:8px;display:flex;flex-direction:column;gap:7px;overflow:auto}
-.fill-types{display:grid;grid-template-columns:repeat(4,1fr);gap:3px;padding:3px;border-radius:var(--r-md);background:var(--bg-row)}
-.fill-type{height:25px;border-radius:var(--r-sm);color:var(--tx-3);font-size:var(--fs-xs)}.fill-type:hover{color:var(--tx);background:var(--bg-row-hi)}.fill-type.on{color:var(--tx);background:var(--ctl-raised);box-shadow:var(--ctl-edge)}
-.fill-picker :is(.fill-type,.fill-sv,.fill-hue,input,button):focus-visible{outline:0}
-.fill-preview{height:10px;border-radius:var(--r-xs);background:var(--bg-field)}
+.fill-picker-layer{position:fixed;inset:44px 0 0;z-index:460;background:transparent}
 .fill-color-workbench{display:flex;flex-direction:column;gap:7px}.fill-color-main{height:164px;display:grid;grid-template-columns:1fr 18px;gap:7px}
 .fill-sv{position:relative;overflow:hidden;border-radius:var(--r-md);background:linear-gradient(0deg,#000,transparent),linear-gradient(90deg,#fff,transparent),var(--hue-color);cursor:crosshair}
 .fill-sv i{position:absolute;width:12px;height:12px;border:2px solid #fff;border-radius:50%;transform:translate(-50%,-50%);box-shadow:0 0 0 1px var(--accent),0 1px 3px rgba(15,15,20,.24);pointer-events:none}
@@ -548,11 +541,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:11px;heigh
 .fill-channels-toggle{height:30px;padding:0 9px;border-radius:var(--r-sm);background:var(--bg-row);color:var(--tx-2);font-size:var(--fs-xs)}.fill-channels-toggle:hover,.fill-channels-toggle.on{background:var(--bg-row-hi);color:var(--tx)}
 .fill-channels{grid-column:1/-1;display:grid;grid-template-columns:repeat(3,1fr);gap:6px 8px;padding:8px;border-radius:var(--r-md);background:var(--bg-row)}.fill-channels[hidden]{display:none}.fill-channel{display:grid;grid-template-columns:14px 1fr;align-items:center;gap:3px;font-size:var(--fs-xs);color:var(--tx-3)}.fill-channel input{width:100%;height:24px;padding:0 5px;border-radius:var(--r-sm);background:var(--bg-field);font:var(--fs-xs) var(--f-mono)}
 .fill-palette-row{display:flex;align-items:center}.fill-palette{flex:1;display:grid;grid-template-columns:repeat(12,1fr);gap:4px}.fill-spectrum-color{height:20px;border-radius:var(--r-xs);background:var(--sw-color)}.fill-spectrum-color:hover{transform:translateY(-1px)}
-.fill-stops{display:flex;flex-direction:column;gap:3px;padding-top:1px}.fill-stop{height:30px;display:grid;grid-template-columns:22px 64px minmax(60px,1fr) 34px 22px;align-items:center;gap:5px;padding:3px 6px;border-radius:var(--r-sm)}.fill-stop:hover{background:var(--bg-row)}.fill-stop.on{background:var(--accent-dim)}
-.fill-stop-swatch{width:18px;height:18px;border-radius:var(--r-xs);background:var(--sw-color)}.fill-stop-color{min-width:0;font:var(--fs-xs) var(--f-mono)}.fill-stop .mono{text-align:right;font-size:var(--fs-xs);color:var(--tx-2)}.fill-stop-remove{opacity:var(--disabled)}.fill-stop:hover .fill-stop-remove,.fill-stop-remove:focus-visible{opacity:1}
-.fill-picker-tools{display:flex;align-items:center;gap:7px;padding-top:1px}.fill-angle{display:flex;align-items:center;gap:6px;flex:1;color:var(--tx-2);font-size:var(--fs-xs)}.fill-angle input{flex:1}.fill-angle .mono{min-width:34px;text-align:right;font-size:var(--fs-xs)}
-.fill-color-workbench[hidden],.fill-preview[hidden],.fill-stops[hidden]{display:none!important}
-.fill-angle[hidden],.fill-picker-tools .btn[hidden]{display:none!important}
 .toggle{width:32px;height:18px;border-radius:var(--r-pill);background:var(--ink-3);position:relative;flex:none;box-shadow:none;transition:background var(--dur-2) var(--ease-io)}
 .toggle i{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--bg-float);box-shadow:var(--shadow-raise);transition:transform var(--dur-2) var(--ease-io)}
 .toggle.on{background:var(--accent)}
@@ -634,6 +622,12 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:11px;heigh
 .asset-empty svg{width:32px;height:32px;color:var(--tx-4)}
 .asset-empty b{color:var(--tx-3);font-size:var(--fs-xs);font-weight:var(--fw-medium)}
 .asset-empty span{max-width:190px;font-size:10px;line-height:1.5;text-wrap:pretty}
+/* Compositions in the Project/Media panel: the tile is the comp's frame at its own aspect, filled with its background. */
+.asset-preview.comp{background:rgb(var(--ink-rgb) / .06);color:var(--tx-2)}
+.asset-preview.comp .comp-frame{position:absolute;max-width:calc(100% - 16px);max-height:calc(100% - 16px);height:100%;aspect-ratio:var(--comp-ratio,16/9);border-radius:2px;background:var(--comp-bg,#000);box-shadow:0 0 0 1px rgb(var(--ink-rgb) / .12)}
+.asset-preview.comp>svg{position:relative;z-index:1;color:#fff;mix-blend-mode:difference;opacity:.8}
+.asset-preview.comp .comp-open{position:absolute;right:6px;bottom:6px;z-index:2;width:6px;height:6px;border-radius:50%;background:var(--accent)}
+.asset-add:disabled{opacity:.4;cursor:not-allowed}
 
 /* ── chat / agent rail ─────────────────────────────────── */
 /* ── code / shader editor ──────────────────────────────── */
@@ -645,6 +639,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:11px;heigh
 
 /* ── modal / palette ───────────────────────────────────── */
 #scrim{position:fixed;inset:0;background:rgb(var(--ink-rgb) / .32);backdrop-filter:blur(3px);z-index:400;display:none}
+/* Modal and library overlays make #app inert; their own strip must retain the
+   native drag region while the rest of each overlay blocks background input. */
+.titlebar-overlay-drag{position:absolute;left:0;right:0;top:0;height:44px;z-index:1;-webkit-app-region:drag}
 :root[data-theme="dark"] #scrim{background:rgb(0 0 0 / .5)}
 #scrim.on{display:block}
 .modal{position:fixed;z-index:401;background:var(--bg-float);border:0;border-radius:var(--r-xl);

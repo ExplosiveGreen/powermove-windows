@@ -44,6 +44,7 @@ export function installLayerMenu(PM: PMRegistry): void {
       { header: selected.length > 1 ? `${selected.length} layers` : layer.name },
       { label: 'Duplicate', icon: 'copy', kb: '⌘D', disabled: !editable, run: () => PM.cmd('duplicate') },
       { label: 'Group layers', icon: 'stack', kb: '⌘G', disabled: !editable, run: () => PM.cmd('groupLayers') },
+      { label: 'Pre-compose…', icon: 'layers', kb: '⇧⌘C', disabled: !editable, run: () => PM.cmd('precompose') },
     ];
     if (selected.length === 2) {
       const matteLayers = selected.slice().sort((a: any, b: any) => PM.proj.layers.indexOf(a) - PM.proj.layers.indexOf(b));

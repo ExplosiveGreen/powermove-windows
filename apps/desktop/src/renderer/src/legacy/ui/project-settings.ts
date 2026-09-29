@@ -476,6 +476,8 @@ export interface NewProjectFormOptions {
    * bounce back to an input inside a modal after it is dismissed.
    */
   backgroundField?(get: () => string, set: (value: string) => void): HTMLElement;
+  /** Accessible name of the name field (the form also serves Composition Settings). */
+  nameLabel?: string;
 }
 
 const NEW_PROJECT_DEFAULTS: NewProjectValues = {
@@ -505,7 +507,7 @@ export function createNewProjectForm(
   name.type = 'text';
   name.className = 'settings-input is-wide';
   name.value = seed.name;
-  name.setAttribute('aria-label', 'Project name');
+  name.setAttribute('aria-label', options.nameLabel ?? 'Project name');
 
   const preset = select('Resolution preset');
   fillOptions(
@@ -564,7 +566,7 @@ export function createNewProjectForm(
   height.addEventListener('change', syncPreset);
 
   element.append(
-    field('Name', name),
+    field(options.nameLabel ?? 'Name', name),
     field('Resolution', preset),
     field('Size', size),
     field('Frame rate', frameRate),

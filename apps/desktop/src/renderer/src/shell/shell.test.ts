@@ -171,8 +171,9 @@ describe('Svelte shell', () => {
     expect(PM.ProjectsScreen.hide).toHaveBeenCalledOnce();
   });
 
-  it('offers closing, renaming and moving from the tab context menu', () => {
+  it('offers creating, closing, renaming and moving from the tab context menu', () => {
     const { PM } = fakePM();
+    PM.cmd = vi.fn();
     const target = document.getElementById('titlebar')!;
     target.replaceChildren();
     instances.push(mount(Titlebar, { target, props: { PM } }));
@@ -182,7 +183,9 @@ describe('Svelte shell', () => {
       .dispatchEvent(new MouseEvent('contextmenu', { bubbles: true })));
     const items = PM.menu.mock.calls[0]![1] as Array<any>;
     expect(items.filter((item) => typeof item === 'object').map((item) => item.label))
-      .toEqual(['Close Tab', 'Close Other Tabs', 'Rename Project…', 'Move to New Window', 'New Window']);
+      .toEqual(['New Composition…', 'Close Tab', 'Close Other Tabs', 'Rename Project…', 'Move to New Window', 'New Window']);
+    items.find((item: any) => item?.label === 'New Composition…').run();
+    expect(PM.cmd).toHaveBeenCalledExactlyOnceWith('newComposition');
     // A lone tab has no others to close and nothing to leave behind by moving.
     expect(items.find((item: any) => item?.label === 'Close Other Tabs').disabled).toBe(true);
     expect(items.find((item: any) => item?.label === 'Move to New Window').disabled).toBe(true);

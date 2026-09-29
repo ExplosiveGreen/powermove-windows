@@ -139,6 +139,8 @@
     event.preventDefault();
     event.stopPropagation();
     const items: Array<Record<string, unknown> | string> = [
+      { label: 'New Composition…', kb: '⌘N', run: () => PM.cmd('newComposition') },
+      '-',
       { label: 'Close Tab', kb: '⌘W', run: () => void close(id) },
       { label: 'Close Other Tabs', disabled: tabIds.length < 2, run: () => void PM.Tabs?.closeOthers?.(id) },
       '-',
@@ -481,7 +483,7 @@
   <button
     class="project-strip-btn project-new"
     type="button"
-    title="New project (⌘N)"
+    title="New project (⌥⌘N)"
     aria-label="New project"
     onclick={() => PM.newProject?.()}
   ><Icon {PM} name="plus" /></button>

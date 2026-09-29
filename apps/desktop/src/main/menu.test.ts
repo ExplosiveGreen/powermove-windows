@@ -76,8 +76,16 @@ describe('application menu', () => {
       'Powermove',
       'File',
       'Edit',
+      'Composition',
       'View',
       'Window'
+    ]);
+    // After Effects: ⌘N makes a composition, ⌥⌘N a project.
+    expect(submenu(topLevel(template, 'Composition')).map((item) => [item.label ?? item.type, item.accelerator, item.id])).toEqual([
+      ['New Composition…', 'CommandOrControl+N', 'newComposition'],
+      ['Composition Settings…', 'CommandOrControl+Alt+K', 'compositionSettings'],
+      ['separator', undefined, undefined],
+      ['Pre-compose…', 'CommandOrControl+Shift+C', 'precompose']
     ]);
 
     const appItems = submenu(topLevel(template, 'Powermove'));
@@ -119,7 +127,7 @@ describe('application menu', () => {
       'Close Window'
     ]);
     expect(fileItems.filter((item) => item.click).map((item) => item.accelerator)).toEqual([
-      'CommandOrControl+N',
+      'CommandOrControl+Alt+N',
       'CommandOrControl+Shift+N',
       'CommandOrControl+O',
       'CommandOrControl+W',

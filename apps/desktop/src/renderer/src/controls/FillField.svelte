@@ -49,7 +49,7 @@
     draft = normalizeFill(api, before, fallback);
     selected = draft.stops[0]!.id;
     open = true;
-    void tick().then(() => dialog?.querySelector<HTMLButtonElement>('.fill-type.on')?.focus());
+    void tick().then(() => dialog?.querySelector<HTMLButtonElement>('.fill-type[aria-selected="true"]')?.focus());
   }
 
   function finishClose(): void {
@@ -76,13 +76,19 @@
     finishClose();
   }
 
+  /* Clicking away or Close keeps the fill; Escape restores it. */
   function apply(): void {
+    if (!open) return;
+    // A field still being typed in applies first, as leaving it would.
+    const active = document.activeElement;
+    if (active instanceof HTMLInputElement && dialog?.contains(active)) active.blur();
+    const next = normalizeFill(api, draft, fallback);
     if (previewing) {
-      gesture.write(normalizeFill(api, draft, fallback));
+      gesture.write(next);
       gesture.commit();
       previewing = false;
       api.transport.invalidate('render');
-    } else gesture.once(normalizeFill(api, draft, fallback));
+    } else if (JSON.stringify(next) !== JSON.stringify(get())) gesture.once(next);
     finishClose();
   }
 
@@ -145,43 +151,46 @@
 </button>
 
 {#if open}
-  <div class="fill-picker-layer" role="presentation" use:mountOverlayOnBody onpointerdown={(event) => { if (event.target === event.currentTarget) cancelPreview(); }}>
+  <div class="fill-picker-layer" role="presentation" use:mountOverlayOnBody onpointerdown={(event) => { if (event.target === event.currentTarget) apply(); }}>
     <div bind:this={dialog} class="fill-picker" role="dialog" aria-modal="true" aria-label={label} tabindex="-1" use:anchorPicker={trigger} onkeydown={dialogKeydown}>
-      <header><b>{label}</b><button type="button" class="iconbtn" aria-label="Close fill picker" onclick={cancelPreview}>×</button></header>
-      <div class="fill-picker-body">
-        <div class="fill-types" role="group" aria-label="Fill type">
-          {#each modes as [type, text]}
-            <button type="button" class="fill-type" class:on={draft.type === type} aria-pressed={draft.type === type} data-fill-type={type} onclick={() => setType(type)}>{text}</button>
-          {/each}
-        </div>
-
-        <div class="fill-preview" aria-label="Fill preview" hidden={draft.type === 'none'} style:background={fillCss(draft)}></div>
-
-        {#if draft.type !== 'none'}
-          {#key selected}
-            <ColorField {api} embedded label="Stop color" get={() => selectedStop().color}
-              edit={{ mode: 'local', label, set: (value) => { setSelectedColor(value); } }} />
-          {/key}
-        {/if}
-
-        <div class="fill-stops" hidden={draft.type === 'solid' || draft.type === 'none'}>
-          {#each draft.stops as stop, index (stop.id)}
-            <div class="fill-stop" class:on={stop.id === selected}>
-              <button type="button" class="fill-stop-swatch" aria-label={`Select stop ${index + 1}`} style={`--sw-color:${stop.color}`} onclick={() => { selected = stop.id; }}></button>
-              <input class="fill-stop-color" aria-label={`Stop ${index + 1} color`} value={stop.color} oninput={(event) => { if (/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i.test(event.currentTarget.value)) { stop.color = event.currentTarget.value.toUpperCase(); previewDraft(); } }} />
-              <input type="range" min="0" max="100" aria-label={`Stop ${index + 1} position`} bind:value={stop.position} oninput={previewDraft} onchange={() => draft.stops.sort((a, b) => a.position - b.position)} />
-              <span class="mono">{stop.position}%</span>
-              <button type="button" class="iconbtn fill-stop-remove" aria-label={`Remove stop ${index + 1}`} title="Remove stop" disabled={draft.stops.length <= 2} onclick={() => removeStop(index)}>×</button>
+      {#key selected}
+        <ColorField {api} embedded label={draft.type === 'solid' ? label : 'Stop color'} get={() => selectedStop().color}
+          edit={{ mode: 'local', label, set: (value) => { setSelectedColor(value); } }}
+          bare={draft.type === 'none'} onclose={apply}>
+          {#snippet tabs()}
+            <div class="cp-spaces" role="tablist" aria-label="Fill type">
+              {#each modes as [type, text] (type)}
+                <button type="button" role="tab" class="fill-type" aria-selected={draft.type === type} data-fill-type={type} onclick={() => setType(type)}>{text}</button>
+              {/each}
             </div>
-          {/each}
-        </div>
+          {/snippet}
 
-        <div class="fill-picker-tools">
-          <label class="fill-angle" hidden={draft.type !== 'linear'}><span>Angle</span><input type="range" min="-180" max="180" bind:value={draft.angle} aria-label="Gradient angle" oninput={previewDraft} /><span class="mono">{draft.angle}°</span></label>
-          <button type="button" class="btn" hidden={draft.type === 'solid' || draft.type === 'none'} onclick={addStop}>Add stop</button>
-        </div>
-      </div>
-      <footer><button type="button" class="btn" onclick={cancelPreview}>Cancel</button><button type="button" class="btn pri" onclick={apply}>Apply</button></footer>
+          {#if draft.type === 'linear' || draft.type === 'radial'}
+            <div class="fill-gradient">
+              <div class="fill-preview cp-checker" aria-label="Fill preview"><span style:background={fillCss(draft)}></span></div>
+              <div class="fill-stops">
+                {#each draft.stops as stop, index (stop.id)}
+                  <div class="fill-stop" class:on={stop.id === selected}>
+                    <button type="button" class="fill-stop-swatch cp-checker" aria-label={`Select stop ${index + 1}`} style={`--sw-color:${stop.color}`} onclick={() => { selected = stop.id; }}></button>
+                    <input class="fill-stop-color" aria-label={`Stop ${index + 1} color`} value={stop.color} oninput={(event) => { if (/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i.test(event.currentTarget.value)) { stop.color = event.currentTarget.value.toUpperCase(); previewDraft(); } }} />
+                    <input type="range" min="0" max="100" aria-label={`Stop ${index + 1} position`} bind:value={stop.position} oninput={previewDraft} onchange={() => draft.stops.sort((a, b) => a.position - b.position)} />
+                    <span class="mono">{stop.position}%</span>
+                    <button type="button" class="iconbtn fill-stop-remove" aria-label={`Remove stop ${index + 1}`} title="Remove stop" disabled={draft.stops.length <= 2} onclick={() => removeStop(index)}>×</button>
+                  </div>
+                {/each}
+              </div>
+              <div class="fill-picker-tools">
+                {#if draft.type === 'linear'}
+                  <label class="fill-angle"><span>Angle</span><input type="range" min="-180" max="180" bind:value={draft.angle} aria-label="Gradient angle" oninput={previewDraft} /><span class="mono">{draft.angle}°</span></label>
+                {/if}
+                <button type="button" class="btn fill-add-stop" disabled={draft.stops.length >= 8} onclick={addStop}>Add stop</button>
+              </div>
+            </div>
+          {:else if draft.type === 'none'}
+            <p class="fill-none">No fill</p>
+          {/if}
+        </ColorField>
+      {/key}
     </div>
   </div>
 {/if}
