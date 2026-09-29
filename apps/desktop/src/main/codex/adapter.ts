@@ -9,7 +9,7 @@ import { AGENT_TESTING_INSTRUCTIONS } from '../../shared/agent-testing';
 import type { NativeMcpServerConfig } from '../agent-tools/spec';
 
 import { userMcpArgv, type UserMcpServers } from '../agent-tools/user-mcp';
-import { AGENT_SHELL_NETWORK_HOSTS, AGENT_SHELL_NETWORK_INSTRUCTIONS } from '../agent-network';
+import { AGENT_SHELL_NETWORK_INSTRUCTIONS } from './instructions';
 
 export const ADAPTER_VERSION = '6';
 
@@ -36,10 +36,9 @@ export const PROJECT_PERMISSION_PROFILE = 'powermove';
  * unsandboxed command, and there is no approval reviewer to grant one. No
  * legacy `sandbox_mode` either, which would override a permission profile.
  * The profile extends Codex's workspace sandbox, denies credential reads,
- * and with shell network routes commands through Codex's network proxy,
- * which admits only the shared allowlist; the sandbox blocks direct sockets
- * and DNS. They follow `exec` because root-level approval and profile
- * overrides do not reach it.
+ * and with shell network lets commands reach any host. They follow `exec`
+ * because root-level approval and profile overrides do not reach it; the
+ * legacy `sandbox_workspace_write.network_access` switch did not either.
  *
  * The workspace is marked untrusted: other agents can write it, and a trusted
  * project would load its `.codex` config, MCP servers, hooks and rules
@@ -57,13 +56,8 @@ export function projectSandboxArgv(options: { shellNetwork: boolean; deniedReads
     config.push(`projects={${[...new Set(options.workspaceRoots)].map(root => `${JSON.stringify(root)}={trust_level="untrusted"}`).join(',')}}`);
   }
   if (options.deniedReads.length) config.push(`${profile}.filesystem=${table(options.deniedReads.map(file => [file, 'deny']))}`);
-  if (options.shellNetwork) {
-    config.push(
-      'features.network_proxy=true',
-      `${profile}.network.enabled=true`,
-      `${profile}.network.domains=${table(AGENT_SHELL_NETWORK_HOSTS.map(host => [host, 'allow']))}`
-    );
-  }
+  // Direct sockets to any host: no network proxy, no domain list.
+  if (options.shellNetwork) config.push(`${profile}.network.enabled=true`);
   return config.flatMap(value => ['--config', value]);
 }
 
@@ -85,9 +79,9 @@ export interface AutonomousArgvOptions extends CommonArgvOptions {
   sessionId: string | null;
   instructions: string;
   nativeTools?: NativeMcpServerConfig;
-  /** Outbound network for sandboxed shell commands, limited to the shared
-   * allowlist. Only the Project access choice grants it; Edit project runs
-   * keep project authority without it. */
+  /** Outbound network to any host for sandboxed shell commands. Only the
+   * Project access choice grants it; Edit project runs keep project
+   * authority without it. */
   shellNetwork?: boolean;
   /** Paths sandboxed shell commands may not read. */
   deniedReads?: readonly string[];

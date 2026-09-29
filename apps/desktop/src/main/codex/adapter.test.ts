@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { AGENT_TESTING_INSTRUCTIONS } from '../../shared/agent-testing';
-import { AGENT_SHELL_NETWORK_HOSTS } from '../agent-network';
 import {
   ADAPTER_VERSION,
   REQUIRED_CODEX_FLAGS,
@@ -86,9 +85,7 @@ describe('Codex CLI adapter', () => {
       '--config', 'permissions.powermove.extends=":workspace"',
       '--config', 'projects={"/workspace"={trust_level="untrusted"}}',
       '--config', 'permissions.powermove.filesystem={"/Users/me/.ssh"="deny","/user-data/codex-runtime/auth.json"="deny"}',
-      '--config', 'features.network_proxy=true',
       '--config', 'permissions.powermove.network.enabled=true',
-      '--config', `permissions.powermove.network.domains={${AGENT_SHELL_NETWORK_HOSTS.map(host => `"${host}"="allow"`).join(',')}}`,
       '--output-schema',
       '/workspace/.powermove/result-schema.json',
       '--output-last-message',
@@ -97,11 +94,11 @@ describe('Codex CLI adapter', () => {
       '--image',
       '/workspace/inputs/references/reference-0.png',
       '--',
-      `AGENT INSTRUCTIONS\n\nSHELL NETWORK\nShell commands can download only over HTTPS from ${AGENT_SHELL_NETWORK_HOSTS.join(', ')}; other hosts are refused.\n\nUSER REQUEST\nMake a launch trailer`
+      'AGENT INSTRUCTIONS\n\nSHELL NETWORK\nShell commands have full internet access.\n\nUSER REQUEST\nMake a launch trailer'
     ]);
   });
 
-  it('gives shell commands allowlisted network only for the Project access choice', () => {
+  it('gives shell commands full network only for the Project access choice, fresh and resumed', () => {
     const common = {
       schemaPath: '/workspace/schema.json', outputPath: '/workspace/result.json', prompt: 'Find useful footage',
       imagePaths: [], model: null, reasoningEffort: null, extensionsDir: '/user-data/extensions',
@@ -111,16 +108,15 @@ describe('Codex CLI adapter', () => {
     for (const sessionId of [null, 'thread-123']) {
       const argv = buildAutonomousArgv({ ...common, access: 'project', shellNetwork: true, sessionId });
       // exec options, so they apply to `exec resume` too, and never a legacy sandbox mode.
-      const proxy = argv.indexOf('features.network_proxy=true');
-      expect(proxy).toBeGreaterThan(argv.indexOf(sessionId ? 'resume' : 'exec'));
-      expect(argv[proxy - 1]).toBe('--config');
+      const network = argv.indexOf('permissions.powermove.network.enabled=true');
+      expect(network).toBeGreaterThan(argv.indexOf(sessionId ? 'resume' : 'exec'));
+      expect(argv[network - 1]).toBe('--config');
       expect(configs(argv)).toEqual(expect.arrayContaining([
-        `default_permissions="${PROJECT_PERMISSION_PROFILE}"`, 'permissions.powermove.network.enabled=true',
-        'permissions.powermove.filesystem={"/Users/me/.ssh"="deny"}'
+        `default_permissions="${PROJECT_PERMISSION_PROFILE}"`, 'permissions.powermove.extends=":workspace"'
       ]));
-      const domains = configs(argv).find(value => value.startsWith('permissions.powermove.network.domains='))!;
-      expect(domains).toContain('"images.pexels.com"="allow"');
-      expect(domains).not.toMatch(/"\*"|"github\.com"|registry\.npmjs\.org/);
+      // No proxy and no domain list, so every host is reachable.
+      expect(argv.join(' ')).not.toMatch(/network_proxy|network\.domains/);
+      expect(argv.at(-1)).toContain('SHELL NETWORK\nShell commands have full internet access.');
       expect(argv).toContain('--search');
       expect(argv).not.toContain('--sandbox');
       expect(argv).not.toContain('--approve-for-me');

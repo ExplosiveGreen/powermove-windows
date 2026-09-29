@@ -287,7 +287,7 @@ describe('CodexRunner lifecycle', () => {
   });
 
   it.each([['project', true], ['editor', false]] as const)(
-    'passes allowlisted shell network to autonomous %s access: %s, and denies credential reads either way',
+    'passes full shell network to autonomous %s access: %s, and denies credential reads either way',
     async (access, network) => {
       const userData = await temporaryDirectory(`runner-network-${access}`);
       let launchedArgs: readonly string[] = [];
@@ -298,7 +298,8 @@ describe('CodexRunner lifecycle', () => {
       };
       const result = await new CodexRunner().run(request({ id: `runner-network-${access}-1234`, access }), options);
       expect(result.ok).toBe(true);
-      expect(launchedArgs.includes('features.network_proxy=true')).toBe(network);
+      expect(launchedArgs.includes(`permissions.${PROJECT_PERMISSION_PROFILE}.network.enabled=true`)).toBe(network);
+      expect(launchedArgs.join(' ')).not.toMatch(/network_proxy|network\.domains/);
       expect(launchedArgs).toContain(`default_permissions="${PROJECT_PERMISSION_PROFILE}"`);
       expect(launchedArgs).not.toContain('--approve-for-me');
       const filesystem = launchedArgs.find(arg => arg.startsWith(`permissions.${PROJECT_PERMISSION_PROFILE}.filesystem=`)) ?? '';
