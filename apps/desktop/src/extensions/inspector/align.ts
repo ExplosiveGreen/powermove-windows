@@ -1,6 +1,7 @@
-/* Alignment math for the inspector strip. World-space boxes move so one of
-   their edges or centers meets the target frame; the caller converts each
-   delta into the layer's parent space and writes position channels. */
+/* Alignment math for the inspector strip. The selection's world-space bounding
+   box moves so one of its edges or centers meets the composition frame; the
+   caller applies that one delta to every layer, converting it into each
+   layer's parent space and writing position channels. */
 
 export type AlignMode = 'left' | 'hcenter' | 'right' | 'top' | 'vcenter' | 'bottom';
 
@@ -38,10 +39,4 @@ export function deltaInParent(parent: readonly number[] | null | undefined, dx: 
   const det = a * d - b * c;
   if (Math.abs(det) < 1e-9) return { dx, dy };
   return { dx: (d * dx - c * dy) / det, dy: (a * dy - b * dx) / det };
-}
-
-/** One layer aligns to the composition; several align to their common bounds (Figma). */
-export function alignFrame(boxes: Box[], composition: { w: number; h: number }): Box | null {
-  if (boxes.length > 1) return unionBox(boxes);
-  return { x0: 0, y0: 0, x1: composition.w, y1: composition.h };
 }

@@ -1,10 +1,11 @@
 <script lang="ts">
   import { inspectorContext } from './context';
-  import { ALIGN_LABELS, alignDelta, alignFrame, deltaInParent, type AlignMode, type Box } from './align';
+  import { ALIGN_LABELS, alignDelta, deltaInParent, unionBox, type AlignMode, type Box } from './align';
 
   /* Alignment strip: two rounded segments, horizontal then vertical, with the
      panel showing through the gap between them. One selected layer aligns to
-     the composition frame; several align to their common bounds. */
+     the composition frame; several move together so their common bounding box
+     meets it, keeping their relative positions. */
 
   let { layers }: { layers: any[] } = $props();
   const { api, edit: inspectorEdit } = inspectorContext();
@@ -38,12 +39,13 @@
     const time = api.transport.time();
     const targets = layers.filter(layer => layer && !layer.lock && layer.type !== 'audio');
     const boxed = targets.map(layer => ({ layer, box: worldBox(layer, time) })).filter((item): item is { layer: any; box: Box } => !!item.box);
-    const frame = alignFrame(boxed.map(item => item.box), api.project.get());
-    if (!frame) return;
+    const bounds = unionBox(boxed.map(item => item.box));
+    if (!bounds) return;
+    const { w, h } = api.project.get();
+    const world = alignDelta(bounds, { x0: 0, y0: 0, x1: w, y1: h }, mode);
+    if (!world.dx && !world.dy) return;
     const commands: any[] = [];
-    for (const { layer, box } of boxed) {
-      const world = alignDelta(box, frame, mode);
-      if (!world.dx && !world.dy) continue;
+    for (const { layer } of boxed) {
       const parent = layer.parent ? api.model.layer(layer.parent) : null;
       const local = deltaInParent(parent ? api.anim.worldMatrix(parent, time) : null, world.dx, world.dy);
       if (local.dx) commands.push({ type: 'set_property', target: layer.id, path: 'position.x', value: api.util.round(Number(api.anim.ev(layer, 'position.x', time)) + local.dx, 3), time, mode: 'auto', preserveHandEdits: false });

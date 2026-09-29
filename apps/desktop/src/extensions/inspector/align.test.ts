@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { alignDelta, alignFrame, deltaInParent, unionBox } from './align';
+import { alignDelta, deltaInParent, unionBox } from './align';
 
 const box = { x0: 100, y0: 50, x1: 300, y1: 150 };
 const frame = { x0: 0, y0: 0, x1: 1920, y1: 1080 };
@@ -15,10 +15,13 @@ describe('alignment math', () => {
     expect(alignDelta(box, frame, 'vcenter')).toEqual({ dx: 0, dy: 440 });
   });
 
-  it('aligns one layer to the composition and several to their shared bounds', () => {
-    expect(alignFrame([box], { w: 800, h: 450 })).toEqual({ x0: 0, y0: 0, x1: 800, y1: 450 });
+  it('aligns a multi-selection by moving its union bounds against the composition', () => {
     const other = { x0: 400, y0: 20, x1: 500, y1: 400 };
-    expect(alignFrame([box, other], { w: 800, h: 450 })).toEqual({ x0: 100, y0: 20, x1: 500, y1: 400 });
+    const union = unionBox([box, other])!;
+    expect(union).toEqual({ x0: 100, y0: 20, x1: 500, y1: 400 });
+    expect(alignDelta(union, { x0: 0, y0: 0, x1: 800, y1: 450 }, 'hcenter')).toEqual({ dx: 100, dy: 0 });
+    expect(alignDelta(union, frame, 'hcenter')).toEqual({ dx: 660, dy: 0 });
+    expect(alignDelta(union, frame, 'vcenter')).toEqual({ dx: 0, dy: 330 });
     expect(unionBox([])).toBeNull();
   });
 
