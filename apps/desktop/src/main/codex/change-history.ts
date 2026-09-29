@@ -316,10 +316,29 @@ async function directoryHash(root: string): Promise<string> {
         continue;
       }
       if (!entry.isFile()) throw new Error(`Extension contains an unsupported file: ${nextRelative}`);
-      const data = await fs.readFile(full);
-      files += 1;
-      bytes += data.byteLength;
-      if (files > MAX_FILES || bytes > MAX_BYTES) throw new Error('Extension staging exceeds the safe copy limits.');
+      // The stage is agent-writable: a file swapped since the listing for a
+      // link, FIFO or device is refused, never followed or waited on.
+      const handle = await fs.open(full, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK).catch((error: NodeJS.ErrnoException) => {
+        throw error.code === 'ELOOP' ? new Error(`Extension contains an unsupported symbolic link: ${nextRelative}`) : error;
+      });
+      let data: Buffer;
+      try {
+        const opened = await handle.stat();
+        if (!opened.isFile()) throw new Error(`Extension contains an unsupported file: ${nextRelative}`);
+        files += 1;
+        bytes += opened.size;
+        if (files > MAX_FILES || bytes > MAX_BYTES) throw new Error('Extension staging exceeds the safe copy limits.');
+        // Read what fstat promised and one byte more, so a file growing meanwhile is caught, not buffered.
+        data = Buffer.alloc(opened.size + 1);
+        let length = 0;
+        for (;;) {
+          const { bytesRead } = await handle.read(data, length, data.byteLength - length, length);
+          if (!bytesRead) break;
+          length += bytesRead;
+          if (length > opened.size) throw new Error(`Extension staging changed while it was being read: ${nextRelative}`);
+        }
+        data = data.subarray(0, length);
+      } finally { await handle.close(); }
       hash.update(`f\0${nextRelative}\0`);
       hash.update(data);
     }
