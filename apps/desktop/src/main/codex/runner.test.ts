@@ -8,7 +8,7 @@ vi.mock('../agent-tools/user-mcp', async importOriginal => ({
 
 import { spawn } from 'node:child_process';
 import { chmod, mkdtemp, mkdir, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
-import os, { tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -21,7 +21,7 @@ import {
   parseAgentExtensionChanges,
   type CodexRunOptions
 } from './runner';
-import { PERMISSION_PROFILES_UNSUPPORTED, PROJECT_PERMISSION_PROFILE } from './adapter';
+import { PROJECT_PERMISSION_PROFILE } from './adapter';
 import { isolatedCodexHome } from './isolation';
 import { agentWorkspaceRoot, sessionPathFor } from './workspace';
 
@@ -287,7 +287,7 @@ describe('CodexRunner lifecycle', () => {
   });
 
   it.each([['project', true], ['editor', false]] as const)(
-    'passes full shell network to autonomous %s access: %s, and denies credential reads either way',
+    'passes full shell network to autonomous %s access: %s, and denies no reads either way',
     async (access, network) => {
       const userData = await temporaryDirectory(`runner-network-${access}`);
       let launchedArgs: readonly string[] = [];
@@ -302,24 +302,12 @@ describe('CodexRunner lifecycle', () => {
       expect(launchedArgs.join(' ')).not.toMatch(/network_proxy|network\.domains/);
       expect(launchedArgs).toContain(`default_permissions="${PROJECT_PERMISSION_PROFILE}"`);
       expect(launchedArgs).not.toContain('--approve-for-me');
-      const filesystem = launchedArgs.find(arg => arg.startsWith(`permissions.${PROJECT_PERMISSION_PROFILE}.filesystem=`)) ?? '';
-      expect(filesystem).toContain(`${JSON.stringify(path.join(isolatedCodexHome(userData), 'auth.json'))}="deny"`);
-      expect(filesystem).toContain(`${JSON.stringify(path.join(os.homedir(), '.ssh'))}="deny"`);
+      expect(launchedArgs.find(arg => arg.startsWith(`permissions.${PROJECT_PERMISSION_PROFILE}.filesystem`))).toBeUndefined();
+      expect(launchedArgs.join(' ')).not.toMatch(/="deny"|auth\.json|\.ssh/);
       const workspace = await realpath(agentWorkspaceRoot(userData, 'runner-project'));
       expect(launchedArgs.find(arg => arg.startsWith('projects='))).toContain(`${JSON.stringify(workspace)}={trust_level="untrusted"}`);
     }
   );
-
-  it('fails a Project run closed on a Codex that ignores permission profiles', async () => {
-    const userData = await temporaryDirectory('runner-profile-unsupported');
-    const binary = path.join(userData, 'codex-without-profiles');
-    await writeFile(binary, '#!/bin/sh\n[ "$1" = sandbox ] || exit 3\nwhile [ "$1" != "--" ]; do shift; done; shift; exec "$@"\n');
-    await chmod(binary, 0o755);
-    const spawnProcess = vi.fn(() => { throw new Error('must not spawn'); });
-    const result = await new CodexRunner().run(request({ id: 'runner-profile-1234' }), { ...fakeOptions(userData, {}), binary, spawnProcess });
-    expect(result).toEqual({ ok: false, cancelled: false, error: PERMISSION_PROFILES_UNSUPPORTED });
-    expect(spawnProcess).not.toHaveBeenCalled();
-  });
 
   it('forwards structured traces from editor-mode stdout', async () => {
     const trace: unknown[] = [];

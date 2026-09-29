@@ -13,8 +13,7 @@ import { validateStagedExtensions } from './codex/validate-staged-extensions';
 import { loginShellPath } from './login-shell-path';
 import { killStrays, ProcessFamily } from './process-family';
 import { agentResultSchema } from './codex/instructions';
-import { agentWorkspaceUserData, type AgentWorkspace } from './codex/workspace';
-import { agentCredentialPaths } from './agent-network';
+import type { AgentWorkspace } from './codex/workspace';
 import type { PowermoveAgentToolSpec } from './agent-tools/spec';
 
 const object = (properties: Record<string, unknown>, required: string[]) => ({ type: 'object', additionalProperties: false, properties, required });
@@ -342,16 +341,13 @@ export async function startWorkspaceCommand(root: string, access: 'project' | 'c
   signal.throwIfAborted();
   const real = await realpath(root);
   const env = await commandEnvironment(real, access);
-  // Project access cannot read credential material.
-  const deniedReads = access === 'project' ? await agentCredentialPaths(agentWorkspaceUserData(real), { codexHome: 'all' }) : [];
-  const readRules = deniedReads.length ? `(deny file-read*${deniedReads.map(file => ` (subpath ${JSON.stringify(file)})`).join('')})` : '';
   // Its own mark finds what this command started, even processes that left
   // its group and folder; the run's mark finds them at the run end.
   const mark = sandboxMark();
   const marks = [mark, ...(options.runMark ? [options.runMark] : [])];
   // Project access keeps unrestricted outbound network for research,
   // downloads and dev servers; only the filesystem is confined.
-  const profile = `(version 1)(allow default)(allow network-outbound)${readRules}(deny appleevent-send)`
+  const profile = `(version 1)(allow default)(allow network-outbound)(deny appleevent-send)`
     + `(deny mach-lookup ${marks.map(name => `(global-name ${JSON.stringify(name)})`).join(' ')})`
     + `(deny file-write*)(allow file-write* (subpath ${JSON.stringify(await realpath(root))}) (literal "/dev/null") (literal "/dev/tty")`
     // Inherited stdio only; a broad /dev subpath would expose devices.

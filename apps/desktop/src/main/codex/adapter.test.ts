@@ -7,11 +7,9 @@ import {
   ADAPTER_VERSION,
   REQUIRED_CODEX_FLAGS,
   buildAutonomousArgv,
-  PERMISSION_PROFILES_UNSUPPORTED,
   PROJECT_PERMISSION_PROFILE,
   buildEditorArgv,
-  capabilities,
-  verifyPermissionProfiles
+  capabilities
 } from './adapter';
 
 describe('Codex CLI adapter', () => {
@@ -68,7 +66,6 @@ describe('Codex CLI adapter', () => {
         reasoningEffort: null,
         access: 'project',
         shellNetwork: true,
-        deniedReads: ['/Users/me/.ssh', '/user-data/codex-runtime/auth.json'],
         workspaceRoots: ['/workspace', '/workspace'],
         extensionsDir: '/user-data/extensions',
         sessionId: null,
@@ -84,7 +81,6 @@ describe('Codex CLI adapter', () => {
       '--config', 'default_permissions="powermove"',
       '--config', 'permissions.powermove.extends=":workspace"',
       '--config', 'projects={"/workspace"={trust_level="untrusted"}}',
-      '--config', 'permissions.powermove.filesystem={"/Users/me/.ssh"="deny","/user-data/codex-runtime/auth.json"="deny"}',
       '--config', 'permissions.powermove.network.enabled=true',
       '--output-schema',
       '/workspace/.powermove/result-schema.json',
@@ -102,7 +98,7 @@ describe('Codex CLI adapter', () => {
     const common = {
       schemaPath: '/workspace/schema.json', outputPath: '/workspace/result.json', prompt: 'Find useful footage',
       imagePaths: [], model: null, reasoningEffort: null, extensionsDir: '/user-data/extensions',
-      instructions: 'AGENT INSTRUCTIONS', deniedReads: ['/Users/me/.ssh']
+      instructions: 'AGENT INSTRUCTIONS'
     };
     const configs = (argv: string[]) => argv.flatMap((arg, index) => argv[index - 1] === '--config' ? [arg] : []);
     for (const sessionId of [null, 'thread-123']) {
@@ -123,10 +119,9 @@ describe('Codex CLI adapter', () => {
       expect(argv).not.toContain('--dangerously-bypass-approvals-and-sandbox');
       expect(argv.join(' ')).not.toMatch(/writable_roots|danger-full-access|sandbox_mode|network_access/);
     }
-    // Edit project collapses to project authority but keeps the shell offline and credentials unreadable.
+    // Edit project collapses to project authority but keeps the shell offline.
     const offline = buildAutonomousArgv({ ...common, access: 'project', sessionId: null });
-    expect(configs(offline)).toEqual(expect.arrayContaining([`default_permissions="${PROJECT_PERMISSION_PROFILE}"`,
-      'permissions.powermove.filesystem={"/Users/me/.ssh"="deny"}']));
+    expect(configs(offline)).toEqual(expect.arrayContaining([`default_permissions="${PROJECT_PERMISSION_PROFILE}"`]));
     expect(offline.join(' ')).not.toMatch(/network_proxy|network\.enabled|SHELL NETWORK/);
     const computer = buildAutonomousArgv({ ...common, access: 'computer', shellNetwork: true, sessionId: null });
     expect(computer.join(' ')).not.toMatch(/network_proxy|default_permissions/);
@@ -214,23 +209,6 @@ describe('Codex CLI adapter', () => {
     for (const sessionId of ['--dangerously-bypass-approvals-and-sandbox', '-c', 'a b', '../thread']) {
       expect(() => buildAutonomousArgv({ ...common, sessionId }), sessionId).toThrow('Invalid Codex session id.');
     }
-  });
-
-  it('runs Project access only on a Codex that is seen enforcing its permission profile', async () => {
-    const directory = await mkdtemp(path.join(tmpdir(), 'powermove-profile-'));
-    const script = async (name: string, body: string) => {
-      const file = path.join(directory, name);
-      await writeFile(file, `#!/bin/sh\n${body}\n`, 'utf8');
-      await chmod(file, 0o755);
-      return file;
-    };
-    // Runs the probe command unsandboxed, as a Codex that ignores the profile would.
-    const leaky = await script('leaky', 'while [ "$1" != "--" ]; do shift; done; shift; exec "$@"');
-    const unsupported = await script('unsupported', 'echo "error: unrecognized subcommand" >&2; exit 2');
-    const enforcing = await script('enforcing', 'for argument in "$@"; do last="$argument"; done; echo "$last"');
-    await expect(verifyPermissionProfiles(leaky, process.env)).rejects.toThrow(PERMISSION_PROFILES_UNSUPPORTED);
-    await expect(verifyPermissionProfiles(unsupported, process.env)).rejects.toThrow(PERMISSION_PROFILES_UNSUPPORTED);
-    await expect(verifyPermissionProfiles(enforcing, process.env)).resolves.toBeUndefined();
   });
 
   it('allows user resources instead of suppressing integrations, rules and skills', () => {

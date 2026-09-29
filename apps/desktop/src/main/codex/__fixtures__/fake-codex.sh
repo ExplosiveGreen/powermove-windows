@@ -10,14 +10,6 @@ if [ "$1" = "exec" ] && [ "$2" = "--help" ]; then
   exit 0
 fi
 
-# Stands in for an enforced permission profile: the denied read prints nothing,
-# then the probe's marker (the last argument) is echoed.
-if [ "$1" = "sandbox" ]; then
-  for argument in "$@"; do marker="$argument"; done
-  printf '%s\n' "$marker"
-  exit 0
-fi
-
 output_path=''
 extensions_dir=''
 resuming=0

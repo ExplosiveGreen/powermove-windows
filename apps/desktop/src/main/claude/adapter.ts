@@ -37,17 +37,6 @@ const PROJECT_SANDBOX_SETTINGS = {
 } satisfies SandboxSettings;
 const PROJECT_SANDBOX = JSON.stringify({ sandbox: PROJECT_SANDBOX_SETTINGS });
 
-/** The sandbox keeps Bash from reading credential paths; Read deny rules keep
- * Read, Grep and Glob out of them too. `//` marks an absolute path. */
-function sandboxSettings(access: 'editor' | 'project', deniedReads: readonly string[]): string {
-  if (!deniedReads.length) return access === 'editor' ? EDITOR_SANDBOX : PROJECT_SANDBOX;
-  const sandbox = access === 'editor' ? EDITOR_SANDBOX_SETTINGS : PROJECT_SANDBOX_SETTINGS;
-  return JSON.stringify({
-    permissions: { deny: deniedReads.flatMap(file => [`Read(/${file})`, `Read(/${file}/**)`]) },
-    sandbox: { ...sandbox, filesystem: { denyRead: [...deniedReads] } } satisfies SandboxSettings
-  });
-}
-
 const PROJECT_NETWORK_INSTRUCTIONS = `SHELL NETWORK\n${AGENT_SHELL_NETWORK_INSTRUCTIONS}`;
 
 interface ClaudeArgvOptions {
@@ -62,8 +51,6 @@ interface ClaudeArgvOptions {
   instructions?: string;
   nativeTools?: NativeMcpServerConfig;
   externalMcpServers?: UserMcpServers;
-  /** Absolute paths no tool may read outside Computer access. */
-  deniedReads?: readonly string[];
 }
 
 function promptWithImages(prompt: string, imagePaths: readonly string[]): string {
@@ -111,7 +98,7 @@ export function buildClaudeArgv(options: ClaudeArgvOptions): string[] {
   } else {
     argv.push(
       '--permission-mode', options.access === 'editor' ? 'dontAsk' : 'acceptEdits',
-      '--settings', sandboxSettings(options.access === 'editor' ? 'editor' : 'project', options.deniedReads ?? []),
+      '--settings', options.access === 'editor' ? EDITOR_SANDBOX : PROJECT_SANDBOX,
       '--tools', 'default',
       '--allowedTools', withExternal(options.access === 'editor' ? editorTools : projectTools)
     );
