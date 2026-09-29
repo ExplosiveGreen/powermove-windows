@@ -1,11 +1,12 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { execFile } from 'node:child_process';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import {
   AGENT_SHELL_NETWORK_HOSTS, agentCredentialPaths, agentHostAllowed, agentProxyEnvironment, agentSeatbeltRules,
-  isPublicAddress, startAgentNetworkProxy, type AgentNetworkProxy
+  isClaudeProjectStore, isPublicAddress, startAgentNetworkProxy, type AgentNetworkProxy
 } from './agent-network';
 
 const cleanup: (() => Promise<unknown>)[] = [];
@@ -117,6 +118,77 @@ describe('agent network proxy', () => {
     expect(dialed).toEqual([]);
   });
 
+  /** A tunnel left open after the proxy's reply. */
+  function open(port: number, target: string): Promise<{ socket: net.Socket; head: string; closed: Promise<void> }> {
+    return new Promise((resolve, reject) => {
+      const socket = net.connect(port, '127.0.0.1', () => socket.write(connect(target)));
+      const closed = new Promise<void>(done => socket.once('close', () => done()));
+      cleanup.push(async () => socket.destroy());
+      let data = '';
+      socket.on('data', chunk => {
+        data += chunk.toString('utf8');
+        if (data.includes('\r\n\r\n')) { socket.removeAllListeners('data'); resolve({ socket, head: data.split('\r\n\r\n')[0]!, closed }); }
+      });
+      socket.on('error', reject);
+    });
+  }
+
+  it('holds at most the tunnel cap open at once', async () => {
+    const echo = await upstream();
+    const started = await startAgentNetworkProxy({
+      resolve: async () => ['93.184.216.34'], connect: () => net.connect(echo, '127.0.0.1'), maxTunnels: 2
+    });
+    cleanup.push(() => started.close());
+    const first = await open(started.port, 'cdn.jsdelivr.net:443');
+    const second = await open(started.port, 'cdn.jsdelivr.net:443');
+    expect([first.head, second.head]).toEqual([expect.stringMatching(/^HTTP\/1\.1 200/), expect.stringMatching(/^HTTP\/1\.1 200/)]);
+    expect((await send(started.port, connect('cdn.jsdelivr.net:443'))).head).toMatch(/^HTTP\/1\.1 503/);
+    first.socket.destroy();
+    await first.closed;
+    await vi.waitFor(async () => expect((await open(started.port, 'cdn.jsdelivr.net:443')).head).toMatch(/^HTTP\/1\.1 200/));
+  });
+
+  it('drops connections past twice the tunnel cap before they send anything', async () => {
+    const started = await startAgentNetworkProxy({ resolve: async () => [], maxTunnels: 1 });
+    cleanup.push(() => started.close());
+    const sockets = Array.from({ length: 3 }, () => net.connect(started.port, '127.0.0.1'));
+    const closed = sockets.map(socket => { socket.on('error', () => {}); cleanup.push(async () => socket.destroy()); return new Promise<void>(done => socket.once('close', () => done())); });
+    await closed[2];
+    expect(sockets.slice(0, 2).map(socket => socket.destroyed)).toEqual([false, false]);
+  });
+
+  it('closes a tunnel once nothing moves through it', async () => {
+    const echo = await upstream();
+    const started = await startAgentNetworkProxy({
+      resolve: async () => ['93.184.216.34'], connect: () => net.connect(echo, '127.0.0.1'), idleTimeoutMs: 150
+    });
+    cleanup.push(() => started.close());
+    const tunnel = await open(started.port, 'cdn.jsdelivr.net:443');
+    expect(tunnel.head).toMatch(/^HTTP\/1\.1 200/);
+    const echoed = new Promise<string>(resolve => tunnel.socket.once('data', chunk => resolve(chunk.toString('utf8'))));
+    tunnel.socket.write('ping');
+    expect(await echoed).toBe('ping');
+    const opened = Date.now();
+    await tunnel.closed;
+    expect(Date.now() - opened).toBeGreaterThanOrEqual(100);
+  });
+
+  it('gives up on a host that does not resolve or answer in time', async () => {
+    const hanging: net.Socket[] = [];
+    const started = await startAgentNetworkProxy({
+      resolve: async host => host === 'cdn.jsdelivr.net' ? new Promise<string[]>(() => {}) : ['93.184.216.34'],
+      // A socket that never connects, like a blackholed address.
+      connect: () => { const socket = new net.Socket(); hanging.push(socket); return socket; },
+      connectTimeoutMs: 100
+    });
+    cleanup.push(() => started.close());
+    for (const target of ['cdn.jsdelivr.net:443', 'unpkg.com:443']) {
+      expect((await send(started.port, connect(target))).head, target).toMatch(/^HTTP\/1\.1 504/);
+    }
+    expect(hanging).toHaveLength(1);
+    expect(hanging[0]!.destroyed).toBe(true);
+  });
+
   it('points every common proxy variable at loopback', () => {
     const env = agentProxyEnvironment(4321);
     for (const name of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']) {
@@ -135,6 +207,34 @@ describe('agent sandbox rules', () => {
     expect(() => agentSeatbeltRules(0, [])).toThrow('port');
   });
 
+  it('denies listening sockets and LaunchServices', () => {
+    const rules = agentSeatbeltRules(4321, []);
+    expect(rules).toContain('(deny network-bind (local ip "*:*"))(deny network-inbound (local ip "*:*"))');
+    expect(rules).toContain('(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") (global-name-regex #"^com\\.apple\\.lsd\\."))');
+    expect(rules).not.toMatch(/\(allow network-(?:bind|inbound)/);
+  });
+
+  it.runIf(process.platform === 'darwin')('lets a sandboxed command reach the proxy but not listen or launch apps', async () => {
+    const proxy = net.createServer(socket => socket.end('proxied'));
+    await new Promise<void>(resolve => proxy.listen(0, '127.0.0.1', resolve));
+    cleanup.push(() => new Promise(resolve => proxy.close(resolve)));
+    const port = (proxy.address() as net.AddressInfo).port;
+    const profile = `(version 1)(allow default)${agentSeatbeltRules(port, [])}`;
+    const run = (command: string, args: string[]) => new Promise<string>(resolve => {
+      execFile('/usr/bin/sandbox-exec', ['-p', profile, command, ...args], { timeout: 10_000 }, (_error, stdout, stderr) => resolve(`${stdout}${stderr}`));
+    });
+    const script = `const net = require('node:net');
+      const listen = host => new Promise(done => { const server = net.createServer();
+        server.once('error', error => done(error.code)); server.listen(0, host, () => server.close(() => done('listening'))); });
+      const reach = () => new Promise(done => { const socket = net.connect(${port}, '127.0.0.1');
+        let text = ''; socket.on('data', chunk => text += chunk); socket.on('end', () => done(text)); socket.on('error', error => done(error.code)); });
+      (async () => console.log(JSON.stringify({ any: await listen('0.0.0.0'), loopback: await listen('127.0.0.1'), proxy: await reach() })))();`;
+    expect(JSON.parse(await run(process.execPath, ['-e', script]))).toEqual({ any: 'EPERM', loopback: 'EPERM', proxy: 'proxied' });
+    // lsappinfo only reads LaunchServices state, unlike `open`, which would launch an app if the rule regressed.
+    const front = await new Promise<string>(resolve => execFile('/usr/bin/lsappinfo', ['front'], (_error, stdout) => resolve(stdout)));
+    if (front.includes('ASN:')) expect(await run('/usr/bin/lsappinfo', ['front'])).not.toContain('ASN:');
+  });
+
   it('lists account keys, provider logins and Powermove runtime homes by their real paths', async () => {
     const userData = await mkdtemp(path.join(os.tmpdir(), 'pm-agent-network-'));
     cleanup.push(() => rm(userData, { recursive: true, force: true }));
@@ -151,5 +251,50 @@ describe('agent sandbox rules', () => {
     expect(codex).toContain(path.join(userData, 'codex-runtime', 'auth.json'));
     expect(codex).not.toContain(path.join(userData, 'codex-runtime'));
     expect(codex).toContain(path.join(userData, 'claude-runtime'));
+  });
+
+  it('lists registry, container and password-store tokens and every CLI\'s transcripts', async () => {
+    const userData = await mkdtemp(path.join(os.tmpdir(), 'pm-agent-network-'));
+    cleanup.push(() => rm(userData, { recursive: true, force: true }));
+    const home = os.homedir();
+    const all = await agentCredentialPaths(userData, { codexHome: 'all' });
+    for (const file of ['.npmrc', '.yarnrc.yml', '.docker/config.json', '.kube', '.gnupg', '.claude.json', '.config/op', '.password-store',
+      '.codex/sessions', '.codex/archived_sessions', '.codex/history.jsonl', '.claude/projects', '.claude/history.jsonl']) {
+      expect(all).toContain(path.join(home, file));
+    }
+  });
+
+  it('keeps a runtime home\'s helpers readable but not its login backups, databases or transcripts', async () => {
+    const userData = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pm-agent-network-')));
+    cleanup.push(() => rm(userData, { recursive: true, force: true }));
+    const codexRuntime = path.join(userData, 'codex-runtime');
+    await mkdir(path.join(codexRuntime, 'skills'), { recursive: true });
+    for (const name of ['auth.json.bak.1', 'state_5.sqlite', 'state_5.sqlite-wal', 'config.toml']) await writeFile(path.join(codexRuntime, name), '');
+    const codex = await agentCredentialPaths(userData, { codexHome: 'credentials' });
+    for (const name of ['auth.json', 'auth.json.bak.1', 'state_5.sqlite', 'state_5.sqlite-wal', 'sessions', 'history.jsonl']) {
+      expect(codex).toContain(path.join(codexRuntime, name));
+    }
+    for (const name of ['skills', 'config.toml']) expect(codex).not.toContain(path.join(codexRuntime, name));
+
+    const claudeRuntime = path.join(userData, 'claude-runtime');
+    const cwd = path.join(userData, 'Agent Workspaces', 'project');
+    const own = cwd.replace(/[^a-zA-Z0-9]/g, '-');
+    for (const store of [own, '-Users-me-other']) await mkdir(path.join(claudeRuntime, 'projects', store), { recursive: true });
+    await mkdir(path.join(claudeRuntime, 'shell-snapshots'));
+    await writeFile(path.join(claudeRuntime, '.claude.json.backup.1'), '');
+    const claude = await agentCredentialPaths(userData, { codexHome: 'all', claudeHome: { cwd } });
+    for (const name of ['.credentials.json', '.claude.json', '.claude.json.backup.1', 'sessions', 'history.jsonl', 'projects/-Users-me-other']) {
+      expect(claude).toContain(path.join(claudeRuntime, name));
+    }
+    for (const name of ['', 'projects', `projects/${own}`, 'shell-snapshots']) expect(claude).not.toContain(path.join(claudeRuntime, name));
+    expect(claude).toContain(codexRuntime);
+  });
+
+  it('names Claude project stores the way Claude Code does', () => {
+    expect(isClaudeProjectStore('-Users-me-Agent-Workspaces-p-1', '/Users/me/Agent Workspaces/p_1')).toBe(true);
+    expect(isClaudeProjectStore('-Users-me-Agent-Workspaces-p-2', '/Users/me/Agent Workspaces/p_1')).toBe(false);
+    const long = `/Users/me/${'a'.repeat(240)}`;
+    expect(isClaudeProjectStore(`${long.replace(/[^a-zA-Z0-9]/g, '-').slice(0, 200)}-1x2y3z`, long)).toBe(true);
+    expect(isClaudeProjectStore(long.replace(/[^a-zA-Z0-9]/g, '-'), long)).toBe(false);
   });
 });

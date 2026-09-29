@@ -24,7 +24,8 @@ const STRICT_SANDBOX_SETTINGS = {
 
 // dontAsk still auto-approves sandboxed Bash under autoAllowBashIfSandboxed,
 // so Edit runs turn that off and deny every shell and file-writing tool.
-const EDITOR_SANDBOX = JSON.stringify({ sandbox: { ...STRICT_SANDBOX_SETTINGS, autoAllowBashIfSandboxed: false } satisfies SandboxSettings });
+const EDITOR_SANDBOX_SETTINGS = { ...STRICT_SANDBOX_SETTINGS, autoAllowBashIfSandboxed: false } satisfies SandboxSettings;
+const EDITOR_SANDBOX = JSON.stringify({ sandbox: EDITOR_SANDBOX_SETTINGS });
 const EDITOR_DISALLOWED_TOOLS = 'Bash,Monitor,PowerShell,Write,Edit,NotebookEdit';
 
 /** Claude project Bash shares the one agent shell allowlist. WebSearch and
@@ -33,12 +34,22 @@ export const CLAUDE_PROJECT_NETWORK_HOSTS = AGENT_SHELL_NETWORK_HOSTS;
 
 // strictAllowlist denies every other host outright instead of prompting, and
 // stops a command's allowed_domains parameter from widening the list.
-const PROJECT_SANDBOX = JSON.stringify({
-  sandbox: {
-    ...STRICT_SANDBOX_SETTINGS,
-    network: { allowedDomains: [...CLAUDE_PROJECT_NETWORK_HOSTS], strictAllowlist: true }
-  } satisfies SandboxSettings
-});
+const PROJECT_SANDBOX_SETTINGS = {
+  ...STRICT_SANDBOX_SETTINGS,
+  network: { allowedDomains: [...CLAUDE_PROJECT_NETWORK_HOSTS], strictAllowlist: true }
+} satisfies SandboxSettings;
+const PROJECT_SANDBOX = JSON.stringify({ sandbox: PROJECT_SANDBOX_SETTINGS });
+
+/** The sandbox keeps Bash from reading credential paths; Read deny rules keep
+ * Read, Grep and Glob out of them too. `//` marks an absolute path. */
+function sandboxSettings(access: 'editor' | 'project', deniedReads: readonly string[]): string {
+  if (!deniedReads.length) return access === 'editor' ? EDITOR_SANDBOX : PROJECT_SANDBOX;
+  const sandbox = access === 'editor' ? EDITOR_SANDBOX_SETTINGS : PROJECT_SANDBOX_SETTINGS;
+  return JSON.stringify({
+    permissions: { deny: deniedReads.flatMap(file => [`Read(/${file})`, `Read(/${file}/**)`]) },
+    sandbox: { ...sandbox, filesystem: { denyRead: [...deniedReads] } } satisfies SandboxSettings
+  });
+}
 
 const PROJECT_NETWORK_INSTRUCTIONS = `SHELL NETWORK
 Sandboxed Bash can download only from ${CLAUDE_PROJECT_NETWORK_HOSTS.join(', ')}; other hosts are refused. Research any site with WebSearch and WebFetch, then download the file itself from one of those hosts into the deliverable directory.`;
@@ -55,6 +66,8 @@ interface ClaudeArgvOptions {
   instructions?: string;
   nativeTools?: NativeMcpServerConfig;
   externalMcpServers?: UserMcpServers;
+  /** Absolute paths no tool may read outside Computer access. */
+  deniedReads?: readonly string[];
 }
 
 function promptWithImages(prompt: string, imagePaths: readonly string[]): string {
@@ -78,11 +91,15 @@ export function buildClaudeArgv(options: ClaudeArgvOptions): string[] {
   const editorTools = options.nativeTools
     ? `${EDITOR_TOOLS},${POWERMOVE_LIVE_INSPECTION_MCP_TOOL_NAMES.join(',')}`
     : EDITOR_TOOLS;
+  // The working directory is an Agent Workspace other agents can write, so its
+  // .claude settings, hooks, agents, skills and .mcp.json never load; user
+  // settings are the runtime home Powermove writes.
   const argv = [
     '--print',
     '--output-format', 'stream-json',
     '--include-partial-messages',
     '--verbose',
+    '--setting-sources', 'user',
     '--mcp-config', mcpConfig,
     '--json-schema', JSON.stringify(options.schema)
   ];
@@ -98,7 +115,7 @@ export function buildClaudeArgv(options: ClaudeArgvOptions): string[] {
   } else {
     argv.push(
       '--permission-mode', options.access === 'editor' ? 'dontAsk' : 'acceptEdits',
-      '--settings', options.access === 'editor' ? EDITOR_SANDBOX : PROJECT_SANDBOX,
+      '--settings', sandboxSettings(options.access === 'editor' ? 'editor' : 'project', options.deniedReads ?? []),
       '--tools', 'default',
       '--allowedTools', withExternal(options.access === 'editor' ? editorTools : projectTools)
     );

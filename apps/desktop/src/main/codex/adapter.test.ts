@@ -8,9 +8,11 @@ import {
   ADAPTER_VERSION,
   REQUIRED_CODEX_FLAGS,
   buildAutonomousArgv,
+  PERMISSION_PROFILES_UNSUPPORTED,
   PROJECT_PERMISSION_PROFILE,
   buildEditorArgv,
-  capabilities
+  capabilities,
+  verifyPermissionProfiles
 } from './adapter';
 
 describe('Codex CLI adapter', () => {
@@ -68,6 +70,7 @@ describe('Codex CLI adapter', () => {
         access: 'project',
         shellNetwork: true,
         deniedReads: ['/Users/me/.ssh', '/user-data/codex-runtime/auth.json'],
+        workspaceRoots: ['/workspace', '/workspace'],
         extensionsDir: '/user-data/extensions',
         sessionId: null,
         instructions: 'AGENT INSTRUCTIONS',
@@ -78,10 +81,10 @@ describe('Codex CLI adapter', () => {
       '/user-data/extensions',
       'exec',
       '--skip-git-repo-check',
-      '--config', 'approvals_reviewer="auto_review"',
-      '--config', 'approval_policy="on-request"',
+      '--config', 'approval_policy="never"',
       '--config', 'default_permissions="powermove"',
       '--config', 'permissions.powermove.extends=":workspace"',
+      '--config', 'projects={"/workspace"={trust_level="untrusted"}}',
       '--config', 'permissions.powermove.filesystem={"/Users/me/.ssh"="deny","/user-data/codex-runtime/auth.json"="deny"}',
       '--config', 'features.network_proxy=true',
       '--config', 'permissions.powermove.network.enabled=true',
@@ -91,9 +94,10 @@ describe('Codex CLI adapter', () => {
       '--output-last-message',
       '/workspace/.powermove/result-run-1.json',
       '--json',
-      `AGENT INSTRUCTIONS\n\nSHELL NETWORK\nShell commands can download only over HTTPS from ${AGENT_SHELL_NETWORK_HOSTS.join(', ')}; other hosts are refused.\n\nUSER REQUEST\nMake a launch trailer`,
       '--image',
-      '/workspace/inputs/references/reference-0.png'
+      '/workspace/inputs/references/reference-0.png',
+      '--',
+      `AGENT INSTRUCTIONS\n\nSHELL NETWORK\nShell commands can download only over HTTPS from ${AGENT_SHELL_NETWORK_HOSTS.join(', ')}; other hosts are refused.\n\nUSER REQUEST\nMake a launch trailer`
     ]);
   });
 
@@ -134,6 +138,21 @@ describe('Codex CLI adapter', () => {
     expect(buildEditorArgv(common)).toEqual(expect.arrayContaining(['--sandbox', 'read-only']));
   });
 
+  it('marks the shared workspace untrusted so its .codex config never loads', () => {
+    const common = {
+      schemaPath: '/workspace/schema.json', outputPath: '/workspace/result.json', prompt: 'Build',
+      imagePaths: [], model: null, reasoningEffort: null, extensionsDir: '/user-data/extensions',
+      instructions: 'AGENT INSTRUCTIONS', workspaceRoots: ['/var/ws', '/private/var/ws']
+    };
+    for (const sessionId of [null, 'thread-123']) {
+      const argv = buildAutonomousArgv({ ...common, access: 'project', sessionId });
+      const trust = argv.indexOf('projects={"/var/ws"={trust_level="untrusted"},"/private/var/ws"={trust_level="untrusted"}}');
+      expect(argv[trust - 1]).toBe('--config');
+      // An exec option, so `exec resume` applies it too.
+      expect(trust).toBeGreaterThan(argv.indexOf(sessionId ? 'resume' : 'exec'));
+    }
+  });
+
   it('builds the exact resumed computer-authority autonomous argv', () => {
     expect(
       buildAutonomousArgv({
@@ -165,9 +184,57 @@ describe('Codex CLI adapter', () => {
       'gpt-5-codex',
       '--config',
       'model_reasoning_effort="medium"',
+      '--',
       'thread-123',
       'AGENT INSTRUCTIONS\n\nUSER REQUEST\nPublish the approved deliverable'
     ]);
+  });
+
+  it('never lets a sandboxed run ask for an unsandboxed command, and keeps Powermove tools approved', () => {
+    const common = {
+      schemaPath: '/workspace/schema.json', outputPath: '/workspace/result.json', prompt: 'Build',
+      imagePaths: [], model: null, reasoningEffort: null, extensionsDir: '/user-data/extensions', instructions: 'AGENT INSTRUCTIONS',
+      nativeTools: { command: '/Applications/Powermove.app/Contents/MacOS/Powermove', args: ['mcp-server.mjs'], env: {} }
+    };
+    for (const sessionId of [null, 'thread-123']) {
+      const argv = buildAutonomousArgv({ ...common, access: 'project', shellNetwork: true, sessionId });
+      expect(argv).toContain('approval_policy="never"');
+      expect(argv.join(' ')).not.toMatch(/on-request|approvals_reviewer|auto_review/);
+      expect(argv).toContain('mcp_servers.powermove.default_tools_approval_mode="approve"');
+    }
+  });
+
+  it('passes the session id after -- and refuses one that is not an id', () => {
+    const common = {
+      schemaPath: '/workspace/schema.json', outputPath: '/workspace/result.json', prompt: '--help',
+      imagePaths: ['/workspace/a.png'], model: null, reasoningEffort: null, extensionsDir: '/user-data/extensions',
+      instructions: 'AGENT INSTRUCTIONS', access: 'project' as const
+    };
+    const argv = buildAutonomousArgv({ ...common, sessionId: '019999aa-0000-7000-8000-000000000000' });
+    const separator = argv.indexOf('--');
+    expect(argv.slice(separator + 1, separator + 2)).toEqual(['019999aa-0000-7000-8000-000000000000']);
+    expect(argv.indexOf('--image')).toBeLessThan(separator);
+    expect(argv).toHaveLength(separator + 3);
+    for (const sessionId of ['--dangerously-bypass-approvals-and-sandbox', '-c', 'a b', '../thread']) {
+      expect(() => buildAutonomousArgv({ ...common, sessionId }), sessionId).toThrow('Invalid Codex session id.');
+    }
+  });
+
+  it('runs Project access only on a Codex that is seen enforcing its permission profile', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'powermove-profile-'));
+    const script = async (name: string, body: string) => {
+      const file = path.join(directory, name);
+      await writeFile(file, `#!/bin/sh\n${body}\n`, 'utf8');
+      await chmod(file, 0o755);
+      return file;
+    };
+    // Runs the probe command unsandboxed, as a Codex that ignores the profile would.
+    const leaky = await script('leaky', 'while [ "$1" != "--" ]; do shift; done; shift; exec "$@"');
+    const unsupported = await script('unsupported', 'echo "error: unrecognized subcommand" >&2; exit 2');
+    const enforcing = await script('enforcing', 'for argument in "$@"; do last="$argument"; done; echo "$last"');
+    await expect(verifyPermissionProfiles(leaky, process.env)).rejects.toThrow(PERMISSION_PROFILES_UNSUPPORTED);
+    await expect(verifyPermissionProfiles(unsupported, process.env)).rejects.toThrow(PERMISSION_PROFILES_UNSUPPORTED);
+    await expect(verifyPermissionProfiles(enforcing, process.env)).resolves.toBeUndefined();
   });
 
   it('allows user resources instead of suppressing integrations, rules and skills', () => {

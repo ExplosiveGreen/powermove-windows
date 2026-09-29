@@ -56,12 +56,21 @@ describe('Claude CLI adapter', () => {
     expect(argv).not.toContain('--safe-mode');
     expect(argv).not.toContain('--strict-mcp-config');
     expect(argv).not.toContain('--disable-slash-commands');
-    expect(argv).not.toContain('--setting-sources');
     expect(argv[argv.indexOf('--allowedTools') + 1]).toContain('Skill');
     expect(argv.at(-1)).toContain('/tmp/reference.png');
     expect(JSON.parse(CLAUDE_PROJECT_SANDBOX_SETTINGS)).toMatchObject({
       sandbox: { enabled: true, allowUnsandboxedCommands: false, failIfUnavailable: true }
     });
+  });
+
+  it.each(['editor', 'project', 'computer'] as const)('loads only user settings in %s mode, never the shared workspace', access => {
+    const argv = buildClaudeArgv({
+      schema, prompt: 'Build', imagePaths: [], model: null, reasoningEffort: null, sessionId: null, access, instructions: 'Build.'
+    });
+    // A workspace .claude/settings.json hook, .mcp.json server, agent or skill
+    // would otherwise run outside the sandbox on the next Claude run.
+    expect(argv[argv.indexOf('--setting-sources') + 1]).toBe('user');
+    expect(argv.indexOf('--setting-sources')).toBeLessThan(argv.indexOf('--system-prompt'));
   });
 
   it('lets project Bash reach only read-only media and package CDNs', () => {
@@ -122,6 +131,26 @@ describe('Claude CLI adapter', () => {
     const project = buildClaudeArgv({ schema, prompt: 'Build', imagePaths: [], model: null, reasoningEffort: null, sessionId: null, access: 'project', instructions: 'Build.' });
     expect(project).not.toContain('--disallowedTools');
     expect(JSON.parse(project[project.indexOf('--settings') + 1]!).sandbox.autoAllowBashIfSandboxed).toBe(true);
+  });
+
+  it.each(['editor', 'project'] as const)('keeps Bash and the file tools out of credential paths in %s mode', access => {
+    const deniedReads = ['/Users/me/.ssh', '/Users/me/Library/Application Support/Powermove/claude-runtime/.credentials.json'];
+    const argv = buildClaudeArgv({
+      schema, prompt: 'Build', imagePaths: [], model: null, reasoningEffort: null, sessionId: null, access, instructions: 'Build.', deniedReads
+    });
+    const settings = JSON.parse(argv[argv.indexOf('--settings') + 1]!);
+    const base = JSON.parse(access === 'editor' ? CLAUDE_EDITOR_SANDBOX_SETTINGS : CLAUDE_PROJECT_SANDBOX_SETTINGS);
+    expect(settings.sandbox).toEqual({ ...base.sandbox, filesystem: { denyRead: deniedReads } });
+    // Read, Grep and Glob check Read rules; `//` is Claude's absolute-path prefix.
+    expect(settings.permissions.deny).toEqual([
+      'Read(//Users/me/.ssh)', 'Read(//Users/me/.ssh/**)',
+      'Read(//Users/me/Library/Application Support/Powermove/claude-runtime/.credentials.json)',
+      'Read(//Users/me/Library/Application Support/Powermove/claude-runtime/.credentials.json/**)'
+    ]);
+    const computer = buildClaudeArgv({
+      schema, prompt: 'Build', imagePaths: [], model: null, reasoningEffort: null, sessionId: null, access: 'computer', deniedReads
+    });
+    expect(computer).not.toContain('--settings');
   });
 
   it('only enables unrestricted CLI permissions after computer consent is handled by main', () => {
