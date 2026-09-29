@@ -157,6 +157,37 @@ describe('keyframe clipboard', () => {
     expect(PM.L(target.id).p.opacity.kf).toEqual([]);
   });
 
+  it('adds the source effect to the destination layer when pasting effect keyframes', () => {
+    PM.mkEffect = (type: string) => ({ id: PM.uid('f'), type, on: true, p: { amount: PM.P(0), size: PM.P(1) } });
+    const source = add(PM, 'source', 0, 10);
+    const target = add(PM, 'target', 0, 10);
+    const effect = PM.mkEffect('blur');
+    source.fx = [effect];
+    const a = PM.setKeyOn(effect.p.amount, 1, 5, 'linear', 10);
+    const b = PM.setKeyOn(effect.p.size, 1, 9, 'linear', 10);
+    PM.sel.keys = [a.i, b.i];
+    const clipboard = copyKeyframes(PM);
+
+    PM.selectLayers([target.id]);
+    PM.time = 2;
+    PM.hist.clear();
+    expect(pasteKeyframes(PM, clipboard)).toBeTruthy();
+
+    expect(target.fx).toHaveLength(1);
+    expect(target.fx[0].type).toBe('blur');
+    expect(target.fx[0].p.amount.kf.map((key: any) => [key.t, key.v])).toEqual([[2, 5]]);
+    expect(target.fx[0].p.size.kf.map((key: any) => [key.t, key.v])).toEqual([[2, 9]]);
+
+    PM.time = 5;
+    pasteKeyframes(PM, clipboard);
+    expect(target.fx).toHaveLength(1);
+    expect(target.fx[0].p.amount.kf).toHaveLength(2);
+
+    PM.hist.undo();
+    PM.hist.undo();
+    expect(PM.L(target.id).fx).toHaveLength(0);
+  });
+
   it('replaces keys on the same frame and drops keys past the composition end', () => {
     const layer = add(PM, 'animated', 0, 10);
     const a = PM.setKey(layer, 'opacity', 1, 10);

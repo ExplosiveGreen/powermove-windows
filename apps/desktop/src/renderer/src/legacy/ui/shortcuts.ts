@@ -1009,7 +1009,7 @@ export interface KeyframeClipboard {
   /** Channel selected at copy time. Selecting another channel before pasting
    * retargets a single-property clipboard, as in After Effects. */
   chan: string | null;
-  tracks: { layer: string; path: string; keys: { at: number; key: any }[] }[];
+  tracks: { layer: string; path: string; fx?: { id: string; type: string; param: string }; keys: { at: number; key: any }[] }[];
 }
 
 export interface KeyframePasteTarget {
@@ -1026,7 +1026,15 @@ export function copyKeyframes(PM: PMRegistry): KeyframeClipboard | null {
   for (const { layer, path, key } of selected) {
     const id = `${layer.id}\n${path}`;
     let track = tracks.get(id);
-    if (!track) tracks.set(id, track = { layer: layer.id, path, keys: [] });
+    if (!track) {
+      const [fxId, param] = path.split('.');
+      const effect = (layer.fx || []).find((item: any) => item.id === fxId);
+      tracks.set(id, track = {
+        layer: layer.id, path,
+        ...(effect && param ? { fx: { id: effect.id, type: effect.type, param } } : {}),
+        keys: [],
+      });
+    }
     track.keys.push({ at: Number(layer.from) + Number(key.t), key: JSON.parse(JSON.stringify(key)) });
   }
   for (const track of tracks.values()) track.keys.sort((a, b) => a.at - b.at);
@@ -1073,6 +1081,28 @@ export function pasteKeyframes(PM: PMRegistry, clipboard: KeyframeClipboard | nu
     : null;
 
   const writes: { layer: any; prop: any; keys: any[] }[] = [];
+  /* Effects a paste has to create, and which destination effect each source
+   * effect maps to, so several params of one effect land on the same instance. */
+  const addedEffects = new Map<any, any[]>();
+  const effectFor = new Map<string, any>();
+  const claimed = new Set<any>();
+  const resolveEffect = (layer: any, fx: NonNullable<KeyframeClipboard['tracks'][number]['fx']>) => {
+    const cacheKey = `${layer.id}\n${fx.id}`;
+    const cached = effectFor.get(cacheKey);
+    if (cached) return cached;
+    if (PM.TYPE_META?.[layer.type]?.effects === false) return null;
+    const existing = [...(layer.fx || []), ...(addedEffects.get(layer) || [])];
+    let effect = existing.find((item: any) => item.id === fx.id && item.type === fx.type)
+      || existing.find((item: any) => item.type === fx.type && !claimed.has(item));
+    if (!effect) {
+      effect = PM.mkEffect?.(fx.type);
+      if (!effect) return null;
+      addedEffects.set(layer, [...(addedEffects.get(layer) || []), effect]);
+    }
+    claimed.add(effect);
+    effectFor.set(cacheKey, effect);
+    return effect;
+  };
   let skipped = 0;
   for (const track of clipboard.tracks) {
     const kind = keyframeValueKind(track.keys[0]?.key.v);
@@ -1080,7 +1110,11 @@ export function pasteKeyframes(PM: PMRegistry, clipboard: KeyframeClipboard | nu
       if (!editableLayer(PM, layer)) { skipped++; continue; }
       const retargeted = retarget ? PM.findProp?.(layer, retarget) : null;
       /* An explicit destination row is strict; a stale channel selection is not. */
-      const prop = retargeted || (retarget && target.path ? null : PM.findProp?.(layer, track.path));
+      let prop = retargeted || (retarget && target.path ? null : PM.findProp?.(layer, track.path));
+      if (track.fx && !retarget && !target.path) {
+        const effect = resolveEffect(layer, track.fx);
+        prop = effect ? (track.fx.param === '$enabled' ? effect.on : effect.p?.[track.fx.param]) ?? null : null;
+      }
       const current = prop?.kf?.length ? prop.kf[0].v : prop?.v;
       if (!prop || keyframeValueKind(current) !== kind) { skipped++; continue; }
       const keys = track.keys.map(({ at, key }) => ({ at: Math.round((at + offset) * fps) / fps, key }))
@@ -1100,6 +1134,12 @@ export function pasteKeyframes(PM: PMRegistry, clipboard: KeyframeClipboard | nu
 
   const pasted = writes.flatMap(write => write.keys);
   return PM.hist.do(pasted.length === 1 ? 'Paste keyframe' : 'Paste keyframes', () => {
+    /* Only effects that actually receive keys are added. */
+    for (const [layer, effects] of addedEffects) {
+      const used = effects.filter(effect => writes.some(write => write.layer === layer
+        && (Object.values(effect.p || {}).includes(write.prop) || write.prop === effect.on)));
+      if (used.length) layer.fx = [...(layer.fx || []), ...used];
+    }
     for (const { prop, keys } of writes) {
       const frames = new Set(keys.map(key => Math.round(Number(key.t) * fps)));
       prop.kf = [...(prop.kf || []).filter((key: any) => !frames.has(Math.round(Number(key.t) * fps))), ...keys]
