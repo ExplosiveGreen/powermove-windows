@@ -42,7 +42,7 @@ it.runIf(process.platform === 'darwin')('writes files and compiles where a plant
   expect(await readdir(outside)).toEqual([]);
 });
 
-it.runIf(process.platform === 'darwin')('reads text, pages and images and lists odd names through the Project sandbox', async () => {
+it.runIf(process.platform === 'darwin')('reads text, pages and images and lists odd names', async () => {
   const ws = await workspace();
   const json = async (name: string, args: Record<string, unknown>) => JSON.parse(((await ws.call(name, args, signal()))[0] as any).text);
   const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff, 0x80, 0x0a]);
