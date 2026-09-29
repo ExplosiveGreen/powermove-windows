@@ -1,3 +1,4 @@
+import { createSubscriber } from 'svelte/reactivity';
 import type { PowermoveAPI, Selection } from '../src/kernel/api';
 import type { PMRegistry } from '../src/legacy/registry';
 import { createRpc, serializeRpcError, type Rpc, type HandleId } from '../../shared/sandbox-rpc';
@@ -21,6 +22,10 @@ export class ProjectWritePermissionError extends Error {
 export interface SandboxControl {
   /** The kernel's one notification per flush: apply `delta`, then dispatch `events` to local listeners in order. */
   tick(delta: Partial<SandboxState>, events: SandboxEvent[]): void;
+  /** The kernel's theme push, for `theme.active()` and `theme.scheme()`. */
+  theme(theme: SandboxInit['theme']): void;
+  /** The kernel's catalog push, after other extensions loaded or unloaded. */
+  catalog(catalog: SandboxInit['catalog']): void;
   ready(): Promise<unknown>;
   dispose(): void;
   setQuiet(on: boolean): void;
@@ -40,7 +45,8 @@ export type SandboxEvent = [name: string, payload: unknown];
 export type SandboxSnapshot = { generation: number; json: string } | { generation: number; tooLarge: true } | { generation: number; unchanged: true };
 export interface SandboxInit {
   id: string; apiVersion: number; manifest: PowermoveAPI['manifest']; vars: Record<string, string>;
-  theme: { scheme: string; tokens: Record<string, string> }; state: SandboxState; bundleUrl: string;
+  /** `id` is the active theme; pushes carry it too. */
+  theme: { id?: string; scheme: string; tokens: Record<string, string> }; state: SandboxState; bundleUrl: string;
   catalog?: Record<string, Array<Record<string, any>>>;
   activeTheme?: string;
 }
@@ -155,9 +161,56 @@ export function panelInfo(def: Record<string, any>): SandboxPanelInfo {
  * the kernel and the last one withdraws it, so no callback handle crosses and
  * an occurrence costs no round trip. Reading the project needs no
  * permission; `network` is what gates sending it anywhere.
+ *
+ * Reactive reads (time, playing, revision, selection, latest, theme) cost
+ * nothing new on the port: they re-run their readers from the ticks and theme
+ * pushes that arrive anyway, and only `latest()` pulls, once per generation and
+ * at most once a frame, while it has a reader.
  */
 export type SandboxMode = 'runtime' | 'view';
-const VIEW_READS = new Set(['storage.get', 'assets.get', 'assets.readText', 'media.getImportDefaults', 'ui.icon']);
+const VIEW_READS = new Set(['storage.get', 'assets.get', 'assets.readText', 'media.getImportDefaults', 'ui.icon', 'panels.isOpen']);
+/*
+ * A reactive read calls `read()`: inside a template, $derived or $effect that
+ * subscribes the reader (the first one runs `start`), anywhere else it does
+ * nothing. `bump()` re-runs the current readers; with none it is a null check.
+ */
+function reactiveSource(start?: () => void): { read(): void; bump(): void; live(): boolean } {
+  let update: (() => void) | null = null;
+  const read = createSubscriber(next => { update = next; start?.(); return () => { update = null; }; });
+  return { read, bump: () => update?.(), live: () => update !== null };
+}
+/*
+ * Callback handles in the replies to a callback the host asks again and
+ * again (palette queries, menu opens). Replies can land in any order and the
+ * host keeps the one for the newest call it made, so handles are kept by the
+ * order the calls were made, not the order they answered: the two newest
+ * replies stay runnable, and a reply two newer ones already beat creates none.
+ */
+function replyHandles(handle: (fn: (...args: any[]) => unknown) => HandleId, release: (id: HandleId) => void) {
+  let issued = 0, disposed = false;
+  let kept: Array<{ seq: number; ids: HandleId[] }> = [];
+  return {
+    issue: () => ++issued,
+    answer<T>(seq: number, build: (hold: (fn: (...args: any[]) => unknown) => HandleId) => T[]): T[] {
+      if (disposed || kept.filter(reply => reply.seq > seq).length >= 2) return [];
+      const ids: HandleId[] = [];
+      let items: T[];
+      try { items = build(fn => { const id = handle(fn); ids.push(id); return id; }); }
+      catch (error) { for (const id of ids) release(id); throw error; }
+      kept = [...kept, { seq, ids }].sort((a, b) => b.seq - a.seq);
+      for (const reply of kept.splice(2)) for (const id of reply.ids) release(id);
+      return items;
+    },
+    dispose() { disposed = true; for (const reply of kept.splice(0)) for (const id of reply.ids) release(id); }
+  };
+}
+/* The runtime iframe is hidden, where a frame callback may never come; the timer bounds the wait. */
+function nextFrame(fn: () => void): void {
+  let done = false;
+  const run = (): void => { if (!done) { done = true; fn(); } };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+  setTimeout(run, 50);
+}
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
     Object.freeze(value);
@@ -169,6 +222,7 @@ function deepFreeze<T>(value: T): T {
 /** A per-iframe API. Only serializable values and callback ids cross the port. */
 export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode = 'runtime'): PowermoveAPI {
   const state: SandboxState = { ...init.state, selection: deepFreeze(init.state.selection ?? null) };
+  const theme = { active: init.theme.id ?? init.activeTheme ?? '', scheme: init.theme.scheme };
   /** True while a view's `activate` replays; see the mode comment above. */
   let quiet = false;
   const panelPorts = new Map<string, Rpc>();
@@ -177,8 +231,9 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
   let registrationFailure: unknown;
   const vars = Object.freeze({ ...init.vars });
   const local = new Map<string, Map<string, any>>();
+  let catalog = init.catalog;
   const list = (kind: string): any[] => {
-    const merged = new Map((init.catalog?.[kind] ?? []).map(item => [item.id, item]));
+    const merged = new Map((catalog?.[kind] ?? []).map(item => [item.id, item]));
     for (const [id, item] of local.get(kind) ?? []) merged.set(id, item);
     return [...merged.values()];
   };
@@ -260,6 +315,23 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     return { dispose };
   };
   const handle = (fn: (...args: any[]) => unknown): HandleId => rpc.handle(fn);
+  /* Callbacks cannot cross the port, so a toast's `action.run` and
+     `onDismiss` go as handles. The host releases them when the toast closes,
+     however it closes; one the host refuses releases them here. */
+  const toast = (message: string, options?: unknown): void => {
+    if (!options || typeof options !== 'object') { fire('invoke', 'ui', 'toast', options === undefined ? [message] : [message, options]); return; }
+    if (quiet) return;
+    const input = options as Record<string, any>;
+    const value: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(input)) if (key !== 'action' && key !== 'onDismiss' && typeof item !== 'function') value[key] = item;
+    const ids: HandleId[] = [];
+    const release = (): void => { for (const id of ids) { try { rpc.release(id); } catch { /* port closed */ } } };
+    try {
+      if (input.action && typeof input.action.run === 'function') { const run = handle(input.action.run); ids.push(run); value.action = { label: input.action.label, run }; }
+      if (typeof input.onDismiss === 'function') { const dismiss = handle(input.onDismiss); ids.push(dismiss); value.onDismiss = dismiss; }
+    } catch (error) { release(); throw error; }
+    void send('invoke', 'ui', 'toast', [message, value]).catch(error => { release(); raise(error); });
+  };
   /* The parsed snapshot of the newest generation fetched; see the data plane comment above. */
   let snapshot: { generation: number; value?: unknown; tooLarge?: true } | null = null;
   let inflight: Promise<void> | null = null;
@@ -267,6 +339,7 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     // `unchanged` names the generation already held here: the copy stands.
     if ('unchanged' in reply || snapshot && reply.generation < snapshot.generation) return;
     snapshot = 'json' in reply ? { generation: reply.generation, value: deepFreeze(JSON.parse(reply.json)) } : { generation: reply.generation, tooLarge: true };
+    reads.project.bump();
   }).finally(() => { inflight = null; });
   const pullProject = async (): Promise<unknown> => {
     const wanted = state.generation;
@@ -277,6 +350,26 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     if (snapshot.tooLarge) throw new Error('The project is larger than the 8 Mi character sandbox snapshot limit, so project.get() is unavailable until it shrinks');
     return snapshot.value;
   };
+  /* A `latest()` reader keeps this document's copy at the current generation.
+     A drag changes the project on every pointer move, and each pull builds a
+     whole-project copy on the host, so pulls wait for the one in flight and
+     for the next frame: at most one a frame, the newest change always among
+     them. A failed pull leaves what `latest()` returns as it was. */
+  let latestBusy = false, latestWanted = false;
+  const pullLatest = (): void => {
+    if (snapshot && snapshot.generation >= state.generation) return;
+    if (latestBusy) { latestWanted = true; return; }
+    latestBusy = true;
+    void Promise.all([pullProject().catch(() => {}), new Promise<void>(nextFrame)]).then(() => {
+      latestBusy = false;
+      if (!latestWanted) return;
+      latestWanted = false;
+      if (reads.project.live()) pullLatest();
+    });
+  };
+  const reads = { time: reactiveSource(), playing: reactiveSource(), revision: reactiveSource(), selection: reactiveSource(),
+    project: reactiveSource(pullLatest), theme: reactiveSource() };
+  const reactive = <T,>(source: { read(): void }, value: () => T) => (): T => { source.read(); return value(); };
   const raise = (error: unknown): void => { try { rpc.notify('runtime-error', serializeRpcError(error)); } catch { /* port closed */ } };
   /* Listeners live here; the kernel only learns which names have one. */
   const listeners = new Map<string, { fns: Set<{ fn: (payload: unknown) => unknown }>; interest: { dispose(): void } }>();
@@ -299,12 +392,13 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     return { dispose };
   };
   const simpleRegister = (namespace: string) => (definition: unknown) => registration(namespace, definition);
+  const menuContributors = new Set<{ location: string; fn: (...args: any[]) => unknown }>();
   const api: Record<string, any> = {
     id: init.id, apiVersion: init.apiVersion, manifest: init.manifest,
     effects: { register: simpleRegister('effects'), list: () => list('effects'), get: (id: string) => list('effects').find(item => item.id === id) },
     transitions: { register: simpleRegister('transitions'), list: () => list('transitions'), get: (id: string) => list('transitions').find(item => item.id === id) },
     layers: { register: simpleRegister('layers'), list: () => list('layers'), get: (id: string) => list('layers').find(item => item.id === id) },
-    theme: { register: simpleRegister('theme'), activate: (id: string) => fire('invoke', 'theme', 'activate', [id]), setScheme: () => { report('permission', 'theme.setScheme'); throw new PermissionError('theme.setScheme'); }, active: () => init.activeTheme ?? '', scheme: () => init.theme.scheme, list: () => list('theme') },
+    theme: { register: simpleRegister('theme'), activate: (id: string) => fire('invoke', 'theme', 'activate', [id]), setScheme: () => { report('permission', 'theme.setScheme'); throw new PermissionError('theme.setScheme'); }, active: reactive(reads.theme, () => theme.active), scheme: reactive(reads.theme, () => theme.scheme), list: () => list('theme') },
     keybindings: { bind: simpleRegister('keybindings'), unbind: (key: string) => fire('invoke', 'keybindings', 'unbind', [key]), list: () => list('keybindings'), chordOf: (event: KeyboardEvent) => {
       const parts = [event.metaKey && 'cmd', event.ctrlKey && 'ctrl', event.altKey && 'alt', event.shiftKey && 'shift', event.key.toLowerCase()].filter(Boolean);
       return parts.join('+');
@@ -324,35 +418,42 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
     }, list: () => list('status') },
     palette: { registerProvider(fn: (...args: any[]) => unknown) {
       if (mode === 'view') return registration('palette', { provider: 0 }, [], fn);
-      let current: HandleId[] = [], previous: HandleId[] = [];
-      const id = handle((query: string) => {
-        for (const item of previous) rpc.release(item);
-        previous = current; current = [];
-        return (fn(query) as Record<string, any>[]).map(entry => {
-          const run = handle(entry.run); current.push(run); return { ...entry, run };
-        });
+      const replies = replyHandles(handle, id => rpc.release(id));
+      // The entries may be a Promise.
+      const id = handle(async (query: string) => {
+        const seq = replies.issue();
+        const entries = await fn(query) as Record<string, any>[];
+        return replies.answer(seq, hold => entries.map(entry => ({ ...entry, run: hold(entry.run) })));
       });
       const registrationHandle = registration('palette', { provider: id }, [id]);
-      const disposable = { dispose() { registrationHandle.dispose(); for (const item of [...previous, ...current]) rpc.release(item); previous = []; current = []; } };
+      const disposable = { dispose() { registrationHandle.dispose(); replies.dispose(); } };
       disposers.push(disposable.dispose);
       return disposable;
     }, open: (query?: string) => fire('invoke', 'palette', 'open', query === undefined ? [] : [query]) },
     menus: { contribute(location: string, fn: (...args: any[]) => unknown) {
-      if (mode === 'view') return registration('menus', { location, items: 0 }, [], fn);
-      let current: HandleId[] = [], previous: HandleId[] = [];
-      const id = handle((ctx: unknown) => {
-        for (const item of previous) rpc.release(item);
-        previous = current; current = [];
-        return (fn(ctx) as Array<string | Record<string, any>>).map(entry => {
-          if (typeof entry === 'string' || !entry.run) return entry;
-          const run = handle(entry.run); current.push(run); return { ...entry, run };
-        });
+      const own = { location, fn };
+      menuContributors.add(own);
+      if (mode === 'view') { const recorded = registration('menus', { location, items: 0 }, [], fn); return { dispose() { menuContributors.delete(own); recorded.dispose(); } }; }
+      const replies = replyHandles(handle, id => rpc.release(id));
+      // The items may be a Promise; the host waits for them within its menu deadline.
+      const id = handle(async (ctx: unknown) => {
+        const seq = replies.issue();
+        const items = await fn(ctx) as Array<string | Record<string, any>>;
+        return replies.answer(seq, hold => items.map(entry => typeof entry === 'string' || !entry.run ? entry : { ...entry, run: hold(entry.run) }));
       });
       const registrationHandle = registration('menus', { location, items: id }, [id]);
-      const disposable = { dispose() { registrationHandle.dispose(); for (const item of [...previous, ...current]) rpc.release(item); previous = []; current = []; } };
+      const disposable = { dispose() { menuContributors.delete(own); registrationHandle.dispose(); replies.dispose(); } };
       disposers.push(disposable.dispose);
       return disposable;
-    }, collect: () => [] },
+    /* Only this extension's own contributions: another's items carry
+       callbacks that belong to its document. A throwing contributor is
+       reported and skipped, as in-realm. */
+    }, collect: (location: string, ctx: Record<string, unknown> = {}) => [...menuContributors].flatMap(({ location: where, fn }) => {
+      if (where !== location) return [];
+      try { const items = fn(ctx); return Array.isArray(items) ? items : []; } catch (error) { raise(error); return []; }
+    }), gather: async (location: string, ctx: Record<string, unknown> = {}) => (await Promise.all([...menuContributors].filter(({ location: where }) => where === location).map(async ({ fn }) => {
+      try { const items = await fn(ctx); return Array.isArray(items) ? items : []; } catch (error) { raise(error); return []; }
+    }))).flat() },
     panels: { register(def: Record<string, any>) {
       if (!def || typeof def.id !== 'string' || !def.id) throw new Error('panels.register requires an id');
       if (!def.component && typeof def.build !== 'function') throw new Error(`panel "${def.id}" needs component or build`);
@@ -361,17 +462,18 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
          panels: the host draws the header from title, and the Library shows
          the icon on the extension's art. */
       return registration('panels', panelInfo(def), [], def);
-    }, list: () => list('panels').map(item => item.id), open: (id: string, options?: unknown) => fire('invoke', 'panels', 'open', options === undefined ? [id] : [id, options]), close: (id: string) => fire('invoke', 'panels', 'close', [id]), refresh: (id: string) => fire('invoke', 'panels', 'refresh', [id]), isOpen: () => false },
-    project: { get: () => legacy ? watchPromise(pullProject(), 'project.get', report) : pullProject(), revision: () => state.revision, selection: () => state.selection,
-      time: () => state.time, playing: () => state.playing,
+    }, list: () => list('panels').map(item => item.id), open: (id: string, options?: unknown) => fire('invoke', 'panels', 'open', options === undefined ? [id] : [id, options]), close: (id: string) => fire('invoke', 'panels', 'close', [id]), refresh: (id: string) => fire('invoke', 'panels', 'refresh', [id]), isOpen: (id: string) => later('panels.isOpen', 'invoke', 'panels', 'isOpen', [id]) },
+    project: { get: () => legacy ? watchPromise(pullProject(), 'project.get', report) : pullProject(),
+      latest: reactive(reads.project, () => snapshot?.value), revision: reactive(reads.revision, () => state.revision), selection: reactive(reads.selection, () => state.selection),
+      time: reactive(reads.time, () => state.time), playing: reactive(reads.playing, () => state.playing),
       apply: (...args: unknown[]) => later('project.apply', 'invoke', 'project', 'apply', args), select: (...args: unknown[]) => later('project.select', 'invoke', 'project', 'select', args),
       setTime: (time: number) => later('project.setTime', 'invoke', 'project', 'setTime', [time]), play: () => later('project.play', 'invoke', 'project', 'play', []), pause: () => later('project.pause', 'invoke', 'project', 'pause', []), undo: () => later('project.undo', 'invoke', 'project', 'undo', []), redo: () => later('project.redo', 'invoke', 'project', 'redo', []), snapshot: (...args: unknown[]) => send('invoke', 'project', 'snapshot', args) },
-    transport: { time: () => state.time, playing: () => state.playing, setTime: (time: number) => later('transport.setTime', 'invoke', 'project', 'setTime', [time]), play: () => later('transport.play', 'invoke', 'project', 'play', []), pause: () => later('transport.pause', 'invoke', 'project', 'pause', []), toggle: () => later('transport.toggle', 'invoke', 'project', state.playing ? 'pause' : 'play', []), step: (frames: number) => later('transport.step', 'invoke', 'transport', 'step', [frames]) },
-    assets: { pick: (...args: unknown[]) => send('invoke', 'assets', 'pick', args), import: (...args: unknown[]) => send('invoke', 'assets', 'import', args), get: (id: string) => later('assets.get', 'invoke', 'assets', 'get', [id]), readText: (id: string) => send('invoke', 'assets', 'readText', [id]) },
+    transport: { time: reactive(reads.time, () => state.time), playing: reactive(reads.playing, () => state.playing), setTime: (time: number) => later('transport.setTime', 'invoke', 'project', 'setTime', [time]), play: () => later('transport.play', 'invoke', 'project', 'play', []), pause: () => later('transport.pause', 'invoke', 'project', 'pause', []), toggle: () => later('transport.toggle', 'invoke', 'project', state.playing ? 'pause' : 'play', []), step: (frames: number) => later('transport.step', 'invoke', 'transport', 'step', [frames]) },
+    assets: { pick: (...args: unknown[]) => send('invoke', 'assets', 'pick', args), import: (...args: unknown[]) => send('invoke', 'assets', 'import', args), importUrl: (url: string) => send('invoke', 'assets', 'importUrl', [url]), get: (id: string) => later('assets.get', 'invoke', 'assets', 'get', [id]), readText: (id: string) => send('invoke', 'assets', 'readText', [id]) },
     storage: { get: (key: string) => later('storage.get', 'invoke', 'storage', 'get', [key]), set: (key: string, value: unknown) => later('storage.set', 'invoke', 'storage', 'set', [key, value]), delete: (key: string) => later('storage.delete', 'invoke', 'storage', 'delete', [key]) },
     media: partlyTrusted('media', { registerImportDefaults: simpleRegister('media-defaults'), getImportDefaults: () => later('media.getImportDefaults', 'invoke', 'media', 'getImportDefaults', []) }, report),
     events: { on: listen, emit: (event: string, payload: unknown) => fire('invoke', 'events', 'emit', [event, payload]) },
-    ui: partlyTrusted('ui', { toast: (message: string, options?: unknown) => fire('invoke', 'ui', 'toast', options === undefined ? [message] : [message, options]), confirm: (...args: unknown[]) => send('invoke', 'ui', 'confirm', args), icon: (...args: unknown[]) => later('ui.icon', 'invoke', 'ui', 'icon', args), controls: trustedOnly('ui.controls', report), modal: trustedOnly('ui.modal', report), menu: trustedOnly('ui.menu', report), drag: trustedOnly('ui.drag', report), gesture: trustedOnly('ui.gesture', report), mount: trustedOnly('ui.mount', report) }, report),
+    ui: partlyTrusted('ui', { toast, confirm: (...args: unknown[]) => send('invoke', 'ui', 'confirm', args), openExternal: (url: string) => send('invoke', 'ui', 'openExternal', [url]), icon: (...args: unknown[]) => later('ui.icon', 'invoke', 'ui', 'icon', args), copy: (text: string) => send('invoke', 'ui', 'copy', [text]), controls: trustedOnly('ui.controls', report), modal: trustedOnly('ui.modal', report), menu: trustedOnly('ui.menu', report), drag: trustedOnly('ui.drag', report), gesture: trustedOnly('ui.gesture', report), mount: trustedOnly('ui.mount', report) }, report),
     vars: { get: (key: string) => vars[key], has: (key: string) => Object.hasOwn(vars, key), keys: () => Object.keys(vars) },
     extensions: { list: () => later('extensions.list', 'extensions-list'), setUp: (id: string) => send('invoke', 'extensions', 'setUp', [id]),
       fork: restricted('extensions.fork'), setEnabled: restricted('extensions.setEnabled'), remove: restricted('extensions.remove'), reload: restricted('extensions.reload'), reveal: restricted('extensions.reveal'), requestFix: restricted('extensions.requestFix'), rebase: restricted('extensions.rebase') },
@@ -392,12 +494,21 @@ export function createSandboxAPI(rpc: Rpc, init: SandboxInit, mode: SandboxMode 
       if (delta) {
         Object.assign(state, delta);
         if ('selection' in delta) state.selection = deepFreeze(delta.selection ?? null);
+        for (const key of ['time', 'playing', 'revision', 'selection'] as const) if (key in delta) reads[key].bump();
+        if ('generation' in delta && reads.project.live()) pullLatest();
       }
       for (const [name, payload] of events ?? []) {
         const entry = listeners.get(name);
         if (entry) for (const { fn } of [...entry.fns]) { try { void fn(payload); } catch (error) { raise(error); } }
       }
     },
+    theme(next) {
+      const active = next.id ?? theme.active;
+      if (active === theme.active && next.scheme === theme.scheme) return;
+      theme.active = active; theme.scheme = next.scheme;
+      reads.theme.bump();
+    },
+    catalog(next) { if (next && typeof next === 'object') catalog = next; },
     ready: async () => { await Promise.all([...registrations]); if (registrationFailure) throw registrationFailure; },
     dispose() {
       for (const port of panelPorts.values()) port.close();

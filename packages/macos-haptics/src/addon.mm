@@ -196,6 +196,38 @@ static napi_value FileOperation(napi_env env, napi_callback_info info) {
   return promise;
 }
 
+// libsystem_sandbox SPI: 0 allowed, 1 denied (also for a pid that is gone).
+extern "C" int sandbox_check(pid_t pid, const char *operation, int type, ...);
+static const int SANDBOX_FILTER_GLOBAL_NAME = 2;
+static const int SANDBOX_CHECK_NO_REPORT = 0x40000000;
+
+// For each pid, whether its sandbox denies a mach-lookup of `name`. A process
+// cannot leave its sandbox, so a per-command name marks everything it started.
+static napi_value SandboxDeniesLookup(napi_env env, napi_callback_info info) {
+  size_t argc = 2; napi_value args[2];
+  napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+  uint32_t count = 0; size_t length = 0; bool isArray = false;
+  if (argc < 2 || napi_is_array(env, args[0], &isArray) != napi_ok || !isArray
+      || napi_get_array_length(env, args[0], &count) != napi_ok
+      || napi_get_value_string_utf8(env, args[1], nullptr, 0, &length) != napi_ok || !length || length > 1024) {
+    napi_throw_type_error(env, nullptr, "Expected pids and a service name");
+    return nullptr;
+  }
+  std::vector<char> name(length + 1);
+  napi_get_value_string_utf8(env, args[1], name.data(), name.size(), &length);
+  napi_value result;
+  napi_create_array_with_length(env, count, &result);
+  for (uint32_t i = 0; i < count; i++) {
+    napi_value element, denied;
+    int32_t pid = 0;
+    napi_get_element(env, args[0], i, &element);
+    bool valid = napi_get_value_int32(env, element, &pid) == napi_ok && pid > 0;
+    napi_get_boolean(env, valid && sandbox_check(pid, "mach-lookup", SANDBOX_FILTER_GLOBAL_NAME | SANDBOX_CHECK_NO_REPORT, name.data()) == 1, &denied);
+    napi_set_element(env, result, i, denied);
+  }
+  return result;
+}
+
 static napi_value Init(napi_env env, napi_value exports) {
   napi_value trigger;
   napi_create_function(env, "triggerAlignment", NAPI_AUTO_LENGTH,
@@ -210,6 +242,9 @@ static napi_value Init(napi_env env, napi_value exports) {
   napi_value file;
   napi_create_function(env, "fileOperation", NAPI_AUTO_LENGTH, FileOperation, nullptr, &file);
   napi_set_named_property(env, exports, "fileOperation", file);
+  napi_value sandbox;
+  napi_create_function(env, "sandboxDeniesLookup", NAPI_AUTO_LENGTH, SandboxDeniesLookup, nullptr, &sandbox);
+  napi_set_named_property(env, exports, "sandboxDeniesLookup", sandbox);
   return exports;
 }
 

@@ -36,6 +36,7 @@ export const IPC = {
   projectReadClose: 'project:read-close',
   projectConfirmClose: 'project:confirm-close',
   dialogConfirm: 'dialog:confirm',
+  clipboardWriteText: 'clipboard:write-text',
 
   renderStart: 'render:start',
   renderWrite: 'render:write',
@@ -61,6 +62,10 @@ export const IPC = {
   cloudDownload: 'cloud:download',
   cloudRead: 'cloud:read',
   cloudRelease: 'cloud:release',
+  /** `assets.importUrl`: main downloads remote media behind its SSRF guard, then the renderer reads it back in chunks. */
+  remoteMediaFetch: 'media:remote-fetch',
+  remoteMediaRead: 'media:remote-read',
+  remoteMediaRelease: 'media:remote-release',
   attachmentReveal: 'attachment:reveal',
 
   extensionFork: 'ext:fork',
@@ -75,6 +80,7 @@ export const IPC = {
   codexEvent: 'codex:event', // main → renderer
   agentToolRequest: 'agent-tool:request', // main → renderer
   agentToolResponse: 'agent-tool:response', // renderer → main
+  agentToolInput: 'agent-tool:input', // main → renderer: the agent's real input into this window starts (true) or ends (false)
   chatgptStatus: 'chatgpt:status',
   chatgptModels: 'chatgpt:models',
   chatgptConnect: 'chatgpt:connect',
@@ -124,6 +130,8 @@ export const IPC = {
   menuPopup: 'menu:popup',
   log: 'log',
   openExternal: 'shell:open-external',
+  /** An extension's `ui.openExternal`, after the host's own policy: https only, re-checked here. */
+  extensionOpenExternal: 'shell:open-extension-url',
   nativeEdit: 'edit:native',
   menuCommand: 'menu:command', // main → renderer
   updateStatus: 'update:status',
@@ -243,6 +251,8 @@ export type ProjectOpenResult = {
 } | { ok: true; path: string; projectId: string; data: Uint8Array }
   | { ok: false; cancelled: boolean; error?: string };
 export type CloseDecision = 'save' | 'discard' | 'cancel';
+/** The longest text `clipboard:write-text` takes: 1 MB of UTF-16. */
+export const CLIPBOARD_TEXT_MAX_CHARS = 500_000;
 export interface ConfirmRequest {
   message: string;
   detail?: string;
@@ -618,6 +628,9 @@ export type NativeMenuRequest = {
   y?: number;
 };
 
+/** A remote file main downloaded for `assets.importUrl`, held until released. `type` and `kind` come from its bytes, not the server. */
+export interface RemoteMediaInfo { token: string; size: number; name: string; type: string; kind: 'image' | 'video' | 'audio' }
+
 export interface PowermoveBridge {
   onInputKey?(cb: (input: SandboxInputKey) => void): () => void;
   sandboxFocus?(focus: { focused: boolean; field: boolean; extensionId: string }): void;
@@ -668,6 +681,8 @@ export interface PowermoveBridge {
   confirmProjectClose(name: string): Promise<CloseDecision>;
   /** Native NSAlert-style confirmation sheet. Resolves true when the primary button is chosen. */
   confirm(request: ConfirmRequest): Promise<boolean>;
+  /** Writes plain text to the system clipboard while the window has focus; nothing is ever read back. */
+  clipboardWriteText?(text: string): Promise<void>;
 
   render: {
     start(options:{width:number;height:number;fps:number;format:'prores'|'mp4';alpha:boolean;name:string;bitrateMbps?:number}):Promise<string | null>;
@@ -721,6 +736,8 @@ export interface PowermoveBridge {
   agentTools: {
     onRequest(cb: (request: AgentToolRequestEvent) => void): () => void;
     respond(response: AgentToolResponseEvent): void;
+    /** computer_use_panel starts (true) or ends (false) sending real input into this window. */
+    onInput?(cb: (active: boolean) => void): () => void;
   };
 
   chatgpt: {
@@ -801,6 +818,14 @@ export interface PowermoveBridge {
   };
   log(level: LogLevel, text: string): void;
   openExternal(url: string): Promise<void>;
+  /** For extension URLs: main accepts only https, at most 2 KB, without credentials. */
+  extensionOpenExternal?(url: string): Promise<void>;
+  /** Remote media downloads for `assets.importUrl` (desktop only). Reads are at most 4 MiB. */
+  remoteMedia?: {
+    fetch(url: string): Promise<RemoteMediaInfo>;
+    read(token: string, offset: number, length: number): Promise<Uint8Array>;
+    release(token: string): Promise<void>;
+  };
   nativeEdit(action: NativeEditAction): void;
   onMenuCommand(cb: (cmd: MenuCommand) => void): () => void;
 

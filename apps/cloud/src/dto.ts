@@ -27,7 +27,7 @@ export function toRelease(row: Release): ReleaseDto {
     apiVersion: row.apiVersion, fileCount: row.fileCount, sizeBytes: row.sizeBytes, notes: row.notes,
     publishedAt: row.publishedAt.toISOString(), yankedAt: row.yankedAt?.toISOString() ?? null, basedOnReleaseId: row.basedOnReleaseId,
     manifest: { id: manifest.id, name: manifest.name, version: manifest.version, apiVersion: manifest.apiVersion,
-      contributes: manifest.contributes ?? [], vars: manifest.vars ?? [], permissions: row.permissions, forkedFrom: manifest.forkedFrom ?? null, description: manifest.description ?? null }
+      contributes: manifest.contributes ?? [], vars: manifest.vars ?? [], permissions: row.permissions, links: manifest.links ?? [], forkedFrom: manifest.forkedFrom ?? null, description: manifest.description ?? null }
   } satisfies ReleaseDto;
 }
 export function toDetail(repo: Repo, extension: Extension, owner: Owner, latest: Release | null, lineage: LineageDto | null, releaseRows: Release[]): ExtensionDetailDto {

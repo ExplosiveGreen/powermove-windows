@@ -48,7 +48,7 @@ const ALTERNATIVE: Record<string, string> = {
   media: 'use api.assets instead', ui: 'build it inside your panel instead'
 };
 
-const NETWORK_DIRECTIVES = new Set(['connect-src', 'img-src', 'media-src', 'font-src']);
+const NETWORK_DIRECTIVES = new Set(['connect-src', 'img-src', 'media-src', 'font-src', 'style-src']);
 
 /** Manifest permissions exist from apiVersion 3, so older code is told to raise it too. */
 function declare(permission: ExtensionPermission, apiVersion = 3): string {

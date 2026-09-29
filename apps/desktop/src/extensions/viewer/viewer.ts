@@ -1492,8 +1492,7 @@ function bindStage(stage: any, inner: any): () => void {
     const layer = api.render.gl.pick(point.x, point.y, api.transport.time(), { includeLocked: true });
     if (layer) api.ui.showLayerMenu(layer, event, 'viewer');
     else {
-      const items = api.menus.collect('viewer:context', { layerId: null, time: api.transport.time() });
-      if (items.length) api.ui.menu({ x: event.clientX, y: event.clientY }, items);
+      api.ui.menu({ x: event.clientX, y: event.clientY }, api.menus.gather('viewer:context', { layerId: null, time: api.transport.time() }));
     }
   }), capture);
   V.layerAtPoint = (clientX: number, clientY: number) => {

@@ -11,8 +11,31 @@
   let glider: HTMLElement;
   let gliderOn = $state(false);
   let query = $state('');
-  let selected = $state(0);
-  let items = $derived(paletteEntries(PM, query));
+  /* The selection is a row, not a position: rows that land late can move
+     it, and Enter must run the row that was highlighted. None means the top;
+     a highlighted row that leaves the list leaves nothing highlighted. */
+  let selection = $state.raw<{ id: string; index: number } | null>(null);
+  /* Asynchronous answers (sandboxed providers and `when`s) arrive after the
+     rows for a query; they count only while that query is the one asked. */
+  let latest: object | null = null;
+  let late = $state.raw<{ asked: object; items: PaletteEntry[] } | null>(null);
+  let asked = $derived.by(() => {
+    const request = { items: [] as PaletteEntry[] };
+    latest = request;
+    request.items = paletteEntries(PM, query, (next) => {
+      if (latest !== request) return;
+      // The top row the person sees stays the one Enter runs.
+      if (!selection && items[0]) selection = { id: items[0].id, index: 0 };
+      late = { asked: request, items: next };
+    });
+    return request;
+  });
+  let items = $derived(late?.asked === asked ? late.items : asked.items);
+  let selected = $derived.by(() => {
+    if (!selection) return 0;
+    if (items[selection.index]?.id === selection.id) return selection.index;
+    return items.findIndex(item => item.id === selection!.id);
+  });
   // Group consecutive entries by category while keeping the flat index that
   // keyboard navigation and aria-activedescendant rely on.
   let groups = $derived.by(() => {
@@ -32,7 +55,13 @@
 
   function inputChanged(event: Event): void {
     query = (event.currentTarget as HTMLInputElement).value;
-    selected = 0;
+    selection = null;
+  }
+
+  function select(index: number): void {
+    const item = items[index];
+    if (item && selection?.id === item.id && selection.index === index) return;
+    selection = item ? { id: item.id, index } : null;
   }
 
   function run(item: PaletteEntry | undefined): void {
@@ -43,20 +72,20 @@
   function keydown(event: KeyboardEvent): void {
     event.stopPropagation();
     if (event.key === 'ArrowDown') {
-      selected = Math.min(items.length - 1, selected + 1);
+      select(Math.min(items.length - 1, selected + 1));
       event.preventDefault();
     } else if (event.key === 'ArrowUp') {
-      selected = Math.max(0, selected - 1);
+      select(Math.max(0, selected - 1));
       event.preventDefault();
     } else if (event.key === 'Home') {
-      selected = 0;
+      select(0);
       event.preventDefault();
     } else if (event.key === 'End') {
-      selected = Math.max(0, items.length - 1);
+      select(Math.max(0, items.length - 1));
       event.preventDefault();
     } else if (event.key === 'Enter') {
       event.preventDefault();
-      run(items[selected]);
+      if (selected >= 0) run(items[selected]);
     } else if (event.key === 'Escape') {
       event.preventDefault();
       onclose();
@@ -68,7 +97,7 @@
   onMount(() => input.focus({ preventScroll: true }));
 
   // One highlight surface glides to the selected row; hover and keyboard both
-  // write `selected`, so a single fill is ever visible.
+  // write `selection`, so a single fill is ever visible.
   $effect(() => {
     const index = selected;
     void items;
@@ -129,7 +158,7 @@
           onkeydown={(event) => {
             if (event.key === 'Enter' || event.key === ' ') run(item);
           }}
-          onpointermove={() => selected = index}
+          onpointermove={() => select(index)}
         >
           <span>{item.label}</span>
           {#if item.kb}<span class="kb">{item.kb}</span>{/if}

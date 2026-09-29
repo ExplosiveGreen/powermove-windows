@@ -76,7 +76,7 @@ const messageOf = (error: unknown): string => (error instanceof Error ? error.me
 export function quietDeps(deps: Omit<HostDeps, 'reportRuntimeError'>, onError: (error: unknown) => void): HostDeps {
   const real = deps.project;
   const project: ProjectAPI = {
-    get: () => real.get(), revision: () => real.revision(), selection: () => real.selection(),
+    get: () => real.get(), latest: () => real.latest(), revision: () => real.revision(), selection: () => real.selection(),
     time: () => real.time(), playing: () => real.playing(),
     apply: (): EditResult => ({ ok: true, message: 'Not applied during a sandbox check', data: {} }),
     select: noop, setTime: noop, play: noop, pause: noop, undo: noop, redo: noop,
@@ -96,10 +96,11 @@ export function quietDeps(deps: Omit<HostDeps, 'reportRuntimeError'>, onError: (
     ...deps,
     project,
     transport: deps.transport ? { ...deps.transport, setTime: noop, play: noop, pause: noop, toggle: noop, step: noop, invalidate: noop } : undefined,
-    ui: { ...deps.ui, toast: noop, confirm: async () => false, menu: noop },
+    ui: { ...deps.ui, toast: noop, confirm: async () => false, openExternal: async () => false, menu: noop },
     assets: {
       pick: async () => [],
       import: async () => { throw new Error('Importing is off during a sandbox check'); },
+      importUrl: async () => { throw new Error('Importing is off during a sandbox check'); },
       get: (id) => deps.assets.get(id),
       readText: (id) => deps.assets.readText(id)
     },

@@ -79,10 +79,13 @@ reloaded, or removed. Return a `Disposable` or use `api.onDispose` for anything 
 | `dependsOn` | no | ids that must be enabled and load first |
 | `forkedFrom` | no | `"<id>@<version>"` for a built-in or `"<handle>/<id>@<version>"` for a Store fork |
 | `vars` | no | `apiVersion: 2`; up to 32 declarations `{ key, label, secret?, hint? }`. Keys use uppercase letters, digits and underscores, starting with a letter. Read values through `api.vars`; never put credentials in source. |
+| `permissions` | no | `apiVersion: 3`; see [Permissions and the sandbox](#permissions-and-the-sandbox) |
+| `links` | no | `apiVersion: 3`; up to 5 https origins, written exactly as `"https://example.com"`, that `ui.openExternal` opens without asking, when the extension also declares `network` and the person just acted. The Store lists them. See [Opening links and importing from a URL](#opening-links-and-importing-from-a-url). |
 | `author` | no | `powermove` \| `user` \| `agent` |
 
-Imports allowed: `powermove` (types only), `svelte`, `svelte/store`, relative files
-inside the extension folder. No npm packages, no `..` escapes.
+Imports allowed: `powermove` (types only), the client-side Svelte modules listed in
+[Writing UI with Svelte 5](#writing-ui-with-svelte-5), relative files inside the
+extension folder. No npm packages, no `..` escapes.
 
 ## Permissions and the sandbox
 
@@ -98,22 +101,87 @@ any permission, and publishing it with such a use is blocked until it sets
 ```
 
 Reading the project needs no permission, at any `apiVersion`: `project.get`,
-`project.selection`, `project.snapshot` (a rendered frame), `project.time`,
-`project.playing`, `project.revision`, the transport reads, and the
+`project.latest`, `project.selection`, `project.snapshot` (a rendered frame),
+`project.time`, `project.playing`, `project.revision`, the transport reads, and the
 `project:changed`, `selection`, `time` and `transport` events are available to
 every sandboxed extension. Without `network`, what it reads cannot leave the
 sandbox.
 
-- `network` allows HTTPS and WebSocket requests and remote images and media. It
-  is the capability that lets project data leave, so it is the one to scrutinize.
-- `clipboard` allows writing to the clipboard.
-- `assets` allows picking, importing, and reading asset files.
+- `network` allows HTTPS and WebSocket requests and remote images, media, fonts
+  and stylesheets. It is the capability that lets project data leave, so it is
+  the one to scrutinize. Without it, `fetch` still reads `data:` and `blob:`
+  URLs and bundled `data:` fonts load, since neither leaves the machine.
+- `clipboard` allows `ui.copy(text)`, which writes plain text (up to 500,000
+  characters, at most once a second) from one of the extension's panels while
+  that panel has focus and within 5 seconds of a click or key press in it (a
+  modifier key alone does not count, and neither does focus coming back to the
+  window, as after Command-Tab, a press on the app around the panel, or input
+  from Powermove's agent). The runtime never copies. No permission lets an
+  extension read the clipboard. `document.execCommand('copy')` in a panel is
+  no way around it: Chromium lets it write only right after a click or key
+  press in that panel, the same kind of gate.
+- `assets` allows picking, importing, and reading asset files. `assets.importUrl`
+  also needs `network`.
 - `project:write` allows project mutation through `apply`, `undo`, `redo`, `select`, time and transport controls. `commands.run` can call an extension's own commands and, with this permission, the named legacy editing commands. It cannot call another extension's commands or File, app, export, settings, or mods commands.
 - `full-access` allows trusted-only APIs. Store installs that request it stay off
   until the person installing them accepts Powermove's full-access dialog. They
   can later revoke trust from the Library.
 
+Forms submit to their own `submit` handlers, and the sandbox then cancels the
+navigation. A request the sandbox blocks is logged once and never turns the
+extension off; the Sandbox compatibility check still reports it.
+
 Store extensions supply simple event names; the kernel publishes them as `ext:<extension-id>:<name>`. They may subscribe to those events and the validated read-only host events `project:changed`, `selection`, `time`, `transport`, `theme`, and `extensions:changed`. Registration IDs must start with `<extension-id>.`, and keybindings may invoke only their own commands. Store code can list extensions and call `setUp` for itself; management of other extensions requires a trusted extension.
+
+### Opening links and importing from a URL
+
+`await api.ui.openExternal(url)` opens an https URL in the person's browser and
+resolves `true`, or `false` when they decline. The URL must be https, at most 2
+KB, and carry no user name or password. One call may be pending and at most one
+runs every 2 s; others reject with `code: 'resource_limit'`. Nothing opens
+while Powermove's window is in the background.
+
+- An origin listed in the manifest's `links` opens without asking only when the
+  extension also declares `network` and the call answers something the person
+  just did: from one of the extension's panels while it has focus, within 5
+  seconds of a click or key press in it, or from a command, status item,
+  palette, menu or toast item the person started, within 5 seconds of starting
+  it (not from the extension's own `commands.run`, a keybinding pressed in its
+  own panel, a timer, an event, or input from Powermove's agent). At most 3
+  links a minute open this way. Origins match exactly: listing
+  `https://example.com` covers neither `https://www.example.com` nor another port.
+- Every other call, and every call when the extension lacks `network`, opens
+  only after the person confirms a Powermove sheet that names the extension by
+  its id (not its display name) and shows the whole URL. Without `network`, a
+  link is the one way data could leave, so it always asks.
+- After the person declines, calls that would ask reject with
+  `code: 'resource_limit'` for 30 seconds.
+
+```json
+"permissions": ["network"],
+"links": ["https://replicate.com"]
+```
+
+`await api.assets.importUrl(url)` downloads an image, video or audio file and
+imports it like `api.assets.import`, resolving to the new asset id. It needs
+`assets` and `network`, and one download runs at a time. Powermove fetches it
+itself, so CORS does not apply, but:
+
+- the URL is https on the default port, at most 2 KB, without credentials; no
+  cookies or `Authorization` are sent;
+- the host must resolve to public internet addresses only (never loopback,
+  private, link-local, CGNAT, unique-local or IPv4-mapped addresses), and the
+  connection goes to the address that was checked;
+- at most 5 redirects are followed, each one https and checked the same way;
+- the file may be at most 512 MiB, must be PNG, JPEG, GIF, WebP, AVIF, BMP,
+  MP4, MOV, WebM, MP3, AAC, M4A, WAV, Ogg or FLAC by its contents (not its
+  name or `Content-Type`), and must decode. The asset is named after the last
+  path segment with the extension of what the bytes are;
+- a download counts toward the same 2 GiB a minute as `assets.import`, and one
+  that would pass it rejects with `code: 'resource_limit'` before it is
+  imported.
+
+The desktop app provides `importUrl`; `powermove serve` does not.
 
 The runtime sandbox is the security boundary. The **Sandbox compatibility check** is a compatibility lint: it runs a short, detectable sample of extension behavior to find problems before publishing. A pass is not a security review or trust signal.
 
@@ -147,7 +215,8 @@ changes, and reads the project on request:
   changes: repeated calls resolve at once without asking the host, and
   concurrent calls share one request. One snapshot build per change is shared by
   every sandboxed extension in the window, so reading on each `project:changed`
-  is cheap.
+  is cheap. In a component, `api.project.latest()` reads the same cache
+  reactively (see [Reactive API reads](#reactive-api-reads)).
 - The snapshot is deep-frozen; assignments throw. Edit through `api.project.apply`.
 - The snapshot omits the edit log (`edits` is absent although the type declares
   it), asset fields whose names contain `blob` or `source`, and keys matching
@@ -163,7 +232,7 @@ flush. Within one flush, `time` and `selection` deliver only their latest value,
 repeated `project:changed` of the same `kind` arrive once, and other events keep
 their order. The synchronous reads return the state as of the latest delivery.
 
-Each extension is limited to 200 registrations, 2,000 live callback handles, 50 open panel views, 200 RPC messages/s, 1 MiB per RPC payload, 256 KiB of storage with keys at most 128 characters, and 50 logs/s. These limits apply to messages from the extension; data the host sends, such as project snapshots, is not limited by them.
+Each extension is limited to 200 registrations, 2,000 live callback handles, 50 open panel views, 200 RPC messages/s, 1 MiB per RPC payload (a file passed to `assets.import` is not counted; imports, including `assets.importUrl` downloads, are capped at 512 MiB per file and 2 GiB a minute), 256 KiB of storage with keys at most 128 characters, and 50 logs/s. These limits apply to messages from the extension; data the host sends, such as project snapshots, is not limited by them.
 
 ### Trusted-only APIs and publishing
 
@@ -185,6 +254,140 @@ sandboxed for other people unless it declares `full-access`. Run **Test in
 Sandbox…** from the Library before publishing; the publish sheet runs the same
 check and blocks a release that fails it.
 
+## Writing UI with Svelte 5
+
+Panels (`component`), Properties sections and anything passed to `api.host.mount`
+are Svelte 5 components. `.svelte` files always compile in runes mode, and
+`.svelte.ts` / `.svelte.js` modules compile as rune modules, so `$state`,
+`$derived` and `$effect` also work in shared classes outside components.
+`export let` and `$:` do not compile: use `$props()`, `$derived` and `$effect`,
+`onclick` rather than `on:click`, and snippets with `{@render}` rather than slots.
+
+### What you can import
+
+| Module | Exports |
+|---|---|
+| `svelte` | `onMount`, `onDestroy`, `tick`, `untrack`, `flushSync`, `setContext`/`getContext`/`createContext`, `createRawSnippet`, `getAbortSignal`, … |
+| `svelte/reactivity` | `SvelteMap`, `SvelteSet`, `SvelteDate`, `SvelteURL`, `SvelteURLSearchParams`, `MediaQuery`, `createSubscriber` |
+| `svelte/reactivity/window` | `innerWidth`, `innerHeight`, `devicePixelRatio`, `online`, `scrollX`, `scrollY`, … |
+| `svelte/transition` | `fade`, `fly`, `slide`, `scale`, `blur`, `draw`, `crossfade` |
+| `svelte/animate` | `flip` |
+| `svelte/easing` | `cubicOut` and the other easing curves |
+| `svelte/motion` | `Tween`, `Spring`, `prefersReducedMotion` |
+| `svelte/events` | `on` |
+| `svelte/attachments` | `createAttachmentKey`, `fromAction` |
+| `svelte/store` | `writable`, `readable`, `derived`, `get`, `fromStore`, `toStore` |
+
+Type-only imports such as `import type { HTMLButtonAttributes } from 'svelte/elements'`
+or `'svelte/action'` are erased and always fine. `svelte/server`, `svelte/compiler`,
+`svelte/legacy` and `svelte/internal/*` are not available. Every import resolves to
+the Svelte the app runs, in the editor and in the sandbox alike: bundles carry no
+copy of Svelte, and contexts, transitions and reactivity share one runtime.
+
+`Spring.set()` rejects its promise with `Aborted` when a newer target replaces
+it. Set `spring.target` instead, or give `.then()` a rejection handler: in a Store
+sandbox an unhandled rejection counts as a runtime error, and repeated runtime
+errors turn the extension off.
+
+### Reactive API reads
+
+These reads are reactive: `api.project.time()`, `playing()`, `revision()`,
+`selection()` and `latest()`; `api.transport.time()` and `playing()`;
+`api.theme.active()` and `scheme()`. Read one in markup, `$derived` or `$effect`
+and that reader re-runs when the value changes. Anywhere else (`activate`, an
+event handler, a timer) it returns the current value and subscribes to nothing.
+The subscription starts with the first reactive reader and ends with the last, so
+code that never reads reactively costs nothing. Closing a panel keeps its component
+mounted, with its state, for when it reopens, so its readers keep running while it
+is closed. Do not wire `events.on` into `$state` for these values.
+
+```svelte
+<script lang="ts">
+  import type { PanelProps } from 'powermove';
+
+  let { api }: PanelProps = $props();
+  const selected = $derived(api!.project.selection().layers.length);
+</script>
+
+<p>{selected} selected · revision {api!.project.revision()}{api!.project.playing() ? ' · playing' : ''}</p>
+```
+
+`api.project.latest()` is the project a panel can show right now:
+
+```svelte
+<script lang="ts">
+  import { fade } from 'svelte/transition';
+  import type { PanelProps } from 'powermove';
+
+  let { api }: PanelProps = $props();
+  // Derive the fields you show, not the project object (see below).
+  const layers = $derived(api!.project.latest()?.layers.map(({ id, name }) => ({ id, name })));
+</script>
+
+{#if layers}
+  {#each layers as layer (layer.id)}<p transition:fade>{layer.name}</p>{/each}
+{:else}
+  <p>Loading…</p>
+{/if}
+```
+
+- In the editor (local and full-access extensions) it is the live project, the
+  object `get()` returns, and it re-runs readers on every `project:changed`. It is
+  the same object after each change, so `$derived(api.project.latest())` on its own
+  never changes value: derive the fields you display, or read them in markup.
+  Never mutate it; edit with `api.project.apply`.
+- In the sandbox it is the newest snapshot this document has pulled: `undefined`
+  until the first pull, then the deep-frozen copy `await project.get()` returns. A
+  reactive read starts a pull when there is none for the current project and
+  re-runs when it lands, and again after changes: at most once a frame, so a
+  drag that edits on every pointer move lands as one copy a frame, ending with
+  its last change. Handle `undefined`.
+
+`project.get()` is unchanged: synchronous in the editor, a Promise in the sandbox.
+Use it in `activate`, commands and status providers, where no component reads
+reactively; `events.on` remains the way to react there.
+
+### `time()` during playback
+
+`project.time()` and `transport.time()` change every frame while playing, so a
+reader of either re-runs every frame. That is right for a playhead readout, and it
+is how the editor's own time display works. For anything heavier, read less often:
+
+```svelte
+<script lang="ts">
+  import type { PanelProps } from 'powermove';
+
+  let { api }: PanelProps = $props();
+  // Whole seconds: the $derived re-runs each frame, the text changes once a second.
+  const seconds = $derived(Math.floor(api!.project.time()));
+  // Four times a second while playing; exact while paused or scrubbing.
+  let shown = $state(0);
+  $effect(() => {
+    if (!api!.project.playing()) { shown = api!.project.time(); return; }
+    const timer = setInterval(() => { shown = api!.project.time(); }, 250);
+    return () => clearInterval(timer);
+  });
+</script>
+
+<p>{seconds}s · {api!.util.tc(shown)}</p>
+```
+
+While playing, the effect reads only `playing()`; the interval's `time()` read is
+outside any reactive context, so the component does no per-frame work at all.
+
+### Editor and sandbox differences
+
+| | Editor (local, full-access) | Sandbox (Store) |
+|---|---|---|
+| `project.get()` | the live project | a Promise of a frozen snapshot |
+| `project.latest()` | the live project, the same object after each change | the newest pulled snapshot; `undefined` until the first |
+| time, playing, revision, selection | kernel state as it changes | the document's pushed state, updated at most once per flush |
+| `theme.active()`, `theme.scheme()` | kernel state | the host's theme push |
+| `svelte/reactivity/window`, viewport `MediaQuery` | the app window | the panel's own frame |
+| Module-level state | one module for all of the extension's panels | one module copy per open panel; share through `api.storage` or `api.events` |
+
+Transitions, motion and `prefersReducedMotion` behave the same in both.
+
 ## The API (apiVersion 1–3)
 
 Full types: `api.ts` (next to this file in the agent API pack). Summary:
@@ -196,11 +399,12 @@ in-realm type in `api.ts` shows a synchronous result: `api.commands.run`,
 `api.project.get/apply/select/setTime/play/pause/undo/redo/snapshot`,
 `api.transport.setTime/play/pause/toggle/step`, `api.assets.get`,
 `api.storage.get/set/delete`, `api.media.getImportDefaults`, `api.ui.icon`,
-and `api.extensions.list`. `apiVersion` 1 and 2 code gets the same Promises;
-the Sandbox check reports code that uses one of their results without awaiting
-it. Methods already typed as asynchronous, such as `api.assets.pick/import/readText` and `api.ui.confirm`, remain asynchronous.
-`api.project.revision/selection/time/playing` and `api.transport.time/playing`
-stay synchronous.
+`api.panels.isOpen` (your own panel ids only) and `api.extensions.list`.
+`apiVersion` 1 and 2 code gets the same Promises; the Sandbox check reports
+code that uses one of their results without awaiting it. Methods already typed as asynchronous, such as `api.assets.pick/import/importUrl/readText` and `api.ui.confirm/openExternal`, remain asynchronous.
+`api.project.revision/selection/time/playing/latest`, `api.transport.time/playing`
+and `api.theme.active/scheme` stay synchronous, and are reactive in components.
+Outside a component, react to events:
 
 ```ts
 api.events.on('project:changed', async () => {
@@ -213,18 +417,22 @@ api.events.on('project:changed', async () => {
 | --- | --- |
 | `effects`, `transitions`, `layers`, `theme`, `keybindings`, `commands`, `palette`, `menus`, `status`, `panels` | `anim`, `model`, `groups`, `history`, `edit`, `inspector`, `render`, `uiState` |
 | `assets`, `project`, `transport` time and controls, `storage`, `events`, `vars`, `util`, `ease`, pure `space3d` helpers | `selection` live graph helpers, `dnd`, `workspace`, `services`, `host`; live `space3d` methods |
-| `media.registerImportDefaults/getImportDefaults`, `ui.toast/confirm/icon`, `extensions.list`, `log`, `onDispose` | `media.importFiles/assets/audio/fonts`, `ui.controls/modal/menu/drag/gesture/mount` |
+| `media.registerImportDefaults/getImportDefaults`, `ui.toast/confirm/openExternal/icon/copy`, `extensions.list`, `log`, `onDispose` | `media.importFiles/assets/audio/fonts`, `ui.controls/modal/menu/drag/gesture/mount` |
 
 Sandboxed panels render their `component` or `build` content in a separate
 view iframe. `panels.header`, `panels.moveSlot`, and `panels.library.render`
-are unavailable there; the host owns the panel chrome. Declare `network`,
+are unavailable there; the host owns the panel chrome. A toast's `action` and
+`onDismiss` run in the document that raised it, so a toast with either, or
+with a `key`, closes when that document does (its panel closes or reloads, or
+the extension is turned off). A `key` replaces only the extension's own
+toasts. Declare `network`,
 `clipboard`, `assets`, or `project:write` (with `apiVersion: 3`)
 when using their corresponding capabilities. `full-access` installs run with the
 in-realm API after the person installing the extension accepts the trust dialog.
 
 - **panels** — `register({ id, title, component?, build?, size, min, flush, noscroll, headless })`, `open(id, dock?)` or `open(id, { dock, index })`, `close`, `isOpen`, `refresh`, `list`.
-  `component` is a Svelte 5 component receiving `{ panelId, spec }`. `build(body)` is the imperative alternative.
-- **commands** — `register({ id, label, category, run, when? })`, `run(id, …args)`, `has`, `list`. Commands appear in the palette (⌘K).
+  `component` is a Svelte 5 component receiving `{ panelId, spec, api }` (see [Writing UI with Svelte 5](#writing-ui-with-svelte-5)). `build(body)` is the imperative alternative.
+- **commands** — `register({ id, label, category, run, when? })`, `run(id, …args)`, `has`, `list`. Commands appear in the palette (⌘K) unless `when()` returns false. `when` may return a Promise (a Store extension's always does, over the port): the palette asks it on every open, and every other reader, `list()` included, gets a synchronous `when()` that returns its last answer (`true` before the first), so `!c.when || c.when()` filters.
 - **keybindings** — `bind({ key, command, args?, inFields?, looseModifiers?, repeat?, priority? })`. Chords: `cmd+shift+k`, `space`, `shift+f9`, `alt+up`. Lower priority runs first; return `false` from the command to pass through. Repeated browser keydowns are ignored by default; set `repeat: true` only for continuous, repeat-safe actions such as frame stepping or nudging. Suppressed repeats do not prevent the browser's default behavior.
 - **effects** — `register({ id, label, group, params, frag, passes?, keepOrig?, backdrop? })`.
   Write only the body of `main()`. Available: `v_st` (uv), `u_tex`, `u_res`, `u_texel`, `u_time`, `u_pass`, helpers `src() luma() noise() fbm() hash() rgb2hsv() hsv2rgb()`. Each param `k` is a uniform `u_<k>` (float, or vec3 for `type:'color'`). Output `o` (vec4).
@@ -233,18 +441,18 @@ in-realm API after the person installing the extension accepts the trust dialog.
   Params are keyframable automatically and appear in the Effects browser + inspector.
 - **transitions** — `register({ id, label, params, frag })`. Inputs `u_from` (frame so far), `u_to` (incoming layer), `u_prog` 0→1. Output `o`. Applied on a layer via its `transition` property (inspector or `set_layer` command with `{ transition: { type, dur, p } }`).
 - **layers** — `register({ id, label, version, params, defaults?, renderer })` adds a programmable renderer with structured project instances. Fragment renderers use `{ kind:'fragment', fragment }`; mesh renderers use `{ kind:'mesh', assetField:'assetId' }` and resolve a durable OBJ model id from layer data. Projects store only the definition id, version, JSON data, and keyframe channels—not renderer code or expanded vertex arrays. Missing definitions/assets keep their data and show a placeholder.
-- **assets** — `pick({ accept, multiple? })`, `import(file, { layerDefinition? })`, `get(id)`, and `readText(id)`. Imported files live in Powermove's durable media store and are embedded when the `.pmv` is saved. Use an asset id in structured layer data instead of storing binary or large text in the project JSON.
-- **theme** — `register({ id, name, scheme, tokens, darkTokens?, css?, rootAttributes? })`, `activate(id)`. Tokens are CSS custom properties (see "Theme tokens"). `css` may restyle anything.
-- **palette** — `registerProvider(query => entries[])`.
-- **menus** — `contribute(location, ctx => items[])`; locations: `panel:context`, `layer:context`, `timeline:context`, `viewer:context`. Titlebar extension shortcuts are retired; registered panels appear in the panel Library automatically.
+- **assets** — `pick({ accept, multiple? })`, `import(file, { layerDefinition? })`, `importUrl(url)` (see [Opening links and importing from a URL](#opening-links-and-importing-from-a-url)), `get(id)`, and `readText(id)`. Imported files live in Powermove's durable media store and are embedded when the `.pmv` is saved. Use an asset id in structured layer data instead of storing binary or large text in the project JSON.
+- **theme** — `register({ id, name, scheme, tokens, darkTokens?, css?, rootAttributes? })`, `activate(id)`, `active()`, `scheme()` (both reactive in components). Tokens are CSS custom properties (see "Theme tokens"). `css` may restyle anything.
+- **palette** — `registerProvider(query => entries[])`. The provider may return a Promise; its entries appear when it settles, if the palette still shows that query.
+- **menus** — `contribute(location, ctx => items[])`, `collect(location, ctx?)` (in a Store sandbox, only your own contributions); locations: `panel:context`, `layer:context`, `timeline:context`, `viewer:context`. The function runs on every open with that open's `ctx`; it may return a Promise, which the menu waits for at most 100 ms. `gather(location, ctx)` resolves every contribution for one open, for `ui.menu`; `collect` returns only the ones that answer synchronously and never asks a Store extension's. Titlebar extension shortcuts are retired; registered panels appear in the panel Library automatically.
 - **status** — `register({ id, text: () => string|null, side?, onClick? })` for the status bar.
-- **project** — `get()`, `revision()`, `apply(commands, meta?)`, `selection()`, `select()`, `time()`, `setTime()`, `play/pause/playing`, `undo/redo`, `snapshot(t?, maxWidth?)`.
+- **project** — `get()`, `latest()`, `revision()`, `apply(commands, meta?)`, `selection()`, `select()`, `time()`, `setTime()`, `play/pause/playing`, `undo/redo`, `snapshot(t?, maxWidth?)`. `latest()`, `revision()`, `selection()`, `time()` and `playing()` are reactive in components.
   `apply` takes the typed edit commands (`set_property`, `replace_keyframes`, `set_easing`, `set_expression`, `set_content`, `set_layer`, `set_composition`, `add_layer`, `delete_layers`, `reorder_layer`, `add_effect`, `remove_effect`, `set_effect`, `set_scene_parameter`, `add_marker`, `create_section`, `update_section`, `transform_layers`). Every apply is one undo step, validated, lock-aware.
 - **anim** — channel evaluation, property/keyframe edits, easing, expression errors, animation versioning, and 2D transform matrices.
 - **model** — property/keyframe/layer/project factories, model schema tables, current composition, layer lookups, `cloneLayer(layer)`, and `normalizeFill(value, fallback?)`.
 - **selection** — live selection reads, mutation with legacy events/invalidation, selected-key resolution, and key-selection mode.
 - **groups** — hierarchy queries, selection expansion, stack normalization, and pose-preserving reparenting.
-- **transport** — time, playback, stepping, quality/performance, preview resolution, and render/UI invalidation.
+- **transport** — time and playback (`time()` and `playing()` are reactive in components), stepping, quality/performance, preview resolution, and render/UI invalidation.
 - **history** — raw transaction begin/commit/cancel, undo/redo, external entries, and transaction-aware selection history.
 - **edit** — validated one-shot edits, gesture transactions, dispatch, cancel/rollback, and structural mutation.
 - **media** — timing, file import, asset-to-layer commands, waveform drawing, runtime assets, and font loading.
@@ -252,7 +460,7 @@ in-realm API after the person installing the extension accepts the trust dialog.
 - **inspector** — `registerSection({ id, title, after: 'content' | 'transform' | 'effects', when?, build })` adds controls to Properties. `build(target, { layerIds })` returns a disposer or cleanup function. Sections rebuild on selection changes, and disappear when the mod unloads. Use `sections()` to inspect active contributions.
 - **render** — WebGL bounds/picking/setup and `gl.compileError(key)`, raster access, offscreen frame rendering, and snapshots.
 - **uiState** — layer/FX disclosure, key handles, timeline reveal state, and shader metadata via `getShaderMeta(layer)` / `setShaderMeta(layer, patch)`.
-- **ui** — API-backed controls, overlays, menus, pointer drag, parent picking, shader editor opening, and edit/history-backed `gesture` construction.
+- **ui** — API-backed controls, overlays, menus, pointer drag, parent picking, shader editor opening, edit/history-backed `gesture` construction, and `openExternal(url)` for https links.
 - **dnd** — canonical asset/FX MIME payloads, drag detection/parsing, live media drag state, and FX drop application.
 - **workspace** — active workspace mutation plus indexed panel add/move/hide/restore/refresh operations.
 - **util** — numeric interpolation/snapping, timecode, ids, and colour conversion.
@@ -261,6 +469,7 @@ in-realm API after the person installing the extension accepts the trust dialog.
 - **services** — LIFO typed runtime service registration; disposing an override restores the previous implementation.
 - **storage** — per-extension `get/set/delete` (persisted).
 - **events / on** — `project:changed`, `selection`, `time`, `transport`, `fonts` (complete family list), `layout`, `theme:changed`, `frame:rendered`, `extension:loaded/unloaded`.
+  An extension's own events use names without `:`: sandboxed, `emit('pinned', value)` reaches `on('pinned')` in every document of that extension only, and a name containing `:` is refused.
 - **extensions** — introspection: `list`, `fork`, `rebase`, `setEnabled`, `remove`, `reload`, `reveal`, `requestFix`, `setUp` (opens the values sheet).
 - **vars** — `get(key)`, `has(key)`, `keys()`: the values the user entered for this extension's declared `vars` (see "Variables").
 - **model.cloneLayer** — `cloneLayer(layer): Layer` deep-clones a layer and refreshes its layer/keyframe ids and numbered name.
@@ -316,8 +525,9 @@ Custom Properties controls must use `api.project.apply` or `api.edit` for edits.
 For an explicitly requested anchor change, set `preserveHandEdits: false` and
 compensate position with `api.anim.localMatrix` (or `api.space3d` for 3D).
 Preserve animation; do not flatten keyframe channels. Layer locks still apply.
-Subscribe to project/time events within the mounted component when its values
-need to update without rebuilding on every keystroke.
+Read project and time values reactively within the mounted component (see
+[Reactive API reads](#reactive-api-reads)) so they update without rebuilding the
+section on every keystroke.
 
 ### Finding an existing capability before declaring it unsupported
 
@@ -386,7 +596,7 @@ api.effects.register({
 });
 ```
 
-**Add a panel (Svelte)** — for manifest id `counter`, `Counter.svelte` + `api.panels.register({ id:'counter.panel', title:'Counter', component: Counter, size: 160 })`, then `api.panels.open('counter.panel','right')`.
+**Add a panel (Svelte)** — for manifest id `counter`, `Counter.svelte` + `api.panels.register({ id:'counter.panel', title:'Counter', component: Counter, size: 160 })`, then `api.panels.open('counter.panel','right')`. Write the component with runes and reactive API reads; see [Writing UI with Svelte 5](#writing-ui-with-svelte-5).
 
 **Add a structured programmable layer**
 ```ts

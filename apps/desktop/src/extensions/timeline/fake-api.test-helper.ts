@@ -68,7 +68,7 @@ export function fakePowermoveAPI(vi: { fn: (...args: any[]) => any }): FakeAPIHa
     assets: { pick: vi.fn(async () => []), import: vi.fn(), get: vi.fn(), readText: vi.fn() },
     theme: { register: vi.fn(() => ({ dispose: vi.fn() })), activate: vi.fn(), active: vi.fn(() => ''), list: vi.fn(() => []), scheme: vi.fn(() => 'light'), setScheme: vi.fn() },
     palette: { registerProvider: vi.fn(() => ({ dispose: vi.fn() })), open: vi.fn() },
-    menus: { contribute: vi.fn(() => ({ dispose: vi.fn() })), collect: vi.fn(() => []) },
+    menus: { contribute: vi.fn(() => ({ dispose: vi.fn() })), collect: vi.fn(() => []), gather: vi.fn(async () => []) },
     status: { register: vi.fn(() => ({ dispose: vi.fn() })), list: vi.fn(() => []) },
     project: {
       get: () => state.project,

@@ -118,6 +118,7 @@ const bridge: PowermoveBridge = {
   },
   confirmProjectClose: (name) => ipcRenderer.invoke(IPC.projectConfirmClose, name),
   confirm: (request) => ipcRenderer.invoke(IPC.dialogConfirm, request) as Promise<boolean>,
+  clipboardWriteText: (text) => ipcRenderer.invoke(IPC.clipboardWriteText, text) as Promise<void>,
 
   render: {
     start: options => ipcRenderer.invoke(IPC.renderStart,options),
@@ -221,6 +222,11 @@ const bridge: PowermoveBridge = {
     },
     respond: (response) => {
       ipcRenderer.send(IPC.agentToolResponse, response);
+    },
+    onInput: (cb) => {
+      const listener = (_event: IpcRendererEvent, active: unknown): void => cb(active === true);
+      ipcRenderer.on(IPC.agentToolInput, listener);
+      return () => ipcRenderer.removeListener(IPC.agentToolInput, listener);
     }
   },
 
@@ -327,6 +333,12 @@ const bridge: PowermoveBridge = {
     ipcRenderer.send(IPC.log, { level, text });
   },
   openExternal: (url) => ipcRenderer.invoke(IPC.openExternal, url) as Promise<void>,
+  extensionOpenExternal: (url) => ipcRenderer.invoke(IPC.extensionOpenExternal, url) as Promise<void>,
+  remoteMedia: {
+    fetch: (url) => ipcRenderer.invoke(IPC.remoteMediaFetch, url),
+    read: (token, offset, length) => ipcRenderer.invoke(IPC.remoteMediaRead, { token, offset, length }),
+    release: (token) => ipcRenderer.invoke(IPC.remoteMediaRelease, token)
+  },
   nativeEdit: (action: NativeEditAction) => ipcRenderer.send(IPC.nativeEdit, action),
   updates: {
     status: () => ipcRenderer.invoke(IPC.updateStatus) as Promise<AppUpdateState>,

@@ -5,7 +5,7 @@ import { CLOUD_UNREACHABLE } from '../../../shared/cloud-ipc';
 import type { LibraryItemDto } from '../../../shared/store-ipc';
 import {
   KINDS, KIND_PLURAL, artFor, detailAction, detailFromDto, groupLibrary, includesText, libraryAction, listingFromDto,
-  loadError, libraryItemFor, ownsListing, parseLineage, permissionLines, asksFullAccess, relativeDate, requiresText, statusText
+  loadError, libraryItemFor, ownsListing, parseLineage, permissionLines, asksFullAccess, linkHosts, relativeDate, requiresText, statusText
 } from './data';
 
 const REPO = '11111111-1111-4111-8111-111111111111';
@@ -142,13 +142,14 @@ describe('view models', () => {
     const release = (id: string, version: string, yankedAt: string | null) => ({
       id, repoId: REPO, version, commitSha: 'c'.repeat(40), treeSha: 't'.repeat(40), tarSha256: 'a'.repeat(64), apiVersion: 2,
       fileCount: 2, sizeBytes: 10, notes: `Notes for ${version}`, publishedAt: '2026-09-20T00:00:00.000Z', yankedAt, basedOnReleaseId: null,
-      manifest: { id: 'glass-blur', name: 'Glass blur', version, apiVersion: 2, contributes: ['effects', 'inspector'], vars: required, forkedFrom: null, description: null, permissions: [] }
+      manifest: { id: 'glass-blur', name: 'Glass blur', version, apiVersion: 2, contributes: ['effects', 'inspector'], vars: required, forkedFrom: null, description: null, permissions: [], links: version === '1.1.0' ? ['https://replicate.com'] : [] }
     });
     const dto: ExtensionDetailDto = { ...listing, about: null, moderation: 'none', releases: [release(R2, '1.1.0', null), release(R1, '1.0.0', '2026-09-21T00:00:00.000Z')] };
     const vm = detailFromDto(dto, [], now);
     expect(vm.versions.map((v) => [v.version, v.withdrawn])).toEqual([['1.1.0', false], ['1.0.0', true]]);
     expect(vm.vars).toEqual(required);
     expect(includesText(vm.contributes)).toBe('Effects, Inspector');
+    expect(vm.links).toEqual(['https://replicate.com']);
     expect(detailAction({ vars: vm.vars }).label).toBe('Install and set up');
   });
 
@@ -199,6 +200,14 @@ describe('access disclosure', () => {
     ]);
     expect(asksFullAccess(['network', 'full-access'])).toBe(true);
     expect(asksFullAccess(['network'])).toBe(false);
+  });
+
+  it('discloses the origins it opens without asking only alongside network', () => {
+    const links = ['https://replicate.com', 'https://api.example.com:8443'];
+    expect(linkHosts(links, ['network'])).toEqual(['replicate.com', 'api.example.com:8443']);
+    // Without network every link asks first, so there is nothing to disclose.
+    expect(linkHosts(links, ['assets'])).toEqual([]);
+    expect(linkHosts(undefined, ['network'])).toEqual([]);
   });
 
   it('shows trust state in the Library status and action', () => {

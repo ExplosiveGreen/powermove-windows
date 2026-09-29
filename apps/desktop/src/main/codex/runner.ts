@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -14,8 +14,8 @@ import {
 } from '../../shared/ipc';
 import { EXTENSION_ID } from '../../shared/extensions';
 import { isArrayOf, isBytes, isOneOf, isRecord, isString } from '../../shared/guards';
-import { buildAutonomousArgv, buildEditorArgv } from './adapter';
-import { publishExtensionChanges } from './change-history';
+import { buildAutonomousArgv, buildEditorArgv, verifyPermissionProfiles } from './adapter';
+import { publishExtensionChanges, withStageSnapshot } from './change-history';
 import { AgentResultValidationError, repairAgentResult } from './result-repair';
 import { validateStagedExtensions } from './validate-staged-extensions';
 import { collectArtifacts } from './artifacts';
@@ -25,6 +25,7 @@ import { CodexEventParser } from './events';
 import { agentInstructions, agentResultSchema } from './instructions';
 import type { NativeMcpServerConfig } from '../agent-tools/spec';
 import { loadUserMcpServers, type UserMcpServers } from '../agent-tools/user-mcp';
+import { agentCredentialPaths } from '../agent-network';
 import {
   isolatedCodexEnvironment,
   prepareIsolatedCodexHome
@@ -426,6 +427,9 @@ export class CodexRunner {
         return cancelledResult(state);
       }
 
+      const deniedReads = authority === 'project' ? await agentCredentialPaths(options.userData, { codexHome: 'credentials' }) : [];
+      const workspaceRoots = [layout.root, await realpath(layout.root)];
+      if (authority === 'project') await verifyPermissionProfiles(binary, isolatedCodexEnvironment(codexHome));
       let resumeId = await readSession(layout.sessionPath);
       let attempt: AttemptResult | null = null;
       const executeAutonomous = async (prompt: string, sessionId: string | null) => {
@@ -447,6 +451,9 @@ export class CodexRunner {
           model: req.model,
           reasoningEffort: req.reasoningEffort,
           access: authority,
+          shellNetwork: req.access === 'project',
+          deniedReads,
+          workspaceRoots,
           extensionsDir: layout.extensionsDir,
           sessionId,
           nativeTools: options.nativeTools,
@@ -504,9 +511,12 @@ export class CodexRunner {
         parsed.projectId = req.projectId;
         parsed.access = authority;
         const extensions = parseAgentExtensionChanges(parsed.extensions);
-        await validateStagedExtensions(layout, extensions ?? []);
-        if (this.cancelled.has(req.id)) throw new Error('The Codex run was cancelled.');
-        const changeSet = await publishExtensionChanges(layout, extensions ?? []);
+        // One private copy is checked and published; later stage writes cannot ship.
+        const changeSet = await withStageSnapshot(layout, async snapshot => {
+          await validateStagedExtensions(snapshot, extensions ?? []);
+          if (this.cancelled.has(req.id)) throw new Error('The Codex run was cancelled.');
+          return publishExtensionChanges(snapshot, extensions ?? []);
+        }, (extensions ?? []).map(change => change.id));
         return { parsed, extensions, changeSet };
       }, async prompt => {
         repairingResult = true;

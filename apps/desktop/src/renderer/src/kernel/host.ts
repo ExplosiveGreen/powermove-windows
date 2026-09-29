@@ -29,6 +29,7 @@ import type {
   ExtensionRecord,
   ExtensionsAPI,
   GroupsAPI,
+  KernelEvents,
   HistoryAPI,
   KeybindingDefinition,
   KeybindingsAPI,
@@ -65,8 +66,9 @@ import type {
 import type { EffectDefinition, EditCommand, EditMeta, EditResult, TransitionDefinition } from './api';
 import type { ExtensionLayerDefinition } from './api';
 import type { Component } from 'svelte';
+import { createSubscriber } from 'svelte/reactivity';
 import { chordOfEvent } from './keychord';
-import { runKernelCommand, type Kernel } from './registries';
+import { ASYNC_CONTRIBUTOR, runKernelCommand, settledWhen, withWhenCheck, type Kernel } from './registries';
 import { mountComponent } from './runtime-globals';
 import { performanceMonitor } from '../runtime/performance-monitor';
 import { extensionLoad } from '../runtime/extension-load';
@@ -109,6 +111,7 @@ export interface HostDeps {
     controls: UIAPI['controls'];
     toast: UIAPI['toast'];
     confirm: UIAPI['confirm'];
+    openExternal: UIAPI['openExternal'];
     menu: UIAPI['menu'];
     modal: UIAPI['modal'];
     icon: UIAPI['icon'];
@@ -155,6 +158,16 @@ export interface ExtensionHandle {
 }
 
 export type FramePanelDefinition = Pick<PanelDefinition, 'id' | 'title' | 'icon' | 'size' | 'min' | 'flush' | 'noscroll'>;
+
+/* Callbacks the host polls on its own schedule (status text, `when`, menu and
+   palette items) may run inside the host's own $derived. Reactive reads there
+   stay plain, so an extension that never asked for reactivity cannot tie that
+   UI to per-frame events. Shared: one extension's callback may read another's API. */
+let polling = 0;
+const polled = <A extends unknown[], R>(fn: (...args: A) => R) => (...args: A): R => {
+  polling++;
+  try { return fn(...args); } finally { polling--; }
+};
 
 const FALLBACK_MANIFEST = (id: string): ExtensionManifest => ({ id, name: id, version: '0.0.0', apiVersion: 1 });
 
@@ -238,6 +251,18 @@ export function createExtensionAPI(
     disposers.push(release);
     return { dispose: release };
   };
+
+  /* Reactive reads: inside a template, $derived or $effect a read subscribes
+     its reader to the kernel event that changes the value (the first reader
+     subscribes, the last one's teardown unsubscribes); anywhere else it is the
+     plain call it always was. Unguarded on purpose: `time` fires every frame
+     and Svelte's update cannot throw. */
+  const tracked = (event: keyof KernelEvents) => createSubscriber(update => {
+    const off = kernel.events.on(event, update, id);
+    return () => off.dispose();
+  });
+  const reads = { time: tracked('time'), transport: tracked('transport'), selection: tracked('selection'), project: tracked('project:changed'), theme: tracked('theme:changed') };
+  const reactive = <T,>(track: () => void, value: () => T) => (): T => { if (!polling) track(); return value(); };
 
   const extensions: ExtensionsAPI = {
     ...deps.extensions,
@@ -349,16 +374,18 @@ export function createExtensionAPI(
       if (typeof def.run !== 'function') throw new Error(`[ext:${id}] command "${def.id}" requires run()`);
       const run = def.run;
       const when = def.when;
+      const settled = typeof when === 'function' ? settledWhen(guard(polled(() => when()), `command ${def.id} when`, false)) : null;
       const guarded: CommandDefinition = {
         ...def,
         run: guard((...args: unknown[]) => run(...args), `command ${def.id}`, undefined),
-        ...(typeof when === 'function' ? { when: guard(() => when(), `command ${def.id} when`, false) } : {})
+        ...(settled ? { when: settled.when } : {})
       };
-      return collect(kernel.commands.register(id, guarded));
+      return collect(kernel.commands.register(id, settled ? withWhenCheck(guarded, settled.check) : guarded));
     },
     run: (commandId, ...args) => runKernelCommand(kernel, commandId, args),
     has: (commandId) => kernel.commands.has(commandId),
-    list: () => kernel.commands.list()
+    // Every registration path leaves `when` synchronous (settledWhen above; legacy commands are).
+    list: () => kernel.commands.list() as ReturnType<CommandsAPI['list']>
   };
 
   /* ── keybindings ───────────────────────────────────────── */
@@ -401,9 +428,9 @@ export function createExtensionAPI(
       return collect(kernel.themes.register(id, def));
     },
     activate: (themeId) => kernel.activateTheme(themeId),
-    active: () => kernel.theme.activeId,
+    active: reactive(reads.theme, () => kernel.theme.activeId),
     list: () => kernel.themes.list(),
-    scheme: () => kernel.theme.scheme,
+    scheme: reactive(reads.theme, () => kernel.theme.scheme),
     setScheme: (mode) => kernel.setScheme(mode)
   };
 
@@ -412,19 +439,21 @@ export function createExtensionAPI(
   const palette: PaletteAPI = {
     registerProvider(provider: PaletteProvider) {
       if (typeof provider !== 'function') throw new Error(`[ext:${id}] palette.registerProvider requires a function`);
-      const guarded = guard((query: string): PaletteEntry[] => provider(query) ?? [], 'palette provider', [] as PaletteEntry[]);
+      const guarded = guard(polled((query: string) => provider(query) ?? []), 'palette provider', [] as PaletteEntry[]);
       return collect(kernel.registerPaletteProvider(id, guarded));
     },
     open: (query) => deps.paletteOpen(query)
   };
 
   const menus: MenusAPI = {
-    contribute(location: MenuLocation, items: (ctx: Record<string, unknown>) => MenuContribution[]) {
+    contribute(location: MenuLocation, items: (ctx: Record<string, unknown>) => MenuContribution[] | Promise<MenuContribution[]>) {
       if (typeof items !== 'function') throw new Error(`[ext:${id}] menus.contribute requires a function`);
-      const guarded = guard((ctx: Record<string, unknown>): MenuContribution[] => items(ctx) ?? [], `menu ${location}`, [] as MenuContribution[]);
-      return collect(kernel.contributeMenu(id, location, guarded));
+      const guarded = guard(polled((ctx: Record<string, unknown>) => items(ctx) ?? []), `menu ${location}`, [] as MenuContribution[]);
+      const async = (items as { [ASYNC_CONTRIBUTOR]?: boolean })[ASYNC_CONTRIBUTOR] === true;
+      return collect(kernel.contributeMenu(id, location, guarded, { async }));
     },
-    collect: (location, ctx) => kernel.collectMenu(location, ctx)
+    collect: (location, ctx) => kernel.collectMenu(location, ctx),
+    gather: async (location, ctx) => kernel.gatherMenu(location, ctx)
   };
 
   const status: StatusAPI = {
@@ -435,7 +464,7 @@ export function createExtensionAPI(
       const onClick = item.onClick;
       const guarded: StatusItem = {
         ...item,
-        text: guard((): string | null => text(), `status ${item.id}`, null),
+        text: guard(polled((): string | null => text()), `status ${item.id}`, null),
         ...(typeof onClick === 'function' ? { onClick: guard(() => onClick(), `status ${item.id} click`, undefined) } : {})
       };
       return collect(kernel.status.register(id, guarded));
@@ -447,9 +476,21 @@ export function createExtensionAPI(
 
   const project: ProjectAPI = {
     ...deps.project,
+    latest: reactive(reads.project, () => deps.project.latest()),
+    revision: reactive(reads.project, () => deps.project.revision()),
+    selection: reactive(reads.selection, () => deps.project.selection()),
+    time: reactive(reads.time, () => deps.project.time()),
+    playing: reactive(reads.transport, () => deps.project.playing()),
     apply: (input: EditCommand | EditCommand[], meta?: Omit<EditMeta, 'origin'>): EditResult =>
       deps.project.apply(input, { ...(meta ?? {}), origin: `ext:${id}` } as Omit<EditMeta, 'origin'>)
   };
+
+  /* Accessors (quality, perf, previewResolution) are copied as accessors. */
+  const transport = deps.transport && Object.defineProperties({}, {
+    ...Object.getOwnPropertyDescriptors(deps.transport),
+    time: { value: reactive(reads.time, () => deps.transport!.time()), enumerable: true },
+    playing: { value: reactive(reads.transport, () => deps.transport!.playing()), enumerable: true }
+  }) as TransportAPI;
 
   /* ── events ────────────────────────────────────────────── */
 
@@ -486,7 +527,7 @@ export function createExtensionAPI(
     model: deps.model as ModelAPI,
     selection: deps.selection as SelectionAPI,
     groups: deps.groups as GroupsAPI,
-    transport: deps.transport as TransportAPI,
+    transport: transport as TransportAPI,
     history: deps.history as HistoryAPI,
     edit: deps.edit as EditAPI,
     media: {
@@ -513,7 +554,7 @@ export function createExtensionAPI(
         const registration = kernel.inspectorSections.register(id, {
           ...section,
           after: section.after ?? 'transform',
-          ...(when ? { when: guard(when, `inspector ${section.id} visibility`, false) } : {}),
+          ...(when ? { when: guard(polled(when), `inspector ${section.id} visibility`, false) } : {}),
           build: guard((target, context) => {
             let cleanup: ReturnType<typeof build>;
             try { cleanup = build(target, context); }

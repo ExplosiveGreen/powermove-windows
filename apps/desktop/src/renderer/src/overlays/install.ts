@@ -73,7 +73,7 @@ export function installSvelteOverlays(PM: PMRegistry): void {
     toast: (message: unknown, milliseconds = 2200, options: ToastOptions = {}): void => {
       flushSync(() => toasts.push(message, milliseconds, options));
     },
-    menu: (anchor: HTMLElement, items: MenuItem[], options: MenuOptions = {}): HTMLElement =>
+    menu: (anchor: HTMLElement, items: MenuItem[] | PromiseLike<MenuItem[]>, options: MenuOptions = {}): HTMLElement =>
       menu.open(anchor, items, options),
     closeMenus: (): void => menu.close(false),
     modal: (options: ModalOptions) => modal.open(options),

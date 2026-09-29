@@ -56,7 +56,7 @@ it('registers across a real MessageChannel, caches sync callbacks, scopes vars, 
   const frame = document.createElement('iframe');
   let childApi!: ReturnType<typeof createSandboxAPI>;
   const runtimePromise = createSandboxRuntime(kernel, record, deps, { TOKEN: 'one' }, { frame, onPostInit(port, init) {
-    const child = createRpc(port, {});
+    const child = createRpc(port, { theme: (theme: SandboxInit['theme']) => sandboxControl(childApi).theme(theme) });
     close.push(() => child.close());
     childApi = createSandboxAPI(child, init);
     void import(`data:text/javascript;base64,${source.toString('base64')}`).then(module => {
@@ -81,6 +81,11 @@ it('registers across a real MessageChannel, caches sync callbacks, scopes vars, 
   expect(apply).toHaveBeenCalled();
   expect(() => childApi.host.pm).toThrow(PermissionError);
   expect(childApi.vars.keys()).toEqual(['TOKEN']);
+  // The theme push names the active theme, so theme.active() follows it.
+  kernel.themes.register('app', { id: 'paper', name: 'Paper', scheme: 'light' });
+  kernel.activateTheme('paper');
+  await new Promise(resolve => setTimeout(resolve, 10));
+  expect([childApi.theme.active(), childApi.theme.scheme()]).toEqual(['paper', 'light']);
   runtime.dispose();
   expect(kernel.effects.has('sandboxed-ext.tint')).toBe(false);
   expect(kernel.commands.has('sandboxed-ext.command')).toBe(false);

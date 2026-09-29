@@ -20,11 +20,11 @@ export function openPanelMenu(
   const def = PM.PANELS[spec.id];
   if (!ws || !def) return;
 
-  const contributions = (PM.Kernel?.collectMenu?.('panel:context', {
+  const contributions = (PM.Kernel?.gatherMenu?.('panel:context', {
     panelId: spec.id,
     dockId: dock.id
-  }) ?? []) as MenuContribution[];
-  const items: MenuContribution[] = [
+  }) ?? []) as MenuContribution[] | Promise<MenuContribution[]>;
+  const items = (contributed: MenuContribution[]): MenuContribution[] => [
     { header: def.title },
     ...(spec.id === 'agent' && AGENT_FEATURES.floating ? [{
       label: 'Use floating agent',
@@ -40,8 +40,9 @@ export function openPanelMenu(
       icon: 'x',
       run: () => PM.WS.mutate((workspace: Workspace) => PM.Layout.closePanel(workspace, spec.id))
     }]),
-    ...(contributions.length ? ['-' as const, ...contributions] : [])
+    ...(contributed.length ? ['-' as const, ...contributed] : [])
   ];
 
-  PM.menu(trigger, items, position);
+  /* Sandboxed contributions answer over a port; the kernel bounds the wait. */
+  PM.menu(trigger, Array.isArray(contributions) ? items(contributions) : contributions.then(items), position);
 }

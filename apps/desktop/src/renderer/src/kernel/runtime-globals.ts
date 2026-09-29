@@ -1,29 +1,18 @@
 /*
  * Shared runtime for extension bundles.
  *
- * Main compiles user/project extensions with `external: ['svelte', 'svelte/*']`,
- * so their bundles resolve those specifiers at load time against
- * `globalThis.__powermove_runtime`. Importing the namespaces statically here is
- * what makes that safe: Vite bundles exactly ONE copy of the Svelte runtime into
- * the app, and every extension component shares the host's reactivity graph
- * (two copies would mean effects that never run and stores that never notify).
+ * Main compiles user/project extensions with every `svelte` import pointed at
+ * `globalThis.__powermove_runtime`, so their bundles resolve those specifiers
+ * at load time against the table installed here: the host's own Svelte (see
+ * svelte-runtime.ts) plus the `powermove` editor helpers.
  */
 import * as editorHelpers from './editor-helpers';
 import * as svelte from 'svelte';
-/* `svelte/internal/client` ships no declaration file. It is imported purely so
-   Vite bundles the one copy extension bundles resolve against — nothing here
-   calls into it, so the missing types cost us nothing. */
-// @ts-expect-error -- untyped Svelte internal entrypoint
-import * as svelteInternalClient from 'svelte/internal/client';
-import * as svelteStore from 'svelte/store';
+import { svelteRuntime, type SvelteRuntime } from './svelte-runtime';
 import type { Component } from 'svelte';
 
-export interface PowermoveRuntime {
+export interface PowermoveRuntime extends SvelteRuntime {
   powermove: typeof editorHelpers;
-  svelte: typeof svelte;
-  'svelte/internal/client': typeof svelteInternalClient;
-  'svelte/store': typeof svelteStore;
-  'svelte/internal/disclose-version': Record<string, never>;
 }
 
 declare global {
@@ -34,13 +23,7 @@ declare global {
 export const RUNTIME_GLOBAL = '__powermove_runtime' as const;
 
 export function installRuntimeGlobals(): PowermoveRuntime {
-  const runtime: PowermoveRuntime = {
-    powermove: editorHelpers,
-    svelte,
-    'svelte/internal/client': svelteInternalClient,
-    'svelte/store': svelteStore,
-    'svelte/internal/disclose-version': {}
-  };
+  const runtime: PowermoveRuntime = { ...svelteRuntime, powermove: editorHelpers };
   globalThis.__powermove_runtime = runtime;
   return runtime;
 }

@@ -24,14 +24,18 @@ export function extensionSandboxCsp(id: string, permissions: readonly string[], 
   const remote = network ? ' https:' : '';
   const devScript = dev ? ` ${dev}/` : '';
   const devConnect = dev ? ` ${dev} ${dev.replace(/^http/, 'ws')}` : '';
-  const connect = network ? `https: wss:${devConnect}` : dev ? devConnect.trim() : "'none'";
+  /* data: and blob: never leave the machine (an opaque origin cannot read
+     another frame's blobs), so `fetch(canvas.toDataURL())`, object URLs and
+     inlined wasm or JSON work without network. */
+  const connect = `data: blob:${network ? ' https: wss:' : ''}${devConnect}`;
   return [
     "default-src 'none'",
     `script-src ${origin}/host/ ${origin}/ext/${id}/ 'wasm-unsafe-eval'${devScript}`,
-    `style-src 'unsafe-inline' ${origin}/${devScript}`,
-    `font-src ${origin}/`,
+    // Bundled fonts are data: URLs; remote fonts and stylesheets need network. CSS cannot run script.
+    `style-src 'unsafe-inline' ${origin}/${remote}${devScript}`,
+    `font-src ${origin}/ data: blob:${remote}`,
     `img-src data: blob:${remote}`,
-    `media-src blob:${remote}`,
+    `media-src data: blob:${remote}`,
     `connect-src ${connect}`,
     'worker-src blob:', "frame-src 'none'", "base-uri 'none'", "form-action 'none'"
   ].join('; ');

@@ -14,7 +14,7 @@ it('renders permission disclosure, trust status, and the Library trust action', 
   HTMLElement.prototype.scrollTo = vi.fn();
   const item: LibraryItemDto = {
     localId: 'glass-blur', name: 'Glass blur', version: '1.0.0', category: 'effects', contributes: ['effects'], vars: [],
-    health: { state: 'needs-trust' }, enabled: false, trust: 'store', permissions: ['network', 'full-access'],
+    health: { state: 'needs-trust' }, enabled: false, trust: 'store', permissions: ['network', 'full-access'], links: ['https://glass.example.com'],
     description: 'Blur effect', group: 'store', maker: { handle: 'mara' },
     origin: { coordinate: 'mara/glass-blur', version: '1.0.0', repoId: '11111111-1111-4111-8111-111111111111', releaseId: '22222222-2222-4222-8222-222222222222' },
     update: null, modified: false
@@ -40,6 +40,8 @@ it('renders permission disclosure, trust status, and the Library trust action', 
     flushSync();
     await vi.waitFor(() => expect(target.textContent).toContain('Uses the network'));
     expect(target.textContent).toContain('Needs full access to Powermove');
+    const opens = [...target.querySelectorAll('.st-kv')].find((row) => row.querySelector('span')?.textContent === 'Opens without asking');
+    expect(opens?.querySelector('b')?.textContent).toBe('glass.example.com');
   } finally {
     await unmount(screen);
     target.remove();

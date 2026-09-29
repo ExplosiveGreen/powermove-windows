@@ -23,13 +23,14 @@
     corner?: 'top-right' | 'bottom-right';
     action?: { label: string; run: () => void };
     onDismiss?: () => void;
+    onClose?: () => void;
   };
 
   let queue = $state<ToastItem[]>([]);
   let nextId = 1;
 
   export function push(message: unknown, milliseconds = 2200, options: ToastOptions = {}): void {
-    if (message == null) return;
+    if (message == null) { options.onClose?.(); return; }
     const kind = toastKind(message, options);
     const text = String(message);
     let previous: ToastItem | undefined;
@@ -38,7 +39,7 @@
       if (keyed) { window.clearTimeout(keyed.timeout); previous = keyed; }
     } else {
       const existing = queue.find(item => item.message === text && item.kind === kind);
-      if (existing) return;
+      if (existing) { options.onClose?.(); return; }
     }
     // Routine status updates replace each other. Errors, alerts and corner notices remain available to read.
     for (const item of [...queue]) {
@@ -60,9 +61,11 @@
       key: options.key,
       corner: options.corner,
       action: options.action,
-      onDismiss: options.onDismiss
+      onDismiss: options.onDismiss,
+      onClose: options.onClose
     };
     queue = previous ? queue.map(old => old === previous ? item : old) : [...queue, item];
+    previous?.onClose?.();
     if (!item.sticky) item.timeout = window.setTimeout(() => dismiss(item.id), milliseconds);
   }
 
@@ -72,6 +75,7 @@
     window.clearTimeout(item.timeout);
     queue = queue.filter((candidate) => candidate.id !== id);
     if (byUser) item.onDismiss?.();
+    item.onClose?.();
   }
 
   /* #toasts is a transformed, scrolling wrapper anchored top-center, so a
@@ -93,10 +97,12 @@
   }
 
   export function clear(): void {
-    for (const item of queue) {
+    const closing = queue;
+    for (const item of closing) {
       window.clearTimeout(item.timeout);
     }
     queue = [];
+    for (const item of closing) item.onClose?.();
   }
 
   /** Sort a notice into its family. An extension's notice never becomes an
