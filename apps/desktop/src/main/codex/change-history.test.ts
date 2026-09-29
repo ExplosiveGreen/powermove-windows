@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -272,6 +273,27 @@ it.each(['left as a link', 'swapped back'])('refuses to snapshot a folder swappe
   expect(copied).toEqual([]);
   expect((await readdir(prepared.historyRoot)).filter((name) => name.startsWith('.snapshot-'))).toEqual([]);
 });
+
+it.each(['a FIFO', 'a link to /dev/zero'])('refuses a stage file swapped for %s after its listing without waiting or buffering', async (kind) => {
+  const root = await temporaryDirectory();
+  const live = path.join(root, 'extensions');
+  await extension(live, 'checked', 'before');
+  const prepared = await stage(root);
+  const folder = path.join(prepared.stagingDirectory, 'checked');
+  const file = path.join(folder, 'index.ts');
+  listing.swap = {
+    directory: folder,
+    before: async () => undefined,
+    after: async () => {
+      await rm(file);
+      if (kind === 'a FIFO') execFileSync('/usr/bin/mkfifo', [file]);
+      else await symlink('/dev/zero', file);
+    }
+  };
+  // Unreported and unchanged when listed, so only the baseline hash reads it.
+  await expect(withStageSnapshot(prepared, async () => undefined)).rejects.toThrow(/unsupported (file|symbolic link): index\.ts/);
+  expect(listing.swap).toBeNull();
+}, 5_000);
 
 it('clears snapshots a crash left behind at boot', async () => {
   const userData = await temporaryDirectory();
