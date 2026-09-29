@@ -10,7 +10,7 @@ import {
 } from '../agent-tools/spec';
 
 import type { UserMcpServers } from '../agent-tools/user-mcp';
-import { AGENT_SHELL_NETWORK_HOSTS } from '../agent-network';
+import { AGENT_SHELL_NETWORK_INSTRUCTIONS } from '../codex/instructions';
 
 const PROJECT_TOOLS = 'Read,Glob,Grep,Write,Edit,Bash,WebSearch,WebFetch,Skill,Agent,Task';
 const EDITOR_TOOLS = 'Read,Glob,Grep,Skill,Agent,Task';
@@ -28,15 +28,12 @@ const EDITOR_SANDBOX_SETTINGS = { ...STRICT_SANDBOX_SETTINGS, autoAllowBashIfSan
 const EDITOR_SANDBOX = JSON.stringify({ sandbox: EDITOR_SANDBOX_SETTINGS });
 const EDITOR_DISALLOWED_TOOLS = 'Bash,Monitor,PowerShell,Write,Edit,NotebookEdit';
 
-/** Claude project Bash shares the one agent shell allowlist. WebSearch and
- * WebFetch stay available for research on any site. */
-export const CLAUDE_PROJECT_NETWORK_HOSTS = AGENT_SHELL_NETWORK_HOSTS;
-
-// strictAllowlist denies every other host outright instead of prompting, and
-// stops a command's allowed_domains parameter from widening the list.
+// Project Bash reaches any host: the sandbox proxy matches a bare `*` against
+// every host, and without an allowlist a print run denies each host it would
+// ask about. Local binding lets it run dev servers. Writes stay confined.
 const PROJECT_SANDBOX_SETTINGS = {
   ...STRICT_SANDBOX_SETTINGS,
-  network: { allowedDomains: [...CLAUDE_PROJECT_NETWORK_HOSTS], strictAllowlist: true }
+  network: { allowedDomains: ['*'], allowLocalBinding: true }
 } satisfies SandboxSettings;
 const PROJECT_SANDBOX = JSON.stringify({ sandbox: PROJECT_SANDBOX_SETTINGS });
 
@@ -51,8 +48,7 @@ function sandboxSettings(access: 'editor' | 'project', deniedReads: readonly str
   });
 }
 
-const PROJECT_NETWORK_INSTRUCTIONS = `SHELL NETWORK
-Sandboxed Bash can download only from ${CLAUDE_PROJECT_NETWORK_HOSTS.join(', ')}; other hosts are refused. Research any site with WebSearch and WebFetch, then download the file itself from one of those hosts into the deliverable directory.`;
+const PROJECT_NETWORK_INSTRUCTIONS = `SHELL NETWORK\n${AGENT_SHELL_NETWORK_INSTRUCTIONS}`;
 
 interface ClaudeArgvOptions {
   schema: Record<string, unknown>;
