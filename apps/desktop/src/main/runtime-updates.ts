@@ -1,7 +1,9 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { createWriteStream, readFileSync } from 'node:fs';
 import { chmod, cp, mkdir, mkdtemp, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -86,13 +88,24 @@ async function latestRelease(provider: RuntimeProvider): Promise<Release> {
 
 async function download(release: Release, file: string): Promise<void> {
   const response = await fetch(release.tarball);
-  if (!response.ok) throw new Error(`The download failed (${response.status}).`);
-  const bytes = Buffer.from(await response.arrayBuffer());
+  if (!response.ok || response.body === null) throw new Error(`The download failed (${response.status}).`);
+  // Stream to disk and hash incrementally so a large runtime never sits in
+  // memory or blocks the main process in one long hash call.
+  const hash = createHash('sha512');
+  await pipeline(
+    Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]),
+    async function* (source: AsyncIterable<Buffer>) {
+      for await (const chunk of source) {
+        hash.update(chunk);
+        yield chunk;
+      }
+    },
+    createWriteStream(file)
+  );
   const [algorithm, expected] = release.integrity.split('-', 2);
-  if (algorithm !== 'sha512' || createHash('sha512').update(bytes).digest('base64') !== expected) {
+  if (algorithm !== 'sha512' || hash.digest('base64') !== expected) {
     throw new Error('The downloaded runtime didn’t match its published checksum.');
   }
-  await writeFile(file, bytes);
 }
 
 function run(file: string, args: readonly string[], timeout = 60_000): Promise<string> {
@@ -104,11 +117,42 @@ function run(file: string, args: readonly string[], timeout = 60_000): Promise<s
   });
 }
 
+function versionParts(version: string): number[] {
+  return (version.match(/\d+/g) ?? []).slice(0, 3).map(Number);
+}
+
+export function isNewerVersion(candidate: string, current: string): boolean {
+  const a = versionParts(candidate);
+  const b = versionParts(current);
+  for (let i = 0; i < 3; i++) {
+    if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+  }
+  return false;
+}
+
+/** Install the newest runtime only when it is ahead of the binary in use.
+    Returns null when the runtime is already current. */
+export async function installRuntimeIfNewer(
+  provider: RuntimeProvider,
+  currentBinary: string
+): Promise<RuntimeUpdateResult | null> {
+  if (root === null || process.platform !== 'darwin') return null;
+  const current = installed(provider)?.version
+    ?? (await run(currentBinary, ['--version'], 15_000)).match(/\d+\.\d+\.\d+\S*/)?.[0];
+  const release = await latestRelease(provider);
+  if (current && !isNewerVersion(release.version, current)) return null;
+  return installRelease(provider, release);
+}
+
 /** Download, verify, and activate the newest runtime for a provider. */
 export async function installLatestRuntime(provider: RuntimeProvider): Promise<RuntimeUpdateResult> {
   if (root === null) throw new Error('Runtime updates aren’t available in this build.');
   if (process.platform !== 'darwin') throw new Error('Runtime updates are only available on macOS.');
-  const release = await latestRelease(provider);
+  return installRelease(provider, await latestRelease(provider));
+}
+
+async function installRelease(provider: RuntimeProvider, release: Release): Promise<RuntimeUpdateResult> {
+  if (root === null) throw new Error('Runtime updates aren’t available in this build.');
   const scratch = await mkdtemp(path.join(os.tmpdir(), `powermove-${provider}-`));
   try {
     const archive = path.join(scratch, 'package.tgz');

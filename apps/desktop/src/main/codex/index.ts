@@ -40,10 +40,11 @@ import { readArtifact, revealArtifact } from './artifacts';
 import { requestComputerConsent } from './consent';
 import { CodexRunner, isCodexRunRequest } from './runner';
 import { ChatGPTAccountClient } from './app-server-account';
-import { forgetCodexDescription } from './env';
-import { installLatestRuntime } from '../runtime-updates';
+import { discoverCodexBinary, forgetCodexDescription } from './env';
+import { installLatestRuntime, installRuntimeIfNewer, type RuntimeProvider } from '../runtime-updates';
 import { CodexAppServerRunner } from './app-server-runner';
 import { ClaudeAccountClient, ClaudeRunner } from '../claude';
+import { discoverClaudeBinary } from '../claude/env';
 import { buildFixPrompt, buildRebasePrompt } from './instructions';
 import { restoreExtensionChangeSet } from './change-history';
 import { agentWorkspaceRoot, safeAgentComponent, sessionPathFor, type AgentApiPackFile } from './workspace';
@@ -357,6 +358,7 @@ export function registerCodexIpc(
 
   ipcMain.handle(IPC.chatgptModels, async (event) => {
     requireTrusted(event, ctx);
+    void refreshRuntime('codex');
     return account.models?.() ?? [];
   });
 
@@ -375,8 +377,36 @@ export function registerCodexIpc(
     return claudeAccount.status();
   });
 
+  // New models only appear once the runtime knows them, so each launch checks
+  // for a newer runtime and re-announces so the pickers refresh.
+  const runtimeChecked = new Set<RuntimeProvider>();
+  const refreshRuntime = async (provider: RuntimeProvider): Promise<void> => {
+    if (runtimeChecked.has(provider)) return;
+    runtimeChecked.add(provider);
+    // Let the app finish booting before any network or disk work starts.
+    await new Promise<void>(resolve => { setTimeout(resolve, 20_000).unref(); });
+    try {
+      if (provider === 'claude') {
+        if (process.env.CLAUDE_BINARY || ctx.claudeBinaryPref?.() || (await claudeAccount.status()).state !== 'connected') return;
+        if (await installRuntimeIfNewer('claude', await discoverClaudeBinary(null))) void claudeAccount.status();
+        return;
+      }
+      if (process.env.CODEX_BINARY || ctx.codexBinaryPref() || (await account.status()).state !== 'connected') return;
+      if (!await installRuntimeIfNewer('codex', await discoverCodexBinary(null))) return;
+      forgetCodexDescription();
+      // Restarting would kill a run in flight; those runs keep the old process.
+      if (owners.size === 0) {
+        await Promise.all([account.shutdown(), appServerRunner.shutdown()]);
+        void account.status();
+      }
+    } catch {
+      // The bundled runtime and model list keep working when the check fails.
+    }
+  };
+
   ipcMain.handle(IPC.claudeModels, async (event) => {
     requireTrusted(event, ctx);
+    void refreshRuntime('claude');
     return claudeAccount.models?.() ?? [];
   });
 
