@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, readdir, readlink, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -85,5 +85,40 @@ describe('shared agent resources', () => {
     expect(JSON.parse(await readFile(path.join(runtime, 'settings.json'), 'utf8')))
       .toEqual({ ...shared, permissions: { deny: ['Read(~/.secrets/**)'] } });
     expect(claudeRuntimeSettings({ permissions: { allow: ['Bash'] } })).toEqual({});
+  });
+
+  it('keeps Claude settings env from replacing Powermove\'s login, API routing, proxy or sandbox', () => {
+    const replaced = [
+      'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_CUSTOM_HEADERS', 'ANTHROPIC_VERTEX_PROJECT_ID',
+      'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY', 'CLAUDE_CODE_SKIP_BEDROCK_AUTH',
+      'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_API_KEY_HELPER_TTL_MS', 'CLAUDE_CODE_API_BASE_URL', 'CLAUDE_CODE_GATEWAY_TOKEN',
+      'CLAUDE_CODE_CLIENT_CERT', 'CLAUDE_CODE_CLIENT_KEY', 'CLAUDE_CODE_PROXY_URL', 'CLAUDE_CODE_SANDBOXED', 'CLAUDE_CONFIG_DIR',
+      'CLAUDE_ENV_FILE', 'AWS_BEARER_TOKEN_BEDROCK', 'AWS_PROFILE', 'AWS_REGION', 'GOOGLE_APPLICATION_CREDENTIALS', 'CLOUD_ML_REGION',
+      'HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY', 'NODE_EXTRA_CA_CERTS', 'NODE_TLS_REJECT_UNAUTHORIZED',
+      'SSL_CERT_FILE', 'NODE_OPTIONS'
+    ];
+    const kept = { MAX_THINKING_TOKENS: '8000', BASH_DEFAULT_TIMEOUT_MS: '60000', CLAUDE_CODE_MAX_OUTPUT_TOKENS: '32000',
+      DISABLE_TELEMETRY: '1', MCP_TIMEOUT: '20000', FIXTURE: '1' };
+    const env = { ...kept, ...Object.fromEntries(replaced.map(name => [name, 'user-value'])) };
+    expect(claudeRuntimeSettings({ model: 'opus', env })).toEqual({ model: 'opus', env: kept });
+    expect(claudeRuntimeSettings({ env: { ANTHROPIC_API_KEY: 'user-value' } })).toEqual({});
+    expect(claudeRuntimeSettings({ env: ['ANTHROPIC_API_KEY'] })).toEqual({});
+  });
+
+  it('never shares Codex exec-policy rules, whose allow rules run commands outside the sandbox', async () => {
+    const { source, runtime } = await setup();
+    await mkdir(path.join(source, 'rules'));
+    await writeFile(path.join(source, 'rules', 'default.rules'), 'prefix_rule(pattern=["python3"], decision="allow")\n');
+    await symlink(path.join(source, 'rules'), path.join(runtime, 'rules'));
+    await prepareUserResources(runtime, source, 'chatgpt');
+    expect(await readdir(runtime)).not.toContain('rules');
+    expect(await readFile(path.join(source, 'rules', 'default.rules'), 'utf8')).toContain('allow');
+    await mkdir(path.join(runtime, 'rules'));
+    await writeFile(path.join(runtime, 'rules', 'default.rules'), 'prefix_rule(pattern=["git"])\n');
+    await prepareUserResources(runtime, source, 'chatgpt');
+    expect(await readdir(runtime)).not.toContain('rules');
+    const backups = path.join(runtime, '.powermove-resource-backups');
+    const backup = (await readdir(backups)).find(name => name.startsWith('rules-'))!;
+    expect(await readFile(path.join(backups, backup, 'rules', 'default.rules'), 'utf8')).toContain('git');
   });
 });
