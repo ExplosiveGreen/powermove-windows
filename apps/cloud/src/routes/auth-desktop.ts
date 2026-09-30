@@ -8,6 +8,7 @@ import { createAuth } from '../auth';
 import { rateAuth } from './session';
 import { constantTimeEqual } from '../constant-time';
 import { clientIp, enforce } from '../abuse';
+import { icons, page } from '../page';
 function decode(value: string): Uint8Array | null {
   try {
     if (!/^[A-Za-z0-9_-]+$/.test(value)) {
@@ -166,17 +167,18 @@ export const desktop = new Hono<Env>()
       const { state } = c.req.valid('query');
       const token = await mint(c, state);
       const link = `powermove://auth?state=${encodeURIComponent(state)}&token=${encodeURIComponent(token)}`;
-      c.header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
+      const nonce = crypto.randomUUID();
+      c.header('Content-Security-Policy', `default-src 'none'; style-src 'nonce-${nonce}'`);
       c.header('Content-Type', 'text/html; charset=utf-8');
       c.header('Cache-Control', 'no-store');
       c.header('Referrer-Policy', 'no-referrer');
-      return c.html(
-        `<!doctype html><html><head><meta charset="utf-8"><title>Return to Powermove</title><meta http-equiv="refresh" content="0;url=${
-          escapeHtml(link)
-        }"><style>body{font:16px system-ui;padding:3rem}</style></head><body><a href="${
-          escapeHtml(link)
-        }">Return to Powermove</a></body></html>`,
-      );
+      return c.html(page({
+        title: 'Signed in',
+        nonce,
+        head: `<meta http-equiv="refresh" content="0;url=${escapeHtml(link)}">`,
+        body: `<div class="badge" data-tone="success">${icons.check}</div><h1>You’re signed in</h1><p>Powermove should open on its own. If it doesn’t, open it below.</p><a class="button" href="${escapeHtml(link)}">Open Powermove</a>`,
+        foot: 'You can close this tab once Powermove opens.',
+      }));
     },
   )
   .post(

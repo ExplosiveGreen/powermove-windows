@@ -4,6 +4,7 @@ import type { Env } from './env';
 import { eq, and, gt } from 'drizzle-orm';
 import { verification } from './db/auth-schema';
 import { clientIp, enforce } from './abuse';
+import { icons, page } from './page';
 
 type Action = 'email_send' | 'first_publish';
 type Proof = { kind: 'challenge' | 'clearance'; action: Action; subject: string; expires: number; nonce: string };
@@ -68,13 +69,14 @@ export const human = new Hono<Env>()
     c.header('Cache-Control', 'no-store');
     c.header('Referrer-Policy', 'no-referrer');
     c.header('Content-Security-Policy', `default-src 'none'; script-src 'nonce-${nonce}' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; style-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`);
-    return c.html(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verify · Powermove</title><style nonce="${nonce}">body{font:15px system-ui;margin:32px;color:#222;background:#fff}h1{font-size:20px}p{line-height:1.5;color:#555}</style></head><body><h1>A quick check</h1><p id="status">Verifying your request…</p><div id="widget"></div><script nonce="${nonce}">
-const config=${config};
-function failed(){document.getElementById('status').textContent='Verification could not finish. Close this window and try again.';location.hash='error';}
+    return c.html(page({ title: 'Verify', nonce, body: `<div class="badge" id="badge">${icons.spinner}</div><h1 id="title">A quick check</h1><p id="status">Making sure you’re human. This only takes a moment.</p><div id="widget"></div><script nonce="${nonce}">
+const config=${config};const icon=${JSON.stringify(icons).replaceAll('<', '\\u003c')};
+function show(tone,title,text){const badge=document.getElementById('badge');badge.dataset.tone=tone;badge.innerHTML=icon[tone==='success'?'check':'alert'];document.getElementById('title').textContent=title;document.getElementById('status').textContent=text;document.getElementById('widget').hidden=true;}
+function failed(){show('danger','Verification didn’t finish','Head back to Powermove and try again.');location.hash='error';}
 window.startVerification=()=>turnstile.render('#widget',{sitekey:config.sitekey,action:config.action,cData:config.cdata,appearance:'interaction-only',
-'before-interactive-callback':()=>{location.hash='interaction';},'error-callback':()=>{failed();return true;},'expired-callback':failed,'timeout-callback':failed,
-callback:async token=>{try{const response=await fetch('/v1/human/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:config.ticket,token})});if(!response.ok)throw Error();document.getElementById('status').textContent='You’re verified. Return to Powermove to continue.';document.getElementById('widget').hidden=true;}catch{failed();}}});
-</script><script nonce="${nonce}" src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=startVerification&amp;render=explicit" async defer></script></body></html>`);
+'before-interactive-callback':()=>{location.hash='interaction';document.getElementById('status').textContent='Complete the check below to continue.';},'error-callback':()=>{failed();return true;},'expired-callback':failed,'timeout-callback':failed,
+callback:async token=>{try{const response=await fetch('/v1/human/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:config.ticket,token})});if(!response.ok)throw Error();show('success','You’re verified','Head back to Powermove to continue.');}catch{failed();}}});
+</script><script nonce="${nonce}" src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=startVerification&amp;render=explicit" async defer></script>`, foot: 'You can close this tab afterwards.' }));
   })
   .post('/verify', async c => {
     if (!enabled(c.env)) throw unavailable();

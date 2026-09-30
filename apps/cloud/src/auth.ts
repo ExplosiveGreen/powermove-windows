@@ -3,6 +3,7 @@ import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { bearer, emailOTP, genericOAuth, oneTimeToken, username } from 'better-auth/plugins';
 import { type Data, tables } from './db/client';
 import { HANDLE_RE, isReserved } from './handles';
+import { otpEmail } from './email';
 export function createAuth(data: Data, env: CloudflareBindings, trackOtpDelivery?: (delivery: Promise<boolean>) => void) {
   return betterAuth({
     database: drizzleAdapter(data.authDb(), { provider: 'pg', schema: tables }),
@@ -44,12 +45,8 @@ export function createAuth(data: Data, env: CloudflareBindings, trackOtpDelivery
             if (!env.EMAIL) {
               throw new Error('email delivery unavailable');
             }
-            const text = `Your Powermove sign-in code is ${otp}. It expires in 5 minutes. If you didn't ask for this, ignore it.`;
             try {
-              await env.EMAIL.send({
-                to: email, from: env.EMAIL_FROM, subject: 'Your Powermove sign-in code', text,
-                html: `<p>Your Powermove sign-in code is <strong>${otp}</strong>.</p><p>It expires in 5 minutes. If you didn't ask for this, ignore it.</p>`,
-              });
+              await env.EMAIL.send({ to: email, from: env.EMAIL_FROM, ...otpEmail(otp) });
             } catch (error) {
               console.error('email send failed', (error as { code?: string }).code ?? 'UNKNOWN');
               return false;
