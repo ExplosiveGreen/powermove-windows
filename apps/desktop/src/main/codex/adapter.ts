@@ -1,15 +1,11 @@
 import { execFile } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import type { CodexAccess, ReasoningEffort } from '../../shared/ipc';
 import { discoverCodexBinary } from './env';
 import { AGENT_TESTING_INSTRUCTIONS } from '../../shared/agent-testing';
 import type { NativeMcpServerConfig } from '../agent-tools/spec';
 
 import { userMcpArgv, type UserMcpServers } from '../agent-tools/user-mcp';
-import { AGENT_SHELL_NETWORK_HOSTS, AGENT_SHELL_NETWORK_INSTRUCTIONS } from '../agent-network';
+import { AGENT_SHELL_NETWORK_INSTRUCTIONS } from './instructions';
 
 export const ADAPTER_VERSION = '6';
 
@@ -32,38 +28,24 @@ export const REQUIRED_CODEX_FLAGS = [
 export const PROJECT_PERMISSION_PROFILE = 'powermove';
 
 /**
- * The sandbox is final: `never` stops the model from asking for an
- * unsandboxed command, and there is no approval reviewer to grant one. No
- * legacy `sandbox_mode` either, which would override a permission profile.
- * The profile extends Codex's workspace sandbox, denies credential reads,
- * and with shell network routes commands through Codex's network proxy,
- * which admits only the shared allowlist; the sandbox blocks direct sockets
- * and DNS. They follow `exec` because root-level approval and profile
- * overrides do not reach it.
- *
- * The workspace is marked untrusted: other agents can write it, and a trusted
- * project would load its `.codex` config, MCP servers, hooks and rules
- * outside the sandbox.
+ * `--approve-for-me` without its legacy `sandbox_mode="workspace-write"`,
+ * which would override a permission profile: a command the sandbox blocks
+ * may ask to run outside it, and Codex's automatic reviewer decides. The
+ * profile extends Codex's workspace sandbox and with shell network lets
+ * commands reach any host. They follow `exec` because root-level approval
+ * and profile overrides do not reach it; the legacy
+ * `sandbox_workspace_write.network_access` switch did not either.
  */
-export function projectSandboxArgv(options: { shellNetwork: boolean; deniedReads: readonly string[]; workspaceRoots: readonly string[] }): string[] {
+export function projectSandboxArgv(options: { shellNetwork: boolean }): string[] {
   const profile = `permissions.${PROJECT_PERMISSION_PROFILE}`;
-  const table = (entries: [string, string][]) => `{${entries.map(([key, value]) => `${JSON.stringify(key)}=${JSON.stringify(value)}`).join(',')}}`;
   const config = [
-    'approval_policy="never"',
+    'approvals_reviewer="auto_review"',
+    'approval_policy="on-request"',
     `default_permissions=${JSON.stringify(PROJECT_PERMISSION_PROFILE)}`,
     `${profile}.extends=":workspace"`
   ];
-  if (options.workspaceRoots.length) {
-    config.push(`projects={${[...new Set(options.workspaceRoots)].map(root => `${JSON.stringify(root)}={trust_level="untrusted"}`).join(',')}}`);
-  }
-  if (options.deniedReads.length) config.push(`${profile}.filesystem=${table(options.deniedReads.map(file => [file, 'deny']))}`);
-  if (options.shellNetwork) {
-    config.push(
-      'features.network_proxy=true',
-      `${profile}.network.enabled=true`,
-      `${profile}.network.domains=${table(AGENT_SHELL_NETWORK_HOSTS.map(host => [host, 'allow']))}`
-    );
-  }
+  // Direct sockets to any host: no network proxy, no domain list.
+  if (options.shellNetwork) config.push(`${profile}.network.enabled=true`);
   return config.flatMap(value => ['--config', value]);
 }
 
@@ -85,14 +67,10 @@ export interface AutonomousArgvOptions extends CommonArgvOptions {
   sessionId: string | null;
   instructions: string;
   nativeTools?: NativeMcpServerConfig;
-  /** Outbound network for sandboxed shell commands, limited to the shared
-   * allowlist. Only the Project access choice grants it; Edit project runs
-   * keep project authority without it. */
+  /** Outbound network to any host for sandboxed shell commands. Only the
+   * Project access choice grants it; Edit project runs keep project
+   * authority without it. */
   shellNetwork?: boolean;
-  /** Paths sandboxed shell commands may not read. */
-  deniedReads?: readonly string[];
-  /** The workspace as given and as its real path; Codex keys trust by the real one. */
-  workspaceRoots?: readonly string[];
 }
 
 function appendModelOptions(
@@ -117,7 +95,7 @@ function nativeMcpArgv(config?: NativeMcpServerConfig): string[] {
     '--config', `mcp_servers.powermove.command=${JSON.stringify(config.command)}`,
     '--config', `mcp_servers.powermove.args=${JSON.stringify(config.args)}`,
     '--config', 'mcp_servers.powermove.required=true',
-    // `never` would otherwise refuse the run-scoped tools, which carry no annotations.
+    // Run-scoped tools carry no annotations; approve them without a review.
     '--config', 'mcp_servers.powermove.default_tools_approval_mode="approve"',
     '--config', 'mcp_servers.powermove.startup_timeout_sec=30',
     '--config', 'mcp_servers.powermove.tool_timeout_sec=120'
@@ -161,9 +139,7 @@ export function buildAutonomousArgv(options: AutonomousArgvOptions): string[] {
   if (sessionId !== null) argv.push('resume');
   argv.push(
     '--skip-git-repo-check',
-    ...sandboxed ? projectSandboxArgv({
-      shellNetwork: options.shellNetwork === true, deniedReads: options.deniedReads ?? [], workspaceRoots: options.workspaceRoots ?? []
-    }) : [],
+    ...sandboxed ? projectSandboxArgv({ shellNetwork: options.shellNetwork === true }) : [],
     ...userMcpArgv(options.externalMcpServers),
     ...nativeMcpArgv(options.nativeTools),
     '--output-schema',
@@ -188,53 +164,13 @@ export interface AdapterCapabilities {
   missing: string[];
 }
 
-function execFileText(file: string, args: readonly string[], env?: NodeJS.ProcessEnv, timeout = 5_000): Promise<string> {
+function execFileText(file: string, args: readonly string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(file, [...args], { encoding: 'utf8', timeout, maxBuffer: 2 * 1024 * 1024, env }, (error, stdout) => {
+    execFile(file, [...args], { encoding: 'utf8', timeout: 5_000, maxBuffer: 2 * 1024 * 1024 }, (error, stdout) => {
       if (error) reject(error);
       else resolve(stdout);
     });
   });
-}
-
-export const PERMISSION_PROFILES_UNSUPPORTED =
-  'This Codex runtime cannot enforce the Project sandbox, so Powermove will not run it with Project access. Use the built-in runtime or update Codex, then retry.';
-
-/** A Codex that does not know permission profiles ignores them and runs its
- * default sandbox instead, so the profile a Project run uses must first be
- * seen denying a read. */
-async function probePermissionProfiles(binary: string, env: NodeJS.ProcessEnv): Promise<void> {
-  const directory = await realpath(await mkdtemp(path.join(tmpdir(), 'powermove-codex-profile-')));
-  try {
-    const secret = path.join(directory, 'secret');
-    const workspace = path.join(directory, 'workspace');
-    const [token, marker] = [randomUUID(), randomUUID()];
-    await writeFile(secret, token, { mode: 0o600 });
-    await mkdir(workspace);
-    const config = projectSandboxArgv({ shellNetwork: false, deniedReads: [secret], workspaceRoots: [workspace] });
-    const output = await execFileText(binary, ['sandbox', ...config, '--permission-profile', PROJECT_PERMISSION_PROFILE,
-      '--cd', workspace, '--', '/bin/sh', '-c', 'cat "$1" 2>/dev/null; echo "$2"', 'sh', secret, marker], env, 15_000)
-      .catch(() => '');
-    if (output.includes(token) || !output.includes(marker)) {
-      throw new Error(PERMISSION_PROFILES_UNSUPPORTED);
-    }
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-}
-
-const verifiedProfiles = new Map<string, Promise<void>>();
-/** Checked once per binary version; a failed check is retried next run. */
-export async function verifyPermissionProfiles(binary: string, env: NodeJS.ProcessEnv): Promise<void> {
-  const { mtimeMs, size } = await stat(binary);
-  const key = `${binary}\0${mtimeMs}\0${size}`;
-  let check = verifiedProfiles.get(key);
-  if (!check) {
-    check = probePermissionProfiles(binary, env);
-    verifiedProfiles.set(key, check);
-    check.catch(() => verifiedProfiles.delete(key));
-  }
-  return check;
 }
 
 export async function capabilities(binary?: string | null): Promise<AdapterCapabilities> {

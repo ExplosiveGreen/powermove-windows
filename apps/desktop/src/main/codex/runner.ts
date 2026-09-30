@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -14,7 +14,7 @@ import {
 } from '../../shared/ipc';
 import { EXTENSION_ID } from '../../shared/extensions';
 import { isArrayOf, isBytes, isOneOf, isRecord, isString } from '../../shared/guards';
-import { buildAutonomousArgv, buildEditorArgv, verifyPermissionProfiles } from './adapter';
+import { buildAutonomousArgv, buildEditorArgv } from './adapter';
 import { publishExtensionChanges, withStageSnapshot } from './change-history';
 import { AgentResultValidationError, repairAgentResult } from './result-repair';
 import { validateStagedExtensions } from './validate-staged-extensions';
@@ -25,7 +25,6 @@ import { CodexEventParser } from './events';
 import { agentInstructions, agentResultSchema } from './instructions';
 import type { NativeMcpServerConfig } from '../agent-tools/spec';
 import { loadUserMcpServers, type UserMcpServers } from '../agent-tools/user-mcp';
-import { agentCredentialPaths } from '../agent-network';
 import {
   isolatedCodexEnvironment,
   prepareIsolatedCodexHome
@@ -427,9 +426,6 @@ export class CodexRunner {
         return cancelledResult(state);
       }
 
-      const deniedReads = authority === 'project' ? await agentCredentialPaths(options.userData, { codexHome: 'credentials' }) : [];
-      const workspaceRoots = [layout.root, await realpath(layout.root)];
-      if (authority === 'project') await verifyPermissionProfiles(binary, isolatedCodexEnvironment(codexHome));
       let resumeId = await readSession(layout.sessionPath);
       let attempt: AttemptResult | null = null;
       const executeAutonomous = async (prompt: string, sessionId: string | null) => {
@@ -452,8 +448,6 @@ export class CodexRunner {
           reasoningEffort: req.reasoningEffort,
           access: authority,
           shellNetwork: req.access === 'project',
-          deniedReads,
-          workspaceRoots,
           extensionsDir: layout.extensionsDir,
           sessionId,
           nativeTools: options.nativeTools,

@@ -13,8 +13,7 @@ import { validateStagedExtensions } from './codex/validate-staged-extensions';
 import { loginShellPath } from './login-shell-path';
 import { killStrays, ProcessFamily } from './process-family';
 import { agentResultSchema } from './codex/instructions';
-import { agentWorkspaceUserData, type AgentWorkspace } from './codex/workspace';
-import { agentCredentialPaths, agentNetworkProxy, agentProxyEnvironment, agentSeatbeltRules, AGENT_SHELL_NETWORK_HOSTS } from './agent-network';
+import type { AgentWorkspace } from './codex/workspace';
 import type { PowermoveAgentToolSpec } from './agent-tools/spec';
 
 const object = (properties: Record<string, unknown>, required: string[]) => ({ type: 'object', additionalProperties: false, properties, required });
@@ -22,12 +21,11 @@ const COMMAND_TIMEOUT_MS = 600_000;
 const MAX_BACKGROUND_JOBS = 4;
 const JOB_OUTPUT_CHARS = 20_000;
 const MAX_READ_BYTES = 8 * 1024 * 1024;
-const LIST_BYTES = 16 * 1024 * 1024;
 export const COMPATIBLE_WORKSPACE_TOOLS: readonly PowermoveAgentToolSpec[] = [
   { name: 'list_files', description: 'List a workspace directory. Paths may be absolute or relative to the workspace.', inputSchema: object({ path: { type: 'string' } }, ['path']) },
   { name: 'read_file', description: 'Read a UTF-8 file, or return an image for visual inspection. Use offset/limit to page large text files. Read shipped API types and samples before implementing extensions.', inputSchema: object({ path: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 100000 } }, ['path']) },
   { name: 'write_file', description: 'Create or replace a UTF-8 file. Creates parent directories. Write extensions only in the supplied staging directory and deliverables in the run artifact directory. Read existing files before replacing them.', inputSchema: object({ path: { type: 'string' }, text: { type: 'string', maxLength: 1000000 } }, ['path', 'text']) },
-  { name: 'run_command', description: `Run a shell command in the project workspace. Use for searching, editing, scripts, tests and downloads. Project access restricts filesystem writes to this workspace and downloads to HTTPS from ${AGENT_SHELL_NETWORK_HOSTS.join(', ')}; Computer access allows broader operations. Commands time out after 30 seconds unless timeoutMs allows up to 600 seconds. For longer work such as renders or installs, set background: true and follow the job with command_status. Processes a command leaves running stop when it exits; background jobs stop when complete_task runs or the run ends. Output is bounded. Never repeat a timed-out mutation without inspecting its result.`, inputSchema: object({ command: { type: 'string', maxLength: 100000 }, timeoutMs: { type: 'integer', minimum: 1, maximum: COMMAND_TIMEOUT_MS }, background: { type: 'boolean' } }, ['command']) },
+  { name: 'run_command', description: 'Run a shell command in the project workspace. Use for searching, editing, scripts, tests, downloads and web research (curl). Commands have full internet access. Project access restricts filesystem writes to this workspace; Computer access allows broader operations. Commands time out after 30 seconds unless timeoutMs allows up to 600 seconds. For longer work such as renders or installs, set background: true and follow the job with command_status. Processes a command leaves running stop when it exits; background jobs stop when complete_task runs or the run ends. Output is bounded. Never repeat a timed-out mutation without inspecting its result.', inputSchema: object({ command: { type: 'string', maxLength: 100000 }, timeoutMs: { type: 'integer', minimum: 1, maximum: COMMAND_TIMEOUT_MS }, background: { type: 'boolean' } }, ['command']) },
   { name: 'command_status', description: 'Check a background job from run_command: its state, exit code and recent output. Set waitMs to wait up to 120 seconds for it to finish, or stop: true to stop it and everything it started.', inputSchema: object({ jobId: { type: 'string' }, waitMs: { type: 'integer', minimum: 0, maximum: 120000 }, stop: { type: 'boolean' } }, ['jobId']) },
   { name: 'compile_extension', description: 'Compile a staged extension with Powermove’s real compiler. Returns compilation errors for repair. This does not activate it; after completing this run, Powermove loads it and continues the task for live verification.', inputSchema: object({ id: { type: 'string', pattern: EXTENSION_ID.source } }, ['id']) },
   { name: 'complete_task', description: 'Finish the run with its summary, typed project commands, artifacts and all staged extension changes. Validates and publishes the staged extensions. Return commands: [] for edits already applied through live tools. Powermove loads extensions before applying dependent commands and continues with live verification. If this tool fails, repair the reported problem and call it again.', inputSchema: agentResultSchema() }
@@ -42,8 +40,8 @@ export class CompatibleWorkspace {
 
   constructor(readonly layout: AgentWorkspace, readonly access: 'project' | 'computer', readonly context: 'app' | 'project' = 'project') {}
 
-  private async start(command: string | readonly string[], timeoutMs: number, signal: AbortSignal,
-    options: { keepTail?: boolean; input?: string; stdoutBytes?: number } = {}): Promise<WorkspaceCommand> {
+  private async start(command: string, timeoutMs: number, signal: AbortSignal,
+    options: { keepTail?: boolean; input?: string } = {}): Promise<WorkspaceCommand> {
     const started = await startWorkspaceCommand(this.layout.root, this.access, command, { timeoutMs, signal, ...options, runMark: this.mark });
     this.commands.add(started);
     void started.done.finally(() => this.commands.delete(started)).catch(() => undefined);
@@ -88,40 +86,16 @@ export class CompatibleWorkspace {
   async call(name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<AgentToolContent[]> {
     signal.throwIfAborted();
     const text = (value: unknown): AgentToolContent[] => [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }];
-    // Project reads and listings run in the command sandbox too: a folder
-    // swapped for a link after resolve() still cannot reach credentials.
-    const sandboxed = this.access === 'project' && process.platform === 'darwin';
     if (name === 'list_files') {
       const directory = await this.resolve(args.path);
-      let entries: { name: string; directory: boolean }[];
-      if (sandboxed) {
-        // NUL-separated, so any name survives. -H follows only a linked folder asked for;
-        // entries' -type d does not follow links, like readdir's Dirent.
-        const listed = await this.readInSandbox(directory, LIST_BYTES, signal, 'if [ -e "$1" ] && [ ! -d "$1" ]; then exit 3; fi; '
-          + `exec /usr/bin/find -H "$1" -mindepth 1 -maxdepth 1 \\( -type d -exec /usr/bin/printf 'd%s\\0' {} + \\) -o -exec /usr/bin/printf 'f%s\\0' {} +`);
-        if (listed.exitCode === 3) throw new Error(`Not a directory: ${directory}`);
-        const records = listed.stdout.toString('utf8').split('\0');
-        // The last record is empty, or cut short by the byte limit.
-        entries = records.slice(0, -1).map(record => ({ name: record.slice(record.lastIndexOf('/') + 1), directory: record[0] === 'd' }));
-      } else {
-        entries = (await readdir(directory, { withFileTypes: true })).map(entry => ({ name: entry.name, directory: entry.isDirectory() }));
-      }
+      const entries = (await readdir(directory, { withFileTypes: true })).map(entry => ({ name: entry.name, directory: entry.isDirectory() }));
       return text({ entries: entries.slice(0, 1000), total: entries.length });
     }
     if (name === 'read_file') {
       const file = await this.resolve(args.path);
-      const tooLarge = () => new Error('Read a regular file no larger than 8 MB; use run_command to inspect larger files.');
-      let data: Buffer;
-      if (sandboxed) {
-        const read = await this.readInSandbox(file, MAX_READ_BYTES + 1, signal,
-          `if [ -e "$1" ] && [ ! -f "$1" ]; then exit 3; fi; exec /usr/bin/head -c ${MAX_READ_BYTES + 1} -- "$1"`);
-        if (read.exitCode === 3 || read.stdout.byteLength > MAX_READ_BYTES) throw tooLarge();
-        data = read.stdout;
-      } else {
-        const info = await stat(file);
-        if (!info.isFile() || info.size > MAX_READ_BYTES) throw tooLarge();
-        data = await readFile(file);
-      }
+      const info = await stat(file);
+      if (!info.isFile() || info.size > MAX_READ_BYTES) throw new Error('Read a regular file no larger than 8 MB; use run_command to inspect larger files.');
+      const data = await readFile(file);
       const mime = mimeTypeForPath(file);
       if (mime === 'image/png' || mime === 'image/jpeg') {
         return [{ type: 'image', mimeType: mime, data: new Uint8Array(data) }];
@@ -177,13 +151,6 @@ export class CompatibleWorkspace {
     }
     if (name === 'compile_extension') return text(await this.compile(args.id));
     throw new Error(`Unknown workspace tool: ${name}`);
-  }
-
-  /** Run `script` in the Project sandbox with `target` as $1; exit 3 is the caller's to report. */
-  private async readInSandbox(target: string, bytes: number, signal: AbortSignal, script: string) {
-    const result = await settleCommand(await this.start(['/bin/sh', '-c', script, 'sh', target], 30000, signal, { stdoutBytes: bytes }), signal);
-    if (result.exitCode !== 0 && result.exitCode !== 3) throw new Error(`Could not read ${target}: ${result.output.trim()}`);
-    return { exitCode: result.exitCode, stdout: result.stdout ?? Buffer.alloc(0) };
   }
 
   private async compile(id: unknown) {
@@ -320,8 +287,7 @@ async function commandEnvironment(root: string, access: 'project' | 'computer'):
   return env;
 }
 
-/** `stdout` is the raw standard output, kept apart from `output` when `stdoutBytes` is set. */
-export type WorkspaceCommandResult = { output: string; exitCode: number | null; truncated: boolean; stdout?: Buffer };
+export type WorkspaceCommandResult = { output: string; exitCode: number | null; truncated: boolean };
 type CommandEnding = 'timeout' | 'abort' | 'stop';
 
 /** A started command. `done` settles once it and everything it started are gone. */
@@ -335,24 +301,19 @@ export interface WorkspaceCommand {
 /** A mach service name no one registers; a sandbox that denies it marks its processes. */
 const sandboxMark = () => `com.powermove.command.${randomUUID()}`;
 
-/** A string runs in zsh; an argv array runs as is, without shell startup files. */
-export async function startWorkspaceCommand(root: string, access: 'project' | 'computer', command: string | readonly string[],
-  options: { timeoutMs: number; signal: AbortSignal; keepTail?: boolean; input?: string; runMark?: string; stdoutBytes?: number }): Promise<WorkspaceCommand> {
+export async function startWorkspaceCommand(root: string, access: 'project' | 'computer', command: string,
+  options: { timeoutMs: number; signal: AbortSignal; keepTail?: boolean; input?: string; runMark?: string }): Promise<WorkspaceCommand> {
   const { timeoutMs, signal } = options;
   signal.throwIfAborted();
   const real = await realpath(root);
   const env = await commandEnvironment(real, access);
-  // Project access downloads only from the shared allowlist, through the
-  // loopback proxy, and cannot read credential material.
-  const proxy = access === 'project' ? await agentNetworkProxy() : null;
-  if (proxy) Object.assign(env, agentProxyEnvironment(proxy.port));
-  const agentRules = proxy ? agentSeatbeltRules(proxy.port,
-    await agentCredentialPaths(agentWorkspaceUserData(real), { codexHome: 'all' })) : '';
   // Its own mark finds what this command started, even processes that left
   // its group and folder; the run's mark finds them at the run end.
   const mark = sandboxMark();
   const marks = [mark, ...(options.runMark ? [options.runMark] : [])];
-  const profile = `(version 1)(allow default)${agentRules}(deny appleevent-send)`
+  // Project access keeps unrestricted outbound network for research,
+  // downloads and dev servers; only the filesystem is confined.
+  const profile = `(version 1)(allow default)(allow network-outbound)(deny appleevent-send)`
     + `(deny mach-lookup ${marks.map(name => `(global-name ${JSON.stringify(name)})`).join(' ')})`
     + `(deny file-write*)(allow file-write* (subpath ${JSON.stringify(await realpath(root))}) (literal "/dev/null") (literal "/dev/tty")`
     // Inherited stdio only; a broad /dev subpath would expose devices.
@@ -361,7 +322,7 @@ export async function startWorkspaceCommand(root: string, access: 'project' | 'c
   const startedAt = Date.now();
   // The command creates its own scratch folder, so the sandbox, not main,
   // decides where a planted link may lead.
-  const shell = typeof command === 'string' ? ['/bin/sh', '-c', 'mkdir -p -- "$TMPDIR" 2>/dev/null; exec /bin/zsh -c "$1"', 'zsh', command] : [...command];
+  const shell = ['/bin/sh', '-c', 'mkdir -p -- "$TMPDIR" 2>/dev/null; exec /bin/zsh -c "$1"', 'zsh', command];
   const child = spawn(access === 'project' ? '/usr/bin/sandbox-exec' : shell[0]!,
     access === 'project' ? ['-p', profile, ...shell] : shell.slice(1),
     { cwd: root, env, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -392,15 +353,7 @@ export async function startWorkspaceCommand(root: string, access: 'project' | 'c
     truncated ||= output.length + next.length > 100000;
     output += next.slice(0, Math.max(0, 100000 - output.length));
   };
-  // Raw stdout, for file contents; bytes past the limit are drained and dropped.
-  const stdout: Buffer[] = [];
-  let stdoutLength = 0;
-  const capture = (chunk: Buffer) => {
-    const room = options.stdoutBytes! - stdoutLength;
-    truncated ||= chunk.byteLength > room;
-    if (room > 0) { stdout.push(chunk.subarray(0, room)); stdoutLength += Math.min(room, chunk.byteLength); }
-  };
-  child.stdout.on('data', options.stdoutBytes === undefined ? append : capture); child.stderr.on('data', append);
+  child.stdout.on('data', append); child.stderr.on('data', append);
   const done = new Promise<WorkspaceCommandResult & { ending: CommandEnding | null }>((resolve, reject) => {
     const cleanup = () => { clearTimeout(timer); signal.removeEventListener('abort', onAbort); running = false; };
     child.on('error', error => { cleanup(); void sweep(); reject(error); });
@@ -410,8 +363,7 @@ export async function startWorkspaceCommand(root: string, access: 'project' | 'c
       exited = true;
       void sweep().finally(() => setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); }, 250).unref());
     });
-    child.on('close', code => { cleanup(); exitCode = code; resolve({ output, exitCode: code, truncated, ending,
-      ...(options.stdoutBytes === undefined ? {} : { stdout: Buffer.concat(stdout) }) }); });
+    child.on('close', code => { cleanup(); exitCode = code; resolve({ output, exitCode: code, truncated, ending }); });
   });
   done.catch(() => undefined);
   return {

@@ -3,16 +3,13 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { AGENT_TESTING_INSTRUCTIONS } from '../../shared/agent-testing';
-import { AGENT_SHELL_NETWORK_HOSTS } from '../agent-network';
 import {
   ADAPTER_VERSION,
   REQUIRED_CODEX_FLAGS,
   buildAutonomousArgv,
-  PERMISSION_PROFILES_UNSUPPORTED,
   PROJECT_PERMISSION_PROFILE,
   buildEditorArgv,
-  capabilities,
-  verifyPermissionProfiles
+  capabilities
 } from './adapter';
 
 describe('Codex CLI adapter', () => {
@@ -69,8 +66,6 @@ describe('Codex CLI adapter', () => {
         reasoningEffort: null,
         access: 'project',
         shellNetwork: true,
-        deniedReads: ['/Users/me/.ssh', '/user-data/codex-runtime/auth.json'],
-        workspaceRoots: ['/workspace', '/workspace'],
         extensionsDir: '/user-data/extensions',
         sessionId: null,
         instructions: 'AGENT INSTRUCTIONS',
@@ -81,14 +76,11 @@ describe('Codex CLI adapter', () => {
       '/user-data/extensions',
       'exec',
       '--skip-git-repo-check',
-      '--config', 'approval_policy="never"',
+      '--config', 'approvals_reviewer="auto_review"',
+      '--config', 'approval_policy="on-request"',
       '--config', 'default_permissions="powermove"',
       '--config', 'permissions.powermove.extends=":workspace"',
-      '--config', 'projects={"/workspace"={trust_level="untrusted"}}',
-      '--config', 'permissions.powermove.filesystem={"/Users/me/.ssh"="deny","/user-data/codex-runtime/auth.json"="deny"}',
-      '--config', 'features.network_proxy=true',
       '--config', 'permissions.powermove.network.enabled=true',
-      '--config', `permissions.powermove.network.domains={${AGENT_SHELL_NETWORK_HOSTS.map(host => `"${host}"="allow"`).join(',')}}`,
       '--output-schema',
       '/workspace/.powermove/result-schema.json',
       '--output-last-message',
@@ -97,40 +89,38 @@ describe('Codex CLI adapter', () => {
       '--image',
       '/workspace/inputs/references/reference-0.png',
       '--',
-      `AGENT INSTRUCTIONS\n\nSHELL NETWORK\nShell commands can download only over HTTPS from ${AGENT_SHELL_NETWORK_HOSTS.join(', ')}; other hosts are refused.\n\nUSER REQUEST\nMake a launch trailer`
+      'AGENT INSTRUCTIONS\n\nSHELL NETWORK\nShell commands have full internet access.\n\nUSER REQUEST\nMake a launch trailer'
     ]);
   });
 
-  it('gives shell commands allowlisted network only for the Project access choice', () => {
+  it('gives shell commands full network only for the Project access choice, fresh and resumed', () => {
     const common = {
       schemaPath: '/workspace/schema.json', outputPath: '/workspace/result.json', prompt: 'Find useful footage',
       imagePaths: [], model: null, reasoningEffort: null, extensionsDir: '/user-data/extensions',
-      instructions: 'AGENT INSTRUCTIONS', deniedReads: ['/Users/me/.ssh']
+      instructions: 'AGENT INSTRUCTIONS'
     };
     const configs = (argv: string[]) => argv.flatMap((arg, index) => argv[index - 1] === '--config' ? [arg] : []);
     for (const sessionId of [null, 'thread-123']) {
       const argv = buildAutonomousArgv({ ...common, access: 'project', shellNetwork: true, sessionId });
       // exec options, so they apply to `exec resume` too, and never a legacy sandbox mode.
-      const proxy = argv.indexOf('features.network_proxy=true');
-      expect(proxy).toBeGreaterThan(argv.indexOf(sessionId ? 'resume' : 'exec'));
-      expect(argv[proxy - 1]).toBe('--config');
+      const network = argv.indexOf('permissions.powermove.network.enabled=true');
+      expect(network).toBeGreaterThan(argv.indexOf(sessionId ? 'resume' : 'exec'));
+      expect(argv[network - 1]).toBe('--config');
       expect(configs(argv)).toEqual(expect.arrayContaining([
-        `default_permissions="${PROJECT_PERMISSION_PROFILE}"`, 'permissions.powermove.network.enabled=true',
-        'permissions.powermove.filesystem={"/Users/me/.ssh"="deny"}'
+        `default_permissions="${PROJECT_PERMISSION_PROFILE}"`, 'permissions.powermove.extends=":workspace"'
       ]));
-      const domains = configs(argv).find(value => value.startsWith('permissions.powermove.network.domains='))!;
-      expect(domains).toContain('"images.pexels.com"="allow"');
-      expect(domains).not.toMatch(/"\*"|"github\.com"|registry\.npmjs\.org/);
+      // No proxy and no domain list, so every host is reachable.
+      expect(argv.join(' ')).not.toMatch(/network_proxy|network\.domains/);
+      expect(argv.at(-1)).toContain('SHELL NETWORK\nShell commands have full internet access.');
       expect(argv).toContain('--search');
       expect(argv).not.toContain('--sandbox');
       expect(argv).not.toContain('--approve-for-me');
       expect(argv).not.toContain('--dangerously-bypass-approvals-and-sandbox');
       expect(argv.join(' ')).not.toMatch(/writable_roots|danger-full-access|sandbox_mode|network_access/);
     }
-    // Edit project collapses to project authority but keeps the shell offline and credentials unreadable.
+    // Edit project collapses to project authority but keeps the shell offline.
     const offline = buildAutonomousArgv({ ...common, access: 'project', sessionId: null });
-    expect(configs(offline)).toEqual(expect.arrayContaining([`default_permissions="${PROJECT_PERMISSION_PROFILE}"`,
-      'permissions.powermove.filesystem={"/Users/me/.ssh"="deny"}']));
+    expect(configs(offline)).toEqual(expect.arrayContaining([`default_permissions="${PROJECT_PERMISSION_PROFILE}"`]));
     expect(offline.join(' ')).not.toMatch(/network_proxy|network\.enabled|SHELL NETWORK/);
     const computer = buildAutonomousArgv({ ...common, access: 'computer', shellNetwork: true, sessionId: null });
     expect(computer.join(' ')).not.toMatch(/network_proxy|default_permissions/);
@@ -138,18 +128,14 @@ describe('Codex CLI adapter', () => {
     expect(buildEditorArgv(common)).toEqual(expect.arrayContaining(['--sandbox', 'read-only']));
   });
 
-  it('marks the shared workspace untrusted so its .codex config never loads', () => {
-    const common = {
-      schemaPath: '/workspace/schema.json', outputPath: '/workspace/result.json', prompt: 'Build',
-      imagePaths: [], model: null, reasoningEffort: null, extensionsDir: '/user-data/extensions',
-      instructions: 'AGENT INSTRUCTIONS', workspaceRoots: ['/var/ws', '/private/var/ws']
-    };
+  it('leaves workspace trust to Codex, so project config loads normally', () => {
     for (const sessionId of [null, 'thread-123']) {
-      const argv = buildAutonomousArgv({ ...common, access: 'project', sessionId });
-      const trust = argv.indexOf('projects={"/var/ws"={trust_level="untrusted"},"/private/var/ws"={trust_level="untrusted"}}');
-      expect(argv[trust - 1]).toBe('--config');
-      // An exec option, so `exec resume` applies it too.
-      expect(trust).toBeGreaterThan(argv.indexOf(sessionId ? 'resume' : 'exec'));
+      const argv = buildAutonomousArgv({
+        schemaPath: '/workspace/schema.json', outputPath: '/workspace/result.json', prompt: 'Build',
+        imagePaths: [], model: null, reasoningEffort: null, extensionsDir: '/user-data/extensions',
+        instructions: 'AGENT INSTRUCTIONS', access: 'project', sessionId
+      });
+      expect(argv.join(' ')).not.toMatch(/projects=|trust_level/);
     }
   });
 
@@ -190,7 +176,7 @@ describe('Codex CLI adapter', () => {
     ]);
   });
 
-  it('never lets a sandboxed run ask for an unsandboxed command, and keeps Powermove tools approved', () => {
+  it('lets a sandboxed run ask the automatic reviewer for an unsandboxed command, and keeps Powermove tools approved', () => {
     const common = {
       schemaPath: '/workspace/schema.json', outputPath: '/workspace/result.json', prompt: 'Build',
       imagePaths: [], model: null, reasoningEffort: null, extensionsDir: '/user-data/extensions', instructions: 'AGENT INSTRUCTIONS',
@@ -198,8 +184,12 @@ describe('Codex CLI adapter', () => {
     };
     for (const sessionId of [null, 'thread-123']) {
       const argv = buildAutonomousArgv({ ...common, access: 'project', shellNetwork: true, sessionId });
-      expect(argv).toContain('approval_policy="never"');
-      expect(argv.join(' ')).not.toMatch(/on-request|approvals_reviewer|auto_review/);
+      const reviewer = argv.indexOf('approvals_reviewer="auto_review"');
+      // exec options, so `exec resume` gets them too.
+      expect(reviewer).toBeGreaterThan(argv.indexOf(sessionId ? 'resume' : 'exec'));
+      expect(argv[argv.indexOf('approval_policy="on-request"') - 1]).toBe('--config');
+      expect(argv).not.toContain('approval_policy="never"');
+      expect(argv).not.toContain('--approve-for-me');
       expect(argv).toContain('mcp_servers.powermove.default_tools_approval_mode="approve"');
     }
   });
@@ -218,23 +208,6 @@ describe('Codex CLI adapter', () => {
     for (const sessionId of ['--dangerously-bypass-approvals-and-sandbox', '-c', 'a b', '../thread']) {
       expect(() => buildAutonomousArgv({ ...common, sessionId }), sessionId).toThrow('Invalid Codex session id.');
     }
-  });
-
-  it('runs Project access only on a Codex that is seen enforcing its permission profile', async () => {
-    const directory = await mkdtemp(path.join(tmpdir(), 'powermove-profile-'));
-    const script = async (name: string, body: string) => {
-      const file = path.join(directory, name);
-      await writeFile(file, `#!/bin/sh\n${body}\n`, 'utf8');
-      await chmod(file, 0o755);
-      return file;
-    };
-    // Runs the probe command unsandboxed, as a Codex that ignores the profile would.
-    const leaky = await script('leaky', 'while [ "$1" != "--" ]; do shift; done; shift; exec "$@"');
-    const unsupported = await script('unsupported', 'echo "error: unrecognized subcommand" >&2; exit 2');
-    const enforcing = await script('enforcing', 'for argument in "$@"; do last="$argument"; done; echo "$last"');
-    await expect(verifyPermissionProfiles(leaky, process.env)).rejects.toThrow(PERMISSION_PROFILES_UNSUPPORTED);
-    await expect(verifyPermissionProfiles(unsupported, process.env)).rejects.toThrow(PERMISSION_PROFILES_UNSUPPORTED);
-    await expect(verifyPermissionProfiles(enforcing, process.env)).resolves.toBeUndefined();
   });
 
   it('allows user resources instead of suppressing integrations, rules and skills', () => {

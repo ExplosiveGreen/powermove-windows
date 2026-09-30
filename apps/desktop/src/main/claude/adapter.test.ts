@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   buildClaudeArgv,
   CLAUDE_EDITOR_SANDBOX_SETTINGS,
-  CLAUDE_PROJECT_NETWORK_HOSTS,
   CLAUDE_PROJECT_SANDBOX_SETTINGS
 } from './adapter';
 
@@ -63,43 +62,36 @@ describe('Claude CLI adapter', () => {
     });
   });
 
-  it.each(['editor', 'project', 'computer'] as const)('loads only user settings in %s mode, never the shared workspace', access => {
+  it.each(['editor', 'project', 'computer'] as const)('loads project settings from the workspace in %s mode', access => {
     const argv = buildClaudeArgv({
       schema, prompt: 'Build', imagePaths: [], model: null, reasoningEffort: null, sessionId: null, access, instructions: 'Build.'
     });
-    // A workspace .claude/settings.json hook, .mcp.json server, agent or skill
-    // would otherwise run outside the sandbox on the next Claude run.
-    expect(argv[argv.indexOf('--setting-sources') + 1]).toBe('user');
-    expect(argv.indexOf('--setting-sources')).toBeLessThan(argv.indexOf('--system-prompt'));
+    // Claude's default sources: user, project and local settings all load.
+    expect(argv).not.toContain('--setting-sources');
   });
 
-  it('lets project Bash reach only read-only media and package CDNs', () => {
+  it('lets project Bash reach any host while its writes stay in the sandbox', () => {
     const argv = buildClaudeArgv({
       schema, prompt: 'Find useful footage', imagePaths: [], model: null, reasoningEffort: null,
       sessionId: null, access: 'project', instructions: 'Work inside Powermove.'
     });
     const settings = JSON.parse(argv[argv.indexOf('--settings') + 1]!);
+    // A bare `*` matches every host; no domain allowlist and no strict mode.
     expect(settings).toEqual({
       sandbox: {
         enabled: true,
         autoAllowBashIfSandboxed: true,
         allowUnsandboxedCommands: false,
         failIfUnavailable: true,
-        network: { allowedDomains: [...CLAUDE_PROJECT_NETWORK_HOSTS], strictAllowlist: true }
+        network: { allowedDomains: ['*'], allowLocalBinding: true }
       }
     });
-    expect(CLAUDE_PROJECT_NETWORK_HOSTS).toEqual(expect.arrayContaining([
-      'videos.pexels.com', 'images.pexels.com', 'cdn.pixabay.com', 'upload.wikimedia.org'
-    ]));
-    // Hosts that accept authenticated uploads would be exfiltration channels.
-    for (const host of ['*', 'github.com', 'api.github.com', 'uploads.github.com', 'registry.npmjs.org', 'pypi.org', 'archive.org']) {
-      expect(CLAUDE_PROJECT_NETWORK_HOSTS).not.toContain(host);
-    }
-    for (const host of CLAUDE_PROJECT_NETWORK_HOSTS) expect(host).toMatch(/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/);
+    expect(settings.sandbox.network.strictAllowlist).toBeUndefined();
     const allowed = argv[argv.indexOf('--allowedTools') + 1]!.split(',');
     expect(allowed).toEqual(expect.arrayContaining(['Bash', 'WebSearch', 'WebFetch']));
-    expect(argv[argv.indexOf('--system-prompt') + 1]).toContain('Sandboxed Bash can download only from');
-    expect(argv[argv.indexOf('--system-prompt') + 1]).toContain('videos.pexels.com');
+    const prompt = argv[argv.indexOf('--system-prompt') + 1]!;
+    expect(prompt).toContain('Shell commands have full internet access.');
+    expect(prompt).not.toMatch(/download only|pexels/);
   });
 
   it('keeps editor runs without shell network', () => {
@@ -109,7 +101,7 @@ describe('Claude CLI adapter', () => {
     });
     expect(argv[argv.indexOf('--settings') + 1]).toBe(CLAUDE_EDITOR_SANDBOX_SETTINGS);
     expect(JSON.parse(CLAUDE_EDITOR_SANDBOX_SETTINGS).sandbox.network).toBeUndefined();
-    expect(argv[argv.indexOf('--system-prompt') + 1]).not.toContain('Sandboxed Bash');
+    expect(argv[argv.indexOf('--system-prompt') + 1]).not.toContain('SHELL NETWORK');
     expect(argv[argv.indexOf('--allowedTools') + 1]!.split(',')).not.toContain('Bash');
   });
 
@@ -133,24 +125,14 @@ describe('Claude CLI adapter', () => {
     expect(JSON.parse(project[project.indexOf('--settings') + 1]!).sandbox.autoAllowBashIfSandboxed).toBe(true);
   });
 
-  it.each(['editor', 'project'] as const)('keeps Bash and the file tools out of credential paths in %s mode', access => {
-    const deniedReads = ['/Users/me/.ssh', '/Users/me/Library/Application Support/Powermove/claude-runtime/.credentials.json'];
+  it.each(['editor', 'project'] as const)('denies no reads in %s mode', access => {
     const argv = buildClaudeArgv({
-      schema, prompt: 'Build', imagePaths: [], model: null, reasoningEffort: null, sessionId: null, access, instructions: 'Build.', deniedReads
+      schema, prompt: 'Build', imagePaths: [], model: null, reasoningEffort: null, sessionId: null, access, instructions: 'Build.'
     });
     const settings = JSON.parse(argv[argv.indexOf('--settings') + 1]!);
-    const base = JSON.parse(access === 'editor' ? CLAUDE_EDITOR_SANDBOX_SETTINGS : CLAUDE_PROJECT_SANDBOX_SETTINGS);
-    expect(settings.sandbox).toEqual({ ...base.sandbox, filesystem: { denyRead: deniedReads } });
-    // Read, Grep and Glob check Read rules; `//` is Claude's absolute-path prefix.
-    expect(settings.permissions.deny).toEqual([
-      'Read(//Users/me/.ssh)', 'Read(//Users/me/.ssh/**)',
-      'Read(//Users/me/Library/Application Support/Powermove/claude-runtime/.credentials.json)',
-      'Read(//Users/me/Library/Application Support/Powermove/claude-runtime/.credentials.json/**)'
-    ]);
-    const computer = buildClaudeArgv({
-      schema, prompt: 'Build', imagePaths: [], model: null, reasoningEffort: null, sessionId: null, access: 'computer', deniedReads
-    });
-    expect(computer).not.toContain('--settings');
+    expect(settings).toEqual(JSON.parse(access === 'editor' ? CLAUDE_EDITOR_SANDBOX_SETTINGS : CLAUDE_PROJECT_SANDBOX_SETTINGS));
+    expect(settings.permissions).toBeUndefined();
+    expect(settings.sandbox.filesystem).toBeUndefined();
   });
 
   it('only enables unrestricted CLI permissions after computer consent is handled by main', () => {

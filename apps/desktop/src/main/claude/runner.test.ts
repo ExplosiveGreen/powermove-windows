@@ -10,7 +10,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { agentWorkspaceRoot, sessionPathFor } from '../codex/workspace';
@@ -90,35 +90,25 @@ describe('Claude runner', () => {
     } finally { await rm(userData, { recursive: true, force: true }); }
   });
 
-  it('denies other projects\' Claude transcripts but keeps the run\'s own tool results readable', async () => {
-    const userData = await mkdtemp(path.join(tmpdir(), 'claude-denied-reads-'));
+  it.each(['editor', 'project'] as const)('denies no reads in %s runs: no credential or transcript paths reach the settings', async access => {
+    const userData = await mkdtemp(path.join(tmpdir(), 'claude-no-denied-reads-'));
     try {
-      const req = request({ mode: 'autonomous', access: 'project', projectJSON: '{}', threadId: 'denied-reads' });
-      const projects = path.join(userData, 'claude-runtime', 'projects');
-      const own = agentWorkspaceRoot(await realpath(userData), req.projectId).replace(/[^a-zA-Z0-9]/g, '-');
-      mkdirSync(path.join(projects, own, 'session', 'tool-results'), { recursive: true });
-      mkdirSync(path.join(projects, '-Users-me-other-project'), { recursive: true });
+      const req = access === 'editor'
+        ? request({ mode: 'editor', access: 'editor', projectJSON: null })
+        : request({ mode: 'autonomous', access: 'project', projectJSON: '{}', threadId: 'no-denied-reads' });
       const argvs: string[][] = [];
       const result = await new ClaudeRunner().run(req, {
         userData, extensionsDir: path.join(userData, 'extensions'), apiPackFiles: async () => [], binary: '/fake/claude',
         spawnProcess: (_binary, args) => {
           argvs.push([...args]);
-          return successfulChild({ summary: 'Done', commands: [], artifacts: [], externalActions: [], notes: [] }) as never;
+          return successfulChild(access === 'editor' ? { message: 'Done' } : { summary: 'Done', commands: [], artifacts: [], externalActions: [], notes: [] }) as never;
         }
       });
       expect(result).toMatchObject({ ok: true });
       const settings = JSON.parse(argvs[0]![argvs[0]!.indexOf('--settings') + 1]!);
-      const denied: string[] = settings.sandbox.filesystem.denyRead;
-      const runtime = path.join(await realpath(userData), 'claude-runtime');
-      expect(denied).toEqual(expect.arrayContaining([
-        path.join(runtime, '.credentials.json'), path.join(runtime, 'history.jsonl'),
-        path.join(runtime, 'projects', '-Users-me-other-project')
-      ]));
-      // Claude spills large tool output into the run's own store and reads it back with Read.
-      expect(denied).not.toContain(path.join(runtime, 'projects'));
-      expect(denied.some(file => file.includes(own))).toBe(false);
-      expect(denied).not.toContain(runtime);
-      expect(settings.permissions.deny).toContain(`Read(/${path.join(runtime, 'projects', '-Users-me-other-project')}/**)`);
+      expect(settings.permissions).toBeUndefined();
+      expect(settings.sandbox.filesystem).toBeUndefined();
+      expect(JSON.stringify(settings)).not.toMatch(/credentials|\.ssh|history\.jsonl|denyRead/);
     } finally { await rm(userData, { recursive: true, force: true }); }
   });
 

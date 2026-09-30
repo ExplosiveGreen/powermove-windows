@@ -1,6 +1,7 @@
 import { afterEach, expect, it } from 'vitest';
-import { execFileSync } from 'node:child_process';
-import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, access, writeFile } from 'node:fs/promises';
+import { execFile, execFileSync } from 'node:child_process';
+import net from 'node:net';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, access, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { COMPATIBLE_WORKSPACE_TOOLS, CompatibleWorkspace, runWorkspaceCommand } from './compatible-workspace';
@@ -41,38 +42,7 @@ it.runIf(process.platform === 'darwin')('writes files and compiles where a plant
   expect(await readdir(outside)).toEqual([]);
 });
 
-it.runIf(process.platform === 'darwin')('reads and lists in the Project sandbox, so a folder swapped for a link to credentials never leaks them', async () => {
-  const ws = await workspace();
-  const home = await mkdtemp(path.join(os.tmpdir(), 'pm-api-home-')); directories.push(home);
-  const ssh = path.join(home, '.ssh');
-  await mkdir(ssh);
-  await writeFile(path.join(ssh, 'key'), 'secret-key');
-  await writeFile(path.join(ssh, 'only-in-ssh'), '');
-  const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
-  // `a` is by turns a real folder, missing, and a link to ~/.ssh.
-  const swap = `const fs = require('node:fs'); fs.mkdirSync('real'); fs.writeFileSync('real/key', 'decoy'); fs.symlinkSync(${JSON.stringify(ssh)}, 'link');
-    for (;;) { fs.renameSync('real', 'a'); fs.renameSync('a', 'real'); fs.renameSync('link', 'a'); fs.renameSync('a', 'link'); }`;
-  const previous = process.env.HOME;
-  process.env.HOME = home;
-  try {
-    await ws.call('run_command', { command: `${quote(process.execPath)} -e ${quote(swap)}`, background: true }, signal());
-    await expect.poll(() => lstat(path.join(ws.layout.root, 'link')).then(() => true, () => false)).toBe(true);
-    const results: string[] = [];
-    for (let index = 0; index < 150; index++) {
-      for (const [name, file] of [['read_file', 'a/key'], ['list_files', 'a']] as const) {
-        results.push(await ws.call(name, { path: file }, signal()).then(result => JSON.stringify(result), (error: Error) => error.message));
-      }
-    }
-    expect(results.filter(result => result.includes('secret-key') || result.includes('only-in-ssh'))).toEqual([]);
-    // The race ran: some reads found the real folder in place.
-    expect(results.some(result => result.includes('decoy'))).toBe(true);
-  } finally {
-    process.env.HOME = previous;
-    await ws.stopCommands();
-  }
-}, 120_000);
-
-it.runIf(process.platform === 'darwin')('reads text, pages and images and lists odd names through the Project sandbox', async () => {
+it.runIf(process.platform === 'darwin')('reads text, pages and images and lists odd names', async () => {
   const ws = await workspace();
   const json = async (name: string, args: Record<string, unknown>) => JSON.parse(((await ws.call(name, args, signal()))[0] as any).text);
   const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff, 0x80, 0x0a]);
@@ -222,42 +192,55 @@ it.runIf(process.platform === 'darwin')('points bun and npm caches into the work
   expect(env.output).toBe([cache('bun'), cache('npm'), cache('xdg'), cache('pip')].join('|'));
 });
 
-it.runIf(process.platform === 'darwin')('downloads in Project access only from the shared allowlist, through the proxy', async () => {
+it.runIf(process.platform === 'darwin')('gives Project commands direct network with no proxy, listening sockets and LaunchServices', async () => {
   const ws = await workspace();
-  const status = (url: string, flags = '') => runWorkspaceCommand(ws.layout.root, 'project',
-    `curl -sS ${flags} --max-time 20 -o /dev/null -w "%{http_code}" ${url}`, 30_000, signal());
-  const allowed = await status('-I https://images.pexels.com');
-  expect(allowed.exitCode, allowed.output).toBe(0);
-  expect(Number(allowed.output)).toBeGreaterThan(0);
-  // The proxy refuses other hosts, including write-capable package registries.
+  const env = await runWorkspaceCommand(ws.layout.root, 'project', 'env', 5000, signal());
+  expect(env.output).not.toMatch(/^(?:HTTPS?_PROXY|ALL_PROXY|NO_PROXY|NODE_USE_ENV_PROXY)=/im);
+  // Any port, not only a proxy's: a local server stands in for a remote host.
+  const server = net.createServer(socket => socket.end('reached'));
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const port = (server.address() as net.AddressInfo).port;
+    const script = `const net = require('node:net');
+      const listen = host => new Promise(done => { const server = net.createServer();
+        server.once('error', error => done(error.code)); server.listen(0, host, () => server.close(() => done('listening'))); });
+      const reach = () => new Promise(done => { const socket = net.connect(${port}, '127.0.0.1');
+        let text = ''; socket.on('data', chunk => text += chunk); socket.on('end', () => done(text)); socket.on('error', error => done(error.code)); });
+      (async () => console.log(JSON.stringify({ any: await listen('0.0.0.0'), loopback: await listen('127.0.0.1'), reach: await reach() })))();`;
+    const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+    const result = await runWorkspaceCommand(ws.layout.root, 'project', `${quote(process.execPath)} -e ${quote(script)}`, 10_000, signal());
+    expect(JSON.parse(result.output)).toEqual({ any: 'listening', loopback: 'listening', reach: 'reached' });
+  } finally { await new Promise(resolve => server.close(resolve)); }
+  // lsappinfo only reads LaunchServices state, unlike `open`, which would launch an app.
+  const front = await new Promise<string>(resolve => execFile('/usr/bin/lsappinfo', ['front'], (_error, stdout) => resolve(stdout)));
+  if (front.includes('ASN:')) expect((await runWorkspaceCommand(ws.layout.root, 'project', '/usr/bin/lsappinfo front', 5000, signal())).output).toContain('ASN:');
+});
+
+it.runIf(process.platform === 'darwin')('downloads in Project access from any public host', async () => {
+  const ws = await workspace();
   for (const url of ['https://example.com', 'https://registry.npmjs.org/is-number']) {
-    const refused = await status(url);
-    expect(refused.exitCode, refused.output).not.toBe(0);
-    expect(refused.output).toContain('403');
-  }
-  // Bypassing the proxy reaches nothing: no direct sockets, no DNS.
-  for (const url of ['https://images.pexels.com', 'https://1.1.1.1']) {
-    expect((await status(url, '--noproxy "*"')).exitCode).not.toBe(0);
+    const result = await runWorkspaceCommand(ws.layout.root, 'project', `curl -sS --max-time 20 -o /dev/null -w "%{http_code}" ${url}`, 30_000, signal());
+    expect(result.exitCode, result.output).toBe(0);
+    expect(result.output).toBe('200');
   }
 }, 60_000);
 
-it.runIf(process.platform === 'darwin')('keeps account keys and provider logins unreadable in Project access', async () => {
+it.runIf(process.platform === 'darwin')('lets Project commands read account keys and provider logins, but still write only the workspace', async () => {
   const ws = await workspace();
   const home = await mkdtemp(path.join(os.tmpdir(), 'pm-api-home-')); directories.push(home);
   const userData = path.dirname(path.dirname(ws.layout.root));
-  const secrets = [path.join(home, '.ssh', 'id_ed25519'), path.join(home, '.codex', 'auth.json'),
+  const files = [path.join(home, '.ssh', 'id_ed25519'), path.join(home, '.codex', 'auth.json'),
     path.join(userData, 'codex-runtime', 'auth.json'), path.join(userData, 'claude-runtime', '.credentials.json')];
-  for (const file of secrets) { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, 'secret'); }
+  for (const file of files) { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, 'readable'); }
   const previous = process.env.HOME;
   process.env.HOME = home;
   try {
-    for (const file of secrets) {
+    for (const file of files) {
       const read = await runWorkspaceCommand(ws.layout.root, 'project', `cat ${JSON.stringify(file)}`, 5000, signal());
-      expect(read.output, file).not.toContain('secret');
-      expect(read.output).toContain('not permitted');
+      expect(read, file).toMatchObject({ output: 'readable', exitCode: 0 });
+      const write = await runWorkspaceCommand(ws.layout.root, 'project', `printf changed > ${JSON.stringify(file)}`, 5000, signal());
+      expect(write.exitCode, file).not.toBe(0);
     }
-    const own = await runWorkspaceCommand(ws.layout.root, 'project', 'printf mine > mine.txt && cat mine.txt', 5000, signal());
-    expect(own.output).toBe('mine');
   } finally { process.env.HOME = previous; }
 });
 

@@ -6,6 +6,9 @@ import { AGENT_TESTING_INSTRUCTIONS } from '../../shared/agent-testing';
 import { EFFECT_AUTHORING_INSTRUCTIONS } from '../../shared/effect-authoring';
 import { AGENT_RESPONSE_STYLE } from '../../shared/response-style';
 
+/** Told to every provider's Project runs, whose shells reach any host. */
+export const AGENT_SHELL_NETWORK_INSTRUCTIONS = 'Shell commands have full internet access.';
+
 export interface AgentInstructionsOptions {
   projectName: string;
   artifactPath: string;
