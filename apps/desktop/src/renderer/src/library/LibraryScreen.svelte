@@ -165,7 +165,7 @@
   /* ── shelves ── */
 
   const SHELF_GAP = 18;
-  const LEDGE_INSET = 12;
+  const LEDGE_INSET = 0;
   const DEFAULT_COVER = { width: 360, height: 240 };
   const WORKSPACE_COVER = { width: 480, height: 300 };
   let shelfWidth = $state(0);
