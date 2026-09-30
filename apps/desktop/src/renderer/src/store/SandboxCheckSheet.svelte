@@ -46,15 +46,11 @@
     <p>Runs it with only the permissions in its manifest, the way it runs for people who install it.</p>
   </header>
 <div class="pub-form sg-column">
-    <SandboxCheckStatus state={checkState} onretry={() => void start()} />
+    <SandboxCheckStatus state={checkState} onretry={() => void start()} onfix={onfix ? () => void fix() : undefined} {fixing} />
+    {#if fixError}<p class="pub-error" role="alert">{fixError}</p>{/if}
   </div>
-  {#if fixError}<p class="pub-problem" role="alert">{fixError}</p>{/if}
   <footer class="pub-foot">
-    <span>
-      {#if onfix && checkState.status === 'done' && !checkState.report.ok && !checkState.report.skipped}
-        <button class="btn" type="button" disabled={fixing} onclick={() => void fix()}>{fixing ? 'Opening agent…' : 'Fix with agent'}</button>
-      {/if}
-    </span>
+    <span></span>
     <button class="btn pri" type="button" onclick={onclose}>Done</button>
   </footer>
 </div>

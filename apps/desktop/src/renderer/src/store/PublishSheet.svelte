@@ -19,7 +19,8 @@
     progressText,
     type PublishDraft
   } from './publish-form';
-  import { ICON_INPUT_TYPES, prepareIcon } from './icon-image';
+  import { ICON_INPUT_MAX_BYTES, ICON_INPUT_TYPES, prepareIcon, type IconCrop } from './icon-image';
+  import IconCropper from './IconCropper.svelte';
   import SandboxCheckStatus from './SandboxCheckStatus.svelte';
   import { SANDBOX_UNAVAILABLE, type SandboxCheckReport, type SandboxCheckState } from './sandbox-check';
 
@@ -99,10 +100,56 @@
     const file = input?.files?.[0];
     if (!input || !file) return;
     input.value = '';
+    await useIcon(file);
+  }
+
+  /* The drop target is the whole well. Drops are handled here and never
+     reach the editor's own file import underneath the sheet. */
+  let iconDragDepth = $state(0);
+  const hasFiles = (event: DragEvent): boolean => [...(event.dataTransfer?.types ?? [])].includes('Files');
+  function iconDragEnter(event: DragEvent): void {
+    if (!hasFiles(event)) return;
+    event.preventDefault(); event.stopPropagation();
+    iconDragDepth += 1;
+  }
+  function iconDragOver(event: DragEvent): void {
+    if (!hasFiles(event)) return;
+    event.preventDefault(); event.stopPropagation();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = busy || iconBusy ? 'none' : 'copy';
+  }
+  function iconDragLeave(event: DragEvent): void {
+    if (!hasFiles(event)) return;
+    event.stopPropagation();
+    iconDragDepth = Math.max(0, iconDragDepth - 1);
+  }
+  function iconDrop(event: DragEvent): void {
+    event.preventDefault(); event.stopPropagation();
+    iconDragDepth = 0;
+    if (busy || iconBusy) return;
+    const file = [...(event.dataTransfer?.files ?? [])][0];
+    if (!file) return;
+    if (file.type && !file.type.startsWith('image/')) { iconError = 'Drop an image file.'; return; }
+    void useIcon(file);
+  }
+
+  /* A new image opens the cropper; the icon is made only once it is framed.
+     The source and its framing are kept so Crop… can reframe it later. */
+  let cropping = $state<{ file: Blob; initial: IconCrop | null } | null>(null);
+  let iconSource: { file: Blob; crop: IconCrop } | null = null;
+
+  async function useIcon(file: File): Promise<void> {
+    iconError = null;
+    if (file.size > ICON_INPUT_MAX_BYTES) { iconError = 'Choose an image of 20 MB or smaller.'; return; }
+    cropping = { file, initial: null };
+  }
+
+  async function applyCrop(crop: IconCrop): Promise<void> {
+    if (!cropping || iconBusy) return;
+    const { file } = cropping;
     iconError = null;
     iconBusy = true;
     try {
-      const icon = await prepareIcon(file);
+      const icon = await prepareIcon(file, crop);
       if (!icon.ok) {
         iconError = icon.error;
         return;
@@ -110,14 +157,22 @@
       if (iconUrl) URL.revokeObjectURL(iconUrl);
       iconUrl = URL.createObjectURL(icon.png);
       draft.iconPng = icon.base64;
+      iconSource = { file, crop };
+      cropping = null;
     } finally {
       iconBusy = false;
     }
   }
 
+  function cropFailed(message: string): void {
+    iconError = message;
+    cropping = null;
+  }
+
   function removeIcon(): void {
     if (iconUrl) URL.revokeObjectURL(iconUrl);
     iconUrl = null;
+    iconSource = null;
     iconError = null;
     draft.iconPng = null;
   }
@@ -274,19 +329,44 @@
                 <option value="unlisted">Unlisted</option>
               </select>
             </div>
-            <div class="settings-row pub-row">
+            <div class="settings-row pub-row is-stacked">
               <span class="settings-copy">
                 <b>Icon</b>
                 {#if iconError}<span class="pub-problem" role="alert">{iconError}</span>{:else}<span>Any image. It’s cropped square and sized for the store.</span>{/if}
               </span>
-              <span class="pub-icon">
-                {#if iconUrl}<img class="pub-icon-preview" src={iconUrl} alt="Icon preview" />{/if}
-                <input bind:this={iconInput} class="pub-file" type="file" accept={ICON_INPUT_TYPES} tabindex="-1" aria-hidden="true" onchange={chooseIcon} />
-                {#if iconUrl}
-                  <button class="btn ghost" type="button" disabled={busy || iconBusy} onclick={removeIcon}>Remove</button>
+              <input bind:this={iconInput} class="pub-file" type="file" accept={ICON_INPUT_TYPES} tabindex="-1" aria-hidden="true" onchange={chooseIcon} />
+              <div
+                class="pub-icon-drop"
+                class:is-over={iconDragDepth > 0}
+                class:has-icon={!!iconUrl || !!cropping}
+                role="group"
+                aria-label="Icon"
+                aria-busy={iconBusy}
+                ondragenter={iconDragEnter}
+                ondragover={iconDragOver}
+                ondragleave={iconDragLeave}
+                ondrop={iconDrop}
+              >
+                {#if cropping}
+                  {#key cropping}
+                    <IconCropper file={cropping.file} initial={cropping.initial} busy={iconBusy || busy}
+                      onconfirm={(crop) => void applyCrop(crop)} oncancel={() => { cropping = null; }} onerror={cropFailed} />
+                  {/key}
+                {:else if iconUrl}
+                  <img class="pub-icon-preview" src={iconUrl} alt="Icon preview" />
+                  <span class="pub-icon-copy"><b>Icon ready</b><span>Drop another image to replace it.</span></span>
+                  <span class="pub-icon">
+                    <button class="btn ghost" type="button" disabled={busy || iconBusy} onclick={removeIcon}>Remove</button>
+                    {#if iconSource}<button class="btn" type="button" disabled={busy || iconBusy} onclick={() => { if (iconSource) cropping = { file: iconSource.file, initial: iconSource.crop }; }}>Crop…</button>{/if}
+                    <button class="btn" type="button" disabled={busy || iconBusy} onclick={() => iconInput?.click()}>Change…</button>
+                  </span>
+                {:else}
+                  <button class="pub-icon-empty" type="button" disabled={busy || iconBusy} onclick={() => iconInput?.click()}>
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="4" /><circle cx="9" cy="9.5" r="1.6" /><path d="m4 17 4.5-4.5a1.5 1.5 0 0 1 2.1 0L15 17m-2-2 1.9-1.9a1.5 1.5 0 0 1 2.1 0L20 16" /></svg>
+                    <span><b>{iconDragDepth > 0 ? 'Drop to use this image' : 'Drop an image here'}</b><span>or click to choose one</span></span>
+                  </button>
                 {/if}
-                <button class="btn" type="button" disabled={busy || iconBusy} onclick={() => iconInput?.click()}>{iconBusy ? 'Preparing…' : iconUrl ? 'Change…' : 'Choose…'}</button>
-              </span>
+              </div>
             </div>
           </div>
         </section>
@@ -294,10 +374,8 @@
 
       <section class="pub-section">
         <h3 class="pub-title">Sandbox</h3>
-        <SandboxCheckStatus state={sandbox} onretry={busy ? undefined : () => void runCheck()} />
-        {#if onfix && sandbox.status === 'done' && !sandbox.report.ok && !sandbox.report.skipped}
-          <button class="btn" type="button" disabled={busy || fixing} onclick={() => void fixSandbox()}>{fixing ? 'Opening agent…' : 'Fix with agent'}</button>
-        {/if}
+        <SandboxCheckStatus state={sandbox} onretry={busy ? undefined : () => void runCheck()}
+          onfix={onfix ? () => void fixSandbox() : undefined} {fixing} disabled={busy} />
       </section>
 
       {#if plan.permissionFindings.length}

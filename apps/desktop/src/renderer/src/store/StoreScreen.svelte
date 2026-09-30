@@ -775,20 +775,8 @@
     if (!bridge || busy[item.localId]) return;
     actionError = null;
     setBusy(item.localId, 'Preparing…');
-    const result = await call(() => bridge.publishPrepare({ localId: item.localId }));
-    setBusy(item.localId, null);
-    if (!result.ok) {
-      // Signed out, or no handle yet: the account sheet asks for what is missing.
-      if (result.error.error === 'unauthorized' || result.error.error === 'forbidden') {
-        openSignIn();
-        return;
-      }
-      const message = result.error.detail === 'unavailable' ? 'Can’t reach the store. Check your connection and try again.' : publishErrorText(result.error);
-      if (detail) actionError = message;
-      else toast(message, true);
-      return;
-    }
-    openPublishSheet(PM, bridge, result.value, (published) => {
+    // The sheet opens now and fills in when main has the plan.
+    const sheet = openPublishSheet(PM, bridge, item, (published) => {
       void loadLibrary();
       refreshDiscover();
       // The page you published from now has a store page of its own.
@@ -799,6 +787,23 @@
         void loadDetail(detail);
       }
     });
+    const result = await call(() => bridge.publishPrepare({ localId: item.localId }));
+    setBusy(item.localId, null);
+    if (!result.ok) {
+      // Cancelled while preparing: nothing to report.
+      if (sheet?.closed) return;
+      sheet?.close();
+      // Signed out, or no handle yet: the account sheet asks for what is missing.
+      if (result.error.error === 'unauthorized' || result.error.error === 'forbidden') {
+        openSignIn();
+        return;
+      }
+      const message = result.error.detail === 'unavailable' ? 'Can’t reach the store. Check your connection and try again.' : publishErrorText(result.error);
+      if (detail) actionError = message;
+      else toast(message, true);
+      return;
+    }
+    sheet?.ready(result.value);
   }
 
   async function withdraw(repoId: string, version: VersionEntry): Promise<void> {

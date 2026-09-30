@@ -1,5 +1,5 @@
 /* Store icons: people choose any image; the sheet makes the upload. It is
-   cropped to its centre square, drawn at 512px (never upscaled), and
+   cropped to the square they framed (its centre square by default), drawn at 512px (never upscaled), and
    encoded as PNG, stepping down in size until it fits the registry's
    256 KB cap (PUBLISH_LIMITS.iconBytes). checkIconBytes then checks the
    result exactly as main and the registry will. */
@@ -13,20 +13,28 @@ export const ICON_INPUT_TYPES = 'image/png,image/jpeg,image/webp,image/gif';
 export const ICON_MIN_SIDE = 128;
 const ICON_SIDES = [512, 448, 384, 320, 256];
 
+export type IconCrop = { x: number; y: number; side: number };
+
 export type IconPlan =
-  | { ok: true; crop: { x: number; y: number; side: number }; sides: number[] }
+  | { ok: true; crop: IconCrop; sides: number[] }
   | { ok: false; error: string };
 
-/** The centre square of a width × height image, and the sizes to try, largest first. */
-export function planIcon(width: number, height: number): IconPlan {
-  const side = Math.min(width, height);
-  if (!Number.isFinite(side) || side < ICON_MIN_SIDE) return { ok: false, error: `Choose an image at least ${ICON_MIN_SIDE} pixels on its short side.` };
+/** A framed square kept whole inside a width × height image, in whole pixels. */
+export function clampCrop(crop: IconCrop, width: number, height: number): IconCrop {
+  const side = Math.min(Math.max(1, Math.round(crop.side)), Math.min(width, height));
+  const clamp = (value: number, max: number) => Math.min(Math.max(0, Math.round(value)), max);
+  return { x: clamp(crop.x, width - side), y: clamp(crop.y, height - side), side };
+}
+
+/** The square to use (the framed one, else the centre square) and the sizes to try, largest first. */
+export function planIcon(width: number, height: number, framed?: IconCrop): IconPlan {
+  const short = Math.min(width, height);
+  if (!Number.isFinite(short) || short < ICON_MIN_SIDE) return { ok: false, error: `Choose an image at least ${ICON_MIN_SIDE} pixels on its short side.` };
+  const crop = framed ? clampCrop(framed, width, height) : { x: Math.floor((width - short) / 2), y: Math.floor((height - short) / 2), side: short };
+  const side = crop.side;
+  if (side < ICON_MIN_SIDE) return { ok: false, error: `Zoom out a little. The icon needs at least ${ICON_MIN_SIDE} pixels of the image.` };
   const sides = ICON_SIDES.filter((candidate) => candidate < side);
-  return {
-    ok: true,
-    crop: { x: Math.floor((width - side) / 2), y: Math.floor((height - side) / 2), side },
-    sides: side <= ICON_SIDES[0]! ? [side, ...sides] : sides
-  };
+  return { ok: true, crop, sides: side <= ICON_SIDES[0]! ? [side, ...sides] : sides };
 }
 
 export type PreparedIcon = { ok: true; base64: string; png: Blob } | { ok: false; error: string };
@@ -36,7 +44,7 @@ function encode(canvas: HTMLCanvasElement): Promise<Blob | null> {
 }
 
 /** Crop, resize and compress a chosen file into the icon the registry takes. */
-export async function prepareIcon(file: Blob): Promise<PreparedIcon> {
+export async function prepareIcon(file: Blob, crop?: IconCrop): Promise<PreparedIcon> {
   if (file.size > ICON_INPUT_MAX_BYTES) return { ok: false, error: 'Choose an image of 20 MB or smaller.' };
   let bitmap: ImageBitmap;
   try {
@@ -45,7 +53,7 @@ export async function prepareIcon(file: Blob): Promise<PreparedIcon> {
     return { ok: false, error: 'Powermove can’t read this image. Choose a PNG, JPEG or WebP.' };
   }
   try {
-    const plan = planIcon(bitmap.width, bitmap.height);
+    const plan = planIcon(bitmap.width, bitmap.height, crop);
     if (!plan.ok) return plan;
     const canvas = document.createElement('canvas');
     const context = canvas.getContext('2d');

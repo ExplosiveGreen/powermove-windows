@@ -17,8 +17,8 @@ it.each([true, false])('hands the actual failure to the agent and closes only on
   const component = mount(SandboxCheckSheet, { target, props: { name: 'Hello', check: async () => failed, onclose, onfix } });
   try {
     flushSync();
-    await vi.waitFor(() => expect(target.textContent).toContain('Fix with agent'));
-    const button = [...target.querySelectorAll('button')].find(button => button.textContent === 'Fix with agent')!;
+    await vi.waitFor(() => expect(target.textContent).toContain('Fix with Agent'));
+    const button = [...target.querySelectorAll('button')].find(button => button.textContent === 'Fix with Agent')!;
     button.click();
     await vi.waitFor(() => expect(onfix).toHaveBeenCalledWith(failed));
     await vi.waitFor(() => accepted ? expect(onclose).toHaveBeenCalledOnce() : expect(target.textContent).toContain('couldn’t start the repair'));
@@ -34,7 +34,7 @@ it('does not offer a code repair for a passing check', async () => {
   try {
     flushSync();
     await vi.waitFor(() => expect(target.textContent).toContain('Compatible with the sandbox'));
-    expect(target.textContent).not.toContain('Fix with agent');
+    expect(target.textContent).not.toContain('Fix with Agent');
     expect(onfix).not.toHaveBeenCalled();
   } finally { await unmount(component); target.remove(); }
 });

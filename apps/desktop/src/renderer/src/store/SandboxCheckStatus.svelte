@@ -3,8 +3,11 @@
 
   /* The sandbox check as Settings rows: a title and a line under it, the
      state at the right edge (a spinner, a tick, or Check Again). A failure
-     adds one row per problem, the exact reason as its text. */
-  let { state, onretry }: { state: SandboxCheckState; onretry?: () => void } = $props();
+     adds one row per problem, the exact reason as its text, and offers the
+     repair agent beside Check Again. */
+  let { state, onretry, onfix, fixing = false, disabled = false }: {
+    state: SandboxCheckState; onretry?: () => void; onfix?: () => void; fixing?: boolean; disabled?: boolean;
+  } = $props();
 
   const lines = $derived(state.status === 'done' ? sandboxCheckLines(state.report) : []);
 </script>
@@ -35,13 +38,18 @@
     </div>
   {:else}
     <div class="settings-row pub-row" data-sandbox="failed">
-      <span class="settings-copy"><b>Not compatible with the sandbox</b><span>Fix {lines.length === 1 ? 'this' : 'these'}, then check again.</span></span>
-      {#if onretry}<button class="btn" type="button" onclick={onretry}>Check Again</button>{/if}
+      <span class="settings-copy"><b>Not compatible with the sandbox</b><span>{onfix ? 'The agent can fix this for you, or fix it yourself and check again.' : `Fix ${lines.length === 1 ? 'this' : 'these'}, then check again.`}</span></span>
+      {#if onretry || onfix}
+        <span class="pub-sandbox-actions">
+          {#if onretry}<button class="btn" type="button" disabled={disabled || fixing} onclick={onretry}>Check Again</button>{/if}
+          {#if onfix}<button class="btn pri" type="button" disabled={disabled || fixing} onclick={onfix}>{fixing ? 'Opening Agent…' : 'Fix with Agent'}</button>{/if}
+        </span>
+      {/if}
     </div>
-    {#each lines as line, index (index)}
-      <div class="settings-row pub-row is-problem" data-sandbox="problem">
-        <span class="settings-copy"><span class="pub-problem pub-sandbox-line">{line}</span></span>
-      </div>
-    {/each}
+    <ul class="pub-sandbox-problems">
+      {#each lines as line, index (index)}
+        <li class="pub-sandbox-line" data-sandbox="problem">{line}</li>
+      {/each}
+    </ul>
   {/if}
 </div>

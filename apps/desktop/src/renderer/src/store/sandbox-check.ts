@@ -75,6 +75,29 @@ function cspLine(hit: SandboxCheckReport['cspViolations'][number], apiVersion?: 
   return `The sandbox blocked ${hit.blockedUri || 'a request'} (${hit.directive}).`;
 }
 
+type ValidationIssue = { code?: string; keys?: unknown[]; path?: unknown[]; message?: string };
+
+/* Schema failures arrive as a JSON array of validation issues. Say what they
+   mean in a sentence; anything else passes through untouched. */
+export function readableSandboxError(message: string): string {
+  const start = message.indexOf('[');
+  if (start < 0) return message;
+  let issues: ValidationIssue[];
+  try { issues = JSON.parse(message.slice(start)); } catch { return message; }
+  if (!Array.isArray(issues) || !issues.length || !issues.every(issue => issue && typeof issue === 'object')) return message;
+  const sentences = issues.map(issue => {
+    const where = Array.isArray(issue.path) && issue.path.length ? ` in "${issue.path.join('.')}"` : '';
+    if (issue.code === 'unrecognized_keys' && Array.isArray(issue.keys) && issue.keys.length) {
+      const keys = issue.keys.map(key => `"${String(key)}"`).join(', ');
+      return `${keys} ${issue.keys.length === 1 ? 'isn’t a recognized option' : 'aren’t recognized options'}${where}.`;
+    }
+    const text = String(issue.message || 'Invalid value').replace(/\.$/, '');
+    return `${text}${where}.`;
+  });
+  const prefix = message.slice(0, start).trim();
+  return [prefix, ...sentences].filter(Boolean).join(' ');
+}
+
 /** One sentence per problem, most actionable first. Empty when the report is clean or skipped. */
 export function sandboxCheckLines(report: SandboxCheckReport): string[] {
   if (report.skipped || report.ok) return [];
@@ -82,10 +105,10 @@ export function sandboxCheckLines(report: SandboxCheckReport): string[] {
   const permission = report.permissionErrors.length > 0;
   const covered = (message: string): boolean => permission && /requires full access/.test(message);
   for (const hit of report.permissionErrors) lines.push(permissionLine(hit, report.apiVersion));
-  if (report.activation !== 'ok' && !covered(report.activation.error)) lines.push(`Failed to start in the sandbox: ${report.activation.error}`);
+  if (report.activation !== 'ok' && !covered(report.activation.error)) lines.push(`Failed to start in the sandbox. ${readableSandboxError(report.activation.error)}`);
   for (const hit of report.cspViolations) lines.push(cspLine(hit, report.apiVersion));
   for (const hit of report.asyncMisuse) lines.push(`Reads the result of api.${hit.member} right away, but it returns a Promise in the sandbox. Await it and set \`apiVersion: 3\`.`);
-  for (const panel of report.panels) if (!panel.mounted && !covered(panel.error ?? '')) lines.push(`Panel '${panel.id}' failed to mount: ${panel.error ?? 'unknown error'}`);
-  for (const message of report.runtimeErrors) if (!covered(message)) lines.push(`Threw an error: ${message}`);
+  for (const panel of report.panels) if (!panel.mounted && !covered(panel.error ?? '')) lines.push(`Panel '${panel.id}' failed to mount. ${readableSandboxError(panel.error ?? 'Unknown error.')}`);
+  for (const message of report.runtimeErrors) if (!covered(message)) lines.push(`Threw an error. ${readableSandboxError(message)}`);
   return lines.length ? [...new Set(lines)] : ['It didn’t pass the sandbox check. Run it again from the Library for details.'];
 }

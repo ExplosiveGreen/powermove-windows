@@ -2,7 +2,7 @@
 import { expect, it } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import SandboxCheckStatus from './SandboxCheckStatus.svelte';
-import { sandboxCheckLines, type SandboxCheckReport } from './sandbox-check';
+import { readableSandboxError, sandboxCheckLines, type SandboxCheckReport } from './sandbox-check';
 
 const report = (patch: Partial<SandboxCheckReport>): SandboxCheckReport => ({
   ok: false, activation: 'ok', permissionErrors: [], cspViolations: [], asyncMisuse: [],
@@ -21,7 +21,7 @@ it('renders each blocked reason as a separate row', async () => {
   const rows = [...target.querySelectorAll('[data-sandbox="problem"]')].map(row => row.textContent?.trim());
   expect(rows).toEqual(sandboxCheckLines(blocked));
   expect(rows[0]).toContain('api.render.gl.bounds');
-  expect(rows[1]).toContain("Panel 'ease-lab' failed to mount: panel boom");
+  expect(rows[1]).toContain("Panel 'ease-lab' failed to mount. panel boom");
   await unmount(component);
   target.remove();
 });
@@ -61,4 +61,12 @@ it('names the network permission for a remote stylesheet or font', () => {
     'Reaches fonts.googleapis.com without the network permission. Declare `permissions: ["network"]`.',
     'Reaches fonts.gstatic.com without the network permission. Declare `permissions: ["network"]`.'
   ]);
+});
+
+it('turns schema validation JSON into a sentence', () => {
+  const error = '[\n  {\n    "code": "unrecognized_keys",\n    "keys": [\n      "backdrop"\n    ],\n    "path": [],\n    "message": "Unrecognized key: \\"backdrop\\""\n  }\n]';
+  expect(sandboxCheckLines(report({ activation: { error } }))).toEqual([
+    'Failed to start in the sandbox. "backdrop" isn’t a recognized option.'
+  ]);
+  expect(readableSandboxError('x is not defined')).toBe('x is not defined');
 });
