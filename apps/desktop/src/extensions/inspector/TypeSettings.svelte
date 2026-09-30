@@ -2,7 +2,7 @@
   import { untrack } from 'svelte';
   import TypeAxis from './TypeAxis.svelte';
   import { inspectorContext } from './context';
-  import { inspectFont, isAxisTag, type FontInspection } from 'powermove';
+  import { inspectFont, isAxisTag, type FontInspection, type FontStyle } from 'powermove';
 
   /* Variable font axes, in the inspector's own row grammar. A variable font
      shows one row per axis under a quiet "Type settings" heading. A static
@@ -11,13 +11,20 @@
      font that cannot be read gets a single status row with a refresh action. */
 
   const { doc } = inspectorContext();
-  let { layer, family, onVariableWeight }: { layer: any; family: string; onVariableWeight?: (value: boolean) => void } = $props();
+  let { layer, family, onVariableWeight, onStyles }: {
+    layer: any; family: string; onVariableWeight?: (value: boolean) => void; onStyles?: (styles: FontStyle[]) => void;
+  } = $props();
   let info = $state<FontInspection | null>(null), attempt = $state(0);
   $effect(() => {
     const selected = family, retry = attempt;
     let active = true;
-    info = null; untrack(() => onVariableWeight?.(false));
-    void inspectFont(selected, retry > 0).then(result => { if (active) { info = result; onVariableWeight?.(result.axes.some(axis => axis.tag === 'wght')); } });
+    info = null; untrack(() => { onVariableWeight?.(false); onStyles?.([]); });
+    void inspectFont(selected, retry > 0).then(result => {
+      if (!active) return;
+      info = result;
+      onVariableWeight?.(result.axes.some(axis => axis.tag === 'wght'));
+      onStyles?.(result.styles ?? []);
+    });
     return () => { active = false; };
   });
   const saved = $derived((doc.tick.values, doc.tick.history, doc.proj, Object.entries(layer.d ?? {}).flatMap(([key, prop]: [string, any]) => {

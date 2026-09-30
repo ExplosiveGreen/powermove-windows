@@ -1,8 +1,12 @@
 export interface FontAxis { tag: string; label: string; min: number; max: number; default: number }
+/** One installed face, named as the font names it (for example "Italic" or "Bold Condensed"). */
+export interface FontStyle { name: string; weight: number; italic: boolean }
 export interface FontInspection {
   family: string;
   status: 'variable' | 'static' | 'missing' | 'unavailable';
   axes: FontAxis[];
+  /** The family's installed faces, by weight then upright before italic. */
+  styles?: FontStyle[];
   source?: { family: string; fullName?: string; postscriptName?: string; blob(): Promise<Blob> };
 }
 const labels: Record<string, string> = { wght: 'Weight', wdth: 'Width', opsz: 'Optical size', slnt: 'Slant', ital: 'Italic', GRAD: 'Grade' };
@@ -61,6 +65,26 @@ export function readFontAxes(buffer: ArrayBuffer): FontAxis[] {
   return [...axes.values()];
 }
 
+/** CSS weight and slope implied by a face's style name. */
+export function styleDescriptor(style: string): { weight: number; italic: boolean } {
+  const s = style.toLowerCase();
+  const weight = /thin|hairline/.test(s) ? 100 : /extra ?light|ultra ?light/.test(s) ? 200 : /light/.test(s) ? 300
+    : /medium/.test(s) ? 500 : /semi ?bold|demi ?bold/.test(s) ? 600 : /extra ?bold|ultra ?bold/.test(s) ? 800
+    : /black|heavy/.test(s) ? 900 : /bold/.test(s) ? 700 : 400;
+  return { weight, italic: /italic|oblique/.test(s) };
+}
+
+function faceStyles(faces: Array<{ style?: string }>): FontStyle[] {
+  const styles = new Map<string, FontStyle>();
+  for (const face of faces) {
+    const name = String(face.style ?? '').trim() || 'Regular';
+    const { weight, italic } = styleDescriptor(name);
+    const key = `${weight}${italic ? 'i' : ''}`;
+    if (!styles.has(key)) styles.set(key, { name, weight, italic });
+  }
+  return [...styles.values()].sort((a, b) => a.weight - b.weight || Number(a.italic) - Number(b.italic));
+}
+
 const cache = new Map<string, Promise<FontInspection>>();
 const normalize = (name: unknown) => String(name ?? '').trim().replace(/^['"]|['"]$/g, '').toLocaleLowerCase();
 export function inspectFont(family: string, retry = false): Promise<FontInspection> {
@@ -76,16 +100,18 @@ export function inspectFont(family: string, retry = false): Promise<FontInspecti
       const candidates = (Array.isArray(all) ? all : []).filter((font: any) =>
         [font.family, font.fullName, font.postscriptName].some(name => normalize(name) === key));
       if (!candidates.length) return empty('missing');
+      const faces = candidates.filter((font: any) => normalize(font.family) === key);
+      const styles = faceStyles(faces.length ? faces : candidates);
       candidates.sort((a: any, b: any) => Number(/regular/i.test(b.style ?? b.fullName)) - Number(/regular/i.test(a.style ?? a.fullName)));
       let readable = 0;
       for (const source of candidates) {
         try {
           const axes = readFontAxes(await (await source.blob()).arrayBuffer());
           readable++;
-          if (axes.length) return { family: source.family, status: 'variable', axes, source };
+          if (axes.length) return { family: source.family, status: 'variable', axes, source, styles };
         } catch { /* A broken or duplicate face must not hide a readable variable face. */ }
       }
-      return empty(readable === candidates.length ? 'static' : 'unavailable');
+      return { ...empty(readable === candidates.length ? 'static' : 'unavailable'), styles };
     } catch { return empty('unavailable'); }
   })();
   cache.set(key, pending);

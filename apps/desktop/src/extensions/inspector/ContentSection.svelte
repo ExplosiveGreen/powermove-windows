@@ -5,7 +5,7 @@
   import { inspectorContext, type EditBinding, type SelectOption } from './context';
   import TypeSettings from './TypeSettings.svelte';
   import TextAlignment from './TextAlignment.svelte';
-  import { axisContentKey } from 'powermove';
+  import { axisContentKey, type FontStyle } from 'powermove';
 
   const { api, doc, transport, mixed, edit: inspectorEdit } = inspectorContext();
   const { ColorField, FontField, NumField, Section, SelectField } = api.ui.controls;
@@ -32,6 +32,7 @@
     typeof shaderMeta?.shaderKey === 'string' ? api.render.gl.compileError(shaderMeta.shaderKey) ?? '' : ''));
   let editingText = false;
   let hasVariableWeight = $state(false);
+  let fontStyles = $state<FontStyle[]>([]);
   const IMPORT_SOURCE = '__powermove_import_source__';
 
   const get = (key: string, fallback?: unknown) => () => content[key] == null ? fallback : content[key];
@@ -134,6 +135,26 @@
 
   onDestroy(commitText);
 
+  /* A static family lists the faces it actually has, by their own names. The
+     selected face is the one the renderer draws: like CSS font matching, the
+     same slope wins first, then the nearest weight. */
+  const styleKey = (style: { weight: number; italic: boolean }) => `${style.weight}${style.italic ? ' italic' : ''}`;
+  const currentStyle = $derived.by(() => {
+    const weight = Number(content.weight) || 400, italic = !!content.italic;
+    const slope = fontStyles.filter((style) => style.italic === italic);
+    return (slope.length ? slope : fontStyles).reduce<FontStyle | null>((best, style) =>
+      !best || Math.abs(style.weight - weight) < Math.abs(best.weight - weight) ? style : best, null);
+  });
+  const styleEdit: EditBinding = {
+    mode: 'command',
+    label: 'Style',
+    origin: 'inspector',
+    command: (value) => {
+      const style = fontStyles.find((candidate) => styleKey(candidate) === value);
+      return style ? { type: 'set_content', target: layer.id, patch: { weight: style.weight, italic: style.italic } } : [];
+    }
+  };
+
   function mediaOptions(kind: 'image' | 'video'): SelectOption[] {
     return assets
       .filter((asset) => asset?.kind === kind)
@@ -197,7 +218,23 @@
       />
     {/key}
   </AnimatedRow>
-  {#if !hasVariableWeight && content[axisContentKey('wght')] == null}
+  {#if !hasVariableWeight && content[axisContentKey('wght')] == null && fontStyles.length}
+    <AnimatedRow {layer} label="Style" path="c.weight">
+      <SelectField
+        {api}
+        {mixed}
+
+        get={() => currentStyle ? styleKey(currentStyle) : null}
+        edit={styleEdit}
+        options={fontStyles.map((style) => ({ v: styleKey(style), label: style.name }))}
+        label="Style"
+        onChange={(value: unknown) => {
+          const style = fontStyles.find((candidate) => styleKey(candidate) === value);
+          if (style) api.media.fonts?.ensure?.(content.font, style.weight);
+        }}
+      />
+    </AnimatedRow>
+  {:else if !hasVariableWeight && content[axisContentKey('wght')] == null}
     {@const weights = [...new Set([Number(content.weight) || 400, 100, 200, 300, 400, 500, 600, 700, 800, 900])].sort((a, b) => a - b)}
     <AnimatedRow {layer} label="Weight" path="c.weight">
       <SelectField
@@ -217,7 +254,7 @@
   <AnimatedRow {layer} label="Leading" path="c.leading"><NumField {api} {mixed} get={get('leading', 0)} edit={edit('leading', 'Leading')} label="Leading" step={0.02} precision={2} /></AnimatedRow>
   <AnimatedRow {layer} label="Align" path="c.align"><TextAlignment {layer} value={String(content.align ?? 'center')} /></AnimatedRow>
   <AnimatedRow {layer} label="Color" path="c.color"><ColorField {api} {mixed} get={get('color', '#F2F2F2')} edit={edit('color', 'Text color')} label="Text color" /></AnimatedRow>
-  <TypeSettings {layer} family={String(content.font ?? '')} onVariableWeight={(value) => { hasVariableWeight = value; }} />
+  <TypeSettings {layer} family={String(content.font ?? '')} onVariableWeight={(value) => { hasVariableWeight = value; }} onStyles={(styles) => { fontStyles = styles; }} />
 {:else if (layer.type === 'solid' || layer.type === 'shape' || layer.type === 'null') && !layer.d.paths?.length}
   <AnimatedRow {layer} label="Fill" path="c.color"><ColorField {api} {mixed} get={get('color', '#808080')} edit={edit('color', 'Fill')} label="Fill" /></AnimatedRow>
   {#if layer.type === 'shape'}

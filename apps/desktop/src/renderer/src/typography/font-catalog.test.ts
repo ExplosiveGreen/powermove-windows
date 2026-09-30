@@ -39,4 +39,13 @@ describe('font catalog', () => {
     query.mockResolvedValue([{family:'Static Test',blob:async()=>new Blob([new ArrayBuffer(12)])}]);
     expect((await inspectFont('Static Test')).status).toBe('static');
   });
+  it('lists a static family\'s own faces by name, weight and slope', async () => {
+    const face = (style: string) => ({ family: 'Brush Test', style, blob: async () => new Blob([new ArrayBuffer(12)]) });
+    vi.stubGlobal('queryLocalFonts', vi.fn(async () => [face('Italic'), face('Regular'), face('Bold Italic'), face('Italic')]));
+    expect((await inspectFont('Brush Test')).styles).toEqual([
+      { name: 'Regular', weight: 400, italic: false },
+      { name: 'Italic', weight: 400, italic: true },
+      { name: 'Bold Italic', weight: 700, italic: true }
+    ]);
+  });
 });
