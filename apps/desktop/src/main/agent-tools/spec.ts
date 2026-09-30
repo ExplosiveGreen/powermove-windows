@@ -137,12 +137,82 @@ export const POWERMOVE_AGENT_TOOLS: readonly PowermoveAgentToolSpec[] = [
     name: 'stage_fork_rebase',
     description: 'Stage a stale user fork for a three-way rebase onto the built-in version shipped by this Powermove app. Returns only run-private working/base/ours paths plus sorted user, upstream, and conflict file lists. Call this before editing the fork.',
     inputSchema: closedObject({ id: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{1,63}$' } }, ['id'])
+  },
+  {
+    name: 'store_search',
+    description: 'Search the Powermove Store for published extensions (effects, transitions, panels, themes, commands, layers, tools). Returns matching listings with their handle/slug, name, tagline, install count, verified publisher flag, declared permissions and latest releaseId. Use this to find an extension that does what the user needs before installing.',
+    inputSchema: closedObject({
+      query: { type: 'string', maxLength: 200 },
+      category: { type: 'string', enum: ['effects', 'transitions', 'panels', 'themes', 'commands', 'layers', 'tools'] },
+      sort: { type: 'string', enum: ['new', 'installs', 'name'] },
+      cursor: { type: 'string' }
+    })
+  },
+  {
+    name: 'store_extension',
+    description: 'Read a Store extension\'s detail by handle and slug: description, declared permissions, verified publisher, install count, and its full release history (each with a releaseId and version). Use before installing to check what it does and which permissions it wants.',
+    inputSchema: closedObject({ handle: { type: 'string' }, slug: { type: 'string' } }, ['handle', 'slug'])
+  },
+  {
+    name: 'store_source',
+    description: 'Read a published release\'s source before installing it. Omit path to get the file tree (paths and sizes); pass a path to read one file\'s contents (text, up to 2 MiB). Get the releaseId from store_search or store_extension. Use this to judge whether an extension is actually relevant and safe.',
+    inputSchema: closedObject({ releaseId: { type: 'string' }, path: { type: 'string', maxLength: 1024 } }, ['releaseId'])
+  },
+  {
+    name: 'store_library',
+    description: 'List the store extensions installed on this Mac: local id, name, version, permissions, whether enabled, any available update, and whether each is yours to publish. Use to see what is already installed before installing again, or to find a local id to update, uninstall or publish.',
+    inputSchema: closedObject({})
+  },
+  {
+    name: 'store_install',
+    description: 'Download and install a Store extension into this Mac. Verifies the release against its published hashes and installs it sandboxed. Omit version for the latest release. Returns the installed local id and the permissions it was granted. Runs without a confirmation prompt. Prefer reading store_source first to confirm relevance.',
+    inputSchema: closedObject({ handle: { type: 'string' }, slug: { type: 'string' }, version: { type: 'string' } }, ['handle', 'slug'])
+  },
+  {
+    name: 'store_update',
+    description: 'Update an installed store extension to its latest release. Pass the local id (from store_library). Local edits are merged; a conflict stages the new release beside the folder for you to merge. Runs without a confirmation prompt.',
+    inputSchema: closedObject({ localId: { type: 'string' } }, ['localId'])
+  },
+  {
+    name: 'store_uninstall',
+    description: 'Remove an installed store extension by its local id (from store_library). Kept values are restored if it is reinstalled. Runs without a confirmation prompt.',
+    inputSchema: closedObject({ localId: { type: 'string' } }, ['localId'])
+  },
+  {
+    name: 'store_publish_prepare',
+    description: 'Dry-run a publish of a local extension without publishing: returns the coordinate, suggested version, tree hash, file count/size, whether it is a first publish, and any blocking or waivable secret/permission findings. Requires the user be signed in with a publisher handle. Call this before store_publish to inspect findings and pick a version. No confirmation is shown and nothing is uploaded.',
+    inputSchema: closedObject({ localId: { type: 'string' } }, ['localId'])
+  },
+  {
+    name: 'store_publish',
+    description: 'Publish a local extension to the Powermove Store. This is public and requires the user be signed in with a publisher handle. It ALWAYS asks the user to confirm in a native dialog naming the coordinate and version; nothing uploads until they accept. If publishing is blocked by scan findings, resolve them or pass waivers with reasons (see store_publish_prepare). If the user is not signed in, stop and ask them to sign in — do not retry.',
+    inputSchema: closedObject({
+      localId: { type: 'string' },
+      version: { type: 'string' },
+      notes: { type: 'string', maxLength: 4000 },
+      waivers: { type: 'array', items: closedObject({ path: { type: 'string' }, line: { type: 'integer', minimum: 0 }, reason: { type: 'string', minLength: 3, maxLength: 200 } }, ['path', 'line', 'reason']) },
+      listing: closedObject({ name: { type: 'string', maxLength: 80 }, tagline: { type: 'string', maxLength: 160 }, category: { type: 'string', enum: ['effects', 'transitions', 'panels', 'themes', 'commands', 'layers', 'tools'] }, licence: { type: 'string', enum: ['MIT'] } }, ['name', 'tagline', 'category', 'licence']),
+      visibility: { type: 'string', enum: ['public', 'unlisted'] }
+    }, ['localId'])
   }
 ] as const;
 
-/** App runs may inspect and stage extensions, but never touch a composition. */
+/** Store tools are not tied to a composition: they work in both app and
+ * project runs, so they join the app subset below. The read-only four also
+ * join the editor/planning inspection subset. */
+export const POWERMOVE_STORE_TOOL_NAMES = [
+  'store_search', 'store_extension', 'store_source', 'store_library',
+  'store_install', 'store_update', 'store_uninstall', 'store_publish_prepare', 'store_publish'
+] as const;
+
+export const POWERMOVE_STORE_READONLY_TOOL_NAMES = [
+  'store_search', 'store_extension', 'store_source', 'store_library'
+] as const;
+
+/** App runs may inspect and stage extensions and use the Store, but never
+ * touch a composition. */
 export const POWERMOVE_APP_AGENT_TOOLS = POWERMOVE_AGENT_TOOLS.filter((tool) =>
-  ['fork_builtin_extension', 'stage_fork_rebase', 'validate_effect'].includes(tool.name));
+  ['fork_builtin_extension', 'stage_fork_rebase', 'validate_effect', ...POWERMOVE_STORE_TOOL_NAMES].includes(tool.name));
 
 /** Read-only project inspection plus the minimum layout action required to
  * make a hidden panel observable. Editor/planning runs must never receive the
@@ -155,7 +225,8 @@ export const POWERMOVE_LIVE_INSPECTION_TOOL_NAMES = [
   'capture_panel',
   'get_workspace_state',
   'validate_effect',
-  'render_frames'
+  'render_frames',
+  ...POWERMOVE_STORE_READONLY_TOOL_NAMES
 ] as const;
 
 const liveInspectionToolNames = new Set<string>(POWERMOVE_LIVE_INSPECTION_TOOL_NAMES);

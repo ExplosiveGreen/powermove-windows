@@ -43,6 +43,7 @@ import { createStoreClient } from './cloud/store-client';
 import { createPublishApi, createPublisher } from './cloud/publish';
 import { createStoreInstaller } from './cloud/install';
 import { registerStoreIpc as registerExtensionStoreIpc } from './cloud/store-ipc';
+import { createStoreAgentGateway, type StoreAgentGateway } from './cloud/store-agent';
 import { ApiError, type MeDto } from '@powermove/registry/wire';
 import { CLOUD_IPC, CLOUD_UNREACHABLE } from '../shared/cloud-ipc';
 import { STORE_IPC } from '../shared/store-ipc';
@@ -896,6 +897,9 @@ if (!hasSingleInstanceLock) {
     /* The signed-in account decides whose a store install is (trust.ts). The
        registry boots before the account does; this reads through once it has. */
     let currentMe: () => MeDto | null = () => null;
+    /* The Store as the in-app agent uses it, built alongside the human's Store
+       IPC below and handed to the agent tool bridge. Null until then. */
+    let storeAgentGateway: StoreAgentGateway | null = null;
     let storeDeps: {
       registry: ExtensionRegistry;
       builtinIds: string[];
@@ -1090,6 +1094,26 @@ if (!hasSingleInstanceLock) {
           return true;
         }
       });
+      /* The same services, shaped for the in-app agent. It reuses these
+         instances, so agent installs/publishes fire the same library/update
+         notifications the Store screen listens for. The agent path has no IPC
+         event, so uninstall removes the record directly (keeping values) and
+         reconciles the renderer via refreshRestoredExtensions. Publishing
+         still goes through the publisher's native confirmation. */
+      storeAgentGateway = createStoreAgentGateway({
+        store: storeClient,
+        installer,
+        publisher,
+        provenance,
+        registry: deps.registry,
+        me: () => cloudSession?.me() ?? null,
+        signedIn: () => cloudSession?.currentToken() != null,
+        removeExtension: async (id) => {
+          await deps.registry.remove({ id });
+          return true;
+        },
+        ...(refreshRestoredExtensions ? { refreshExtensions: refreshRestoredExtensions } : {})
+      });
       const stopUpdateChecks = installer.startUpdateChecks();
       app.once('will-quit', stopUpdateChecks);
     }
@@ -1148,6 +1172,7 @@ if (!hasSingleInstanceLock) {
       agentToolCommand: process.execPath,
       agentToolCommandArgs: [...(app.isPackaged ? [] : [app.getAppPath()]), '--powermove-agent-tools'],
       refreshExtensions: refreshRestoredExtensions,
+      storeAgent: () => storeAgentGateway,
       openExternal: async (url) => { await shell.openExternal(url); }
     });
     onboardingFlow = new OnboardingFlow(ipcMain, {

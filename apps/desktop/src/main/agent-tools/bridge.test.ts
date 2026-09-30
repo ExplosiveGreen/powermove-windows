@@ -101,7 +101,8 @@ describe('native Powermove agent tool bridge', () => {
 
     const listed = await rpc(child, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
     expect(listed.result.tools.map((tool: any) => tool.name)).toEqual([
-      'fork_builtin_extension', 'get_project_state', 'select_layers', 'get_panel_layout', 'open_panel', 'get_panel_state', 'interact_panel', 'capture_panel', 'computer_use_panel', 'get_workspace_state', 'render_frames', 'apply_commands', 'edit_video', 'rollback_changes', 'validate_effect', 'stage_fork_rebase'
+      'fork_builtin_extension', 'get_project_state', 'select_layers', 'get_panel_layout', 'open_panel', 'get_panel_state', 'interact_panel', 'capture_panel', 'computer_use_panel', 'get_workspace_state', 'render_frames', 'apply_commands', 'edit_video', 'rollback_changes', 'validate_effect', 'stage_fork_rebase',
+      'store_search', 'store_extension', 'store_source', 'store_library', 'store_install', 'store_update', 'store_uninstall', 'store_publish_prepare', 'store_publish'
     ]);
 
     const state = await rpc(child, {
@@ -142,7 +143,8 @@ describe('native Powermove agent tool bridge', () => {
       params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } } });
     const listed = await rpc(child, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
     expect(listed.result.tools.map((tool: any) => tool.name)).toEqual([
-      'fork_builtin_extension', 'validate_effect', 'stage_fork_rebase'
+      'fork_builtin_extension', 'validate_effect', 'stage_fork_rebase',
+      'store_search', 'store_extension', 'store_source', 'store_library', 'store_install', 'store_update', 'store_uninstall', 'store_publish_prepare', 'store_publish'
     ]);
     for (const name of ['get_project_state', 'apply_commands']) {
       const denied = await rpc(child, { jsonrpc: '2.0', id: name, method: 'tools/call',
@@ -154,6 +156,41 @@ describe('native Powermove agent tool bridge', () => {
     const allowed = await bridge.callTool(session, 'validate_effect', { definition: {} });
     expect(allowed.ok).toBe(true);
     expect(owner.requests.map(item => item.tool)).toEqual(['validate_effect']);
+  });
+
+  it('routes store tools to the gateway in main, never the renderer', async () => {
+    const ipc = new FakeIpcMain();
+    const owner = new FakeWebContents(ipc);
+    const search = vi.fn().mockResolvedValue({ items: [{ handle: 'ada', slug: 'glow' }], nextCursor: null });
+    const bridge = new PowermoveAgentToolBridge(ipc as never, {
+      mcpServerPath: '/resources/agent-tools/mcp-server.mjs',
+      storeAgent: { search } as never
+    });
+    bridges.push(bridge);
+    const session = await bridge.openSession({ runId: 'store-run-1', owner: owner as never, baseRevision: 0 });
+
+    const response = await bridge.callTool(session, 'store_search', { query: 'glow' });
+
+    expect(search).toHaveBeenCalledWith({ query: 'glow' });
+    expect(response.ok).toBe(true);
+    expect(owner.requests).toHaveLength(0);
+    const item = response.content?.[0];
+    expect(item).toMatchObject({ type: 'text' });
+    expect(JSON.parse((item as { text: string }).text)).toEqual({ items: [{ handle: 'ada', slug: 'glow' }], nextCursor: null });
+  });
+
+  it('reports a clear error when the store is unavailable', async () => {
+    const ipc = new FakeIpcMain();
+    const owner = new FakeWebContents(ipc);
+    const bridge = new PowermoveAgentToolBridge(ipc as never, {
+      mcpServerPath: '/resources/agent-tools/mcp-server.mjs',
+      storeAgent: null
+    });
+    bridges.push(bridge);
+    const session = await bridge.openSession({ runId: 'store-run-2', owner: owner as never, baseRevision: 0 });
+
+    await expect(bridge.callTool(session, 'store_install', { handle: 'a', slug: 'b' })).rejects.toThrow(/Store is unavailable/);
+    expect(owner.requests).toHaveLength(0);
   });
 
   it('forks a built-in into the current run staging directory without calling the renderer', async () => {
