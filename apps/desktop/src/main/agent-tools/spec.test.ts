@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { POWERMOVE_AGENT_TOOLS, POWERMOVE_MCP_TOOL_NAMES } from './spec';
+import {
+  POWERMOVE_AGENT_TOOLS,
+  POWERMOVE_APP_AGENT_TOOLS,
+  POWERMOVE_LIVE_INSPECTION_TOOL_NAMES,
+  POWERMOVE_MCP_TOOL_NAMES,
+  POWERMOVE_STORE_READONLY_TOOL_NAMES,
+  POWERMOVE_STORE_TOOL_NAMES
+} from './spec';
 
 describe('Powermove agent tool spec', () => {
   it('publishes the closed fork_builtin_extension schema to MCP clients', () => {
@@ -20,5 +27,27 @@ describe('Powermove agent tool spec', () => {
       }
     });
     expect(POWERMOVE_MCP_TOOL_NAMES).toContain('mcp__powermove__fork_builtin_extension');
+  });
+
+  it('declares every store tool with a closed schema and MCP name', () => {
+    for (const name of POWERMOVE_STORE_TOOL_NAMES) {
+      const tool = POWERMOVE_AGENT_TOOLS.find((candidate) => candidate.name === name);
+      expect(tool, name).toBeDefined();
+      expect(tool?.inputSchema['additionalProperties']).toBe(false);
+      expect(POWERMOVE_MCP_TOOL_NAMES).toContain(`mcp__powermove__${name}`);
+    }
+  });
+
+  it('offers the store tools in app runs (no composition needed)', () => {
+    const appNames = new Set(POWERMOVE_APP_AGENT_TOOLS.map((tool) => tool.name));
+    for (const name of POWERMOVE_STORE_TOOL_NAMES) expect(appNames.has(name), name).toBe(true);
+  });
+
+  it('offers only the read-only store tools to editor inspection runs', () => {
+    const inspection = new Set<string>(POWERMOVE_LIVE_INSPECTION_TOOL_NAMES);
+    for (const name of POWERMOVE_STORE_READONLY_TOOL_NAMES) expect(inspection.has(name), name).toBe(true);
+    for (const write of ['store_install', 'store_update', 'store_uninstall', 'store_publish', 'store_publish_prepare']) {
+      expect(inspection.has(write), write).toBe(false);
+    }
   });
 });
