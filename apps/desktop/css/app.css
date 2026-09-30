@@ -48,14 +48,14 @@ html{background:transparent}
   --glass-edge-hi:none;
   --glass-rim-hi:rgb(var(--paper-rgb) / .09);
 }
-:is(.glass,#doc-strip,#toolbar-strip,.tb-export,.ps-navbtn.on,.sg-navbtn.on){
+:is(.glass,#doc-strip,#toolbar-strip,.ps-navbtn.on,.sg-navbtn.on){
   position:relative;isolation:isolate;
   background:var(--glass-fill);
   box-shadow:var(--glass-edge);
   -webkit-backdrop-filter:var(--glass-backdrop);backdrop-filter:var(--glass-backdrop);
 }
 /* Keep the hairline on other glass surfaces; titlebar tabs and tools use fill alone. */
-:is(.glass,.tb-export,.ps-navbtn.on,.sg-navbtn.on)::after{
+:is(.glass,.ps-navbtn.on,.sg-navbtn.on)::after{
   content:"";position:absolute;inset:0;z-index:-1;border-radius:inherit;pointer-events:none;
   padding:1px;background:var(--glass-rim);opacity:1;transition:none;
   -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
@@ -69,8 +69,8 @@ html{background:transparent}
   -webkit-mask-composite:xor;mask-composite:exclude;
 }
 @media (prefers-reduced-transparency: reduce){
-  :is(.glass,#doc-strip,#toolbar-strip,.tb-export,.ps-navbtn.on,.sg-navbtn.on){background:var(--ink-2);box-shadow:none;-webkit-backdrop-filter:none;backdrop-filter:none}
-  :is(.glass,.tb-export,.ps-navbtn.on,.sg-navbtn.on)::after,.glass-hi::after{display:none}
+  :is(.glass,#doc-strip,#toolbar-strip,.ps-navbtn.on,.sg-navbtn.on){background:var(--ink-2);box-shadow:none;-webkit-backdrop-filter:none;backdrop-filter:none}
+  :is(.glass,.ps-navbtn.on,.sg-navbtn.on)::after,.glass-hi::after{display:none}
   .glass-hi{background:var(--ctl-raised)!important;box-shadow:var(--ctl-edge)!important}
   :is(#toolbar .iconbtn.tl.on,#toolbar .iconbtn.tg.on,.project-doc.on,.project-strip-btn.on){background:var(--ctl-raised)!important;box-shadow:none!important}
 }

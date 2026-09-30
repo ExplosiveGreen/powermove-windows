@@ -2,6 +2,7 @@ import { createEngine } from './player';
 import { validateScene, type WebScene } from './scene';
 import { inspectSvgExport } from './svg-compatibility';
 import { fontAnchorOffset } from '../legacy/core/font-anchor';
+import { sizeAnchorOffset } from '../legacy/core/size-anchor';
 
 const NS = 'http://www.w3.org/2000/svg';
 export interface SvgPlayerOptions {
@@ -79,7 +80,8 @@ export async function createSvgPlayer(options: SvgPlayerOptions) {
           node.setAttribute('transform', `translate(${offset.x} ${offset.y})`);
         } else {
           const w = d.w || scene.project.w, h = d.h || scene.project.h;
-          if (layer.type === 'shape') node.setAttribute('transform', `translate(${-w / 2} ${-h / 2})`);
+          const offset = sizeAnchorOffset(PM, layer, t);
+          node.setAttribute('transform', `translate(${offset.x - (layer.type === 'shape' ? w / 2 : 0)} ${offset.y - (layer.type === 'shape' ? h / 2 : 0)})`);
           if (node.tagName === 'ellipse') { for (const [k, v] of Object.entries({ cx: w / 2, cy: h / 2, rx: w / 2, ry: h / 2 })) node.setAttribute(k, String(v)); }
           else { node.setAttribute('width', String(w)); node.setAttribute('height', String(h)); node.setAttribute('rx', String(d.radius || 0)); }
           if (layer.type === 'shape') { node.setAttribute('stroke', d.strokeColor || '#ffffff'); node.setAttribute('stroke-width', String(d.stroke || 0)); }

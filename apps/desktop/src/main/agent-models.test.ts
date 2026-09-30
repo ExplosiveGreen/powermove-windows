@@ -3,6 +3,18 @@ import { AGENT_MODELS, modelEffort, modelEfforts, setDiscoveredClaudeModels, set
 import { buildClaudeArgv } from './claude/adapter';
 import { isCodexRunRequest } from './codex/runner';
 
+it('offers GPT-6.1 Sol before discovery and accepts its Codex reasoning efforts', () => {
+  expect(AGENT_MODELS.chatgpt).toContainEqual({ id: 'gpt-6.1-sol', label: 'GPT 6.1 Sol' });
+  expect(modelEfforts('chatgpt', 'gpt-6.1-sol')).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+  for (const reasoningEffort of modelEfforts('chatgpt', 'gpt-6.1-sol')) {
+    expect(isCodexRunRequest({
+      id: 'sol-6-1-model-test', provider: 'chatgpt', mode: 'autonomous', prompt: 'test',
+      schema: null, images: [], model: 'gpt-6.1-sol', reasoningEffort, access: 'project',
+      projectId: 'test', projectName: 'Test', projectJSON: '{}', attachments: [], consentToken: null,
+    })).toBe(true);
+  }
+});
+
 it('passes every listed Claude model to the native runtime with supported effort', () => {
   for (const model of AGENT_MODELS.claude) {
     const args = buildClaudeArgv({ model: model.id, reasoningEffort: 'xhigh', schema: {}, prompt: 'test', imagePaths: [], sessionId: null, access: 'editor' });
@@ -32,7 +44,7 @@ it('uses discovered Codex models and their available efforts', () => {
     id: 'gpt-5.5', label: 'GPT-5.5', reasoningEfforts: ['none', 'low', 'medium']
   }]);
   expect(AGENT_MODELS.chatgpt.map(model => model.id)).toEqual([
-    'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5'
+    'gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5'
   ]);
   expect(modelEfforts('chatgpt', 'gpt-6-astra')).toEqual(['low', 'medium', 'max']);
   expect(modelEffort('chatgpt', 'gpt-6-astra', 'high')).toBe('medium');
@@ -57,4 +69,12 @@ it('adds live Claude models while preserving bundled choices and effort limits',
   expect(AGENT_MODELS.claude.find(model => model.id === 'claude-new-6')?.label).toBe('Claude New 6');
   expect(modelEfforts('claude', 'claude-new-6')).toEqual(['low', 'high']);
   expect(modelEffort('claude', 'claude-new-6', 'max')).toBe('high');
+});
+
+it('uses account-specific GPT-6.1 Sol efforts without duplicating the bundled choice', () => {
+  setDiscoveredCodexModels([{ id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol', reasoningEfforts: ['low', 'medium', 'high'] }]);
+  expect(AGENT_MODELS.chatgpt.filter(model => model.id === 'gpt-6.1-sol')).toEqual([
+    { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' },
+  ]);
+  expect(modelEffort('chatgpt', 'gpt-6.1-sol', 'ultra')).toBe('high');
 });

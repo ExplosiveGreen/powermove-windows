@@ -53,7 +53,7 @@ test('multiple graph curves, velocity editing and a cached preview retain editab
  await page.evaluate(()=>{const PM=(window as any).PM,timeline=PM.Kernel.services.get('timeline');const a=PM.mkLayer('shape',{name:'A',p:{'position.x':160,'position.y':180},d:{w:60,h:60,color:'#ff8000'}}),b=PM.mkLayer('shape',{name:'B',p:{'position.x':420,'position.y':180},d:{w:60,h:60,color:'#5599ff'}});PM.proj.layers=[a,b];PM.ProjectIndex.invalidate();for(const l of [a,b]){PM.setKeyOn(l.p['position.y'],0,100,'ease',30);PM.setKeyOn(l.p['position.y'],1,240,'ease',30);}PM.touch();PM.selectLayers([a.id,b.id]);PM.sel.chan='position.y';timeline.reveal(a,['position.y']);timeline.reveal(b,['position.y']);PM.sel.keys=PM.proj.layers.flatMap((l:any)=>l.p['position.y'].kf.map((k:any)=>k.i));PM.invalidate();});
  await expect(page.locator('.color-field').first()).toContainText('Mixed');
  await page.getByRole('button',{name:'Graph editor (Shift+F3)',exact:true}).click();
- await page.waitForFunction(()=>{const PM=(window as any).PM,timeline=PM.Kernel.services.get('timeline');return timeline._graph?.series?.length>=2;});
+ await page.waitForFunction(()=>{const PM=(window as any).PM,timeline=PM.Kernel.services.get('timeline');return timeline._graph?.linked?.length>=2;});
  await page.evaluate(()=>{const PM=(window as any).PM;PM.sel.keys=PM.proj.layers.flatMap((l:any)=>l.p['position.y'].kf.map((k:any)=>k.i));});
  const graphKey=await page.evaluate(()=>{const PM=(window as any).PM,timeline=PM.Kernel.services.get('timeline'),p=timeline._graph.points.find((p:any)=>p.x>timeline.gut+8);return {x:p.x,y:p.y};});
  await page.locator('#tl-canvas').click({button:'right',position:graphKey});

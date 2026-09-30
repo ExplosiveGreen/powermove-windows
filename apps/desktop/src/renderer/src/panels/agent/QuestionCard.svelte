@@ -5,23 +5,31 @@
   /* A question from the agent, answered in place. `reply` questions hold the
      run open (it may keep working meanwhile); `message` questions were posted
      without waiting and are answered with a follow-up message. Options and a
-     typed answer combine; nothing is sent until the person chooses Answer. */
+     typed answer combine; nothing is sent until the person chooses Answer.
+     A multi-select question takes any number of options. */
 
   type QuestionStep = Extract<TraceStep, { kind: 'question' }>;
   let { PM, step }: { PM: Record<string, any>; step: QuestionStep } = $props();
 
-  let chosen = $state<Record<string, string>>({});
+  let chosen = $state<Record<string, string[]>>({});
   let typed = $state<Record<string, string>>({});
 
   const open = $derived(step.status === 'open');
   const answers = $derived(Object.fromEntries(step.questions.map(item => [
     item.id,
-    [chosen[item.id], typed[item.id]?.trim()].filter((value): value is string => Boolean(value))
+    [...(chosen[item.id] ?? []), typed[item.id]?.trim()].filter((value): value is string => Boolean(value))
   ])));
   const answered = $derived(Object.values(answers).some(list => list.length > 0));
 
-  function choose(id: string, label: string): void {
-    chosen[id] = chosen[id] === label ? '' : label;
+  function isChosen(id: string, label: string): boolean {
+    return chosen[id]?.includes(label) ?? false;
+  }
+
+  function choose(id: string, label: string, multiple: boolean): void {
+    const current = chosen[id] ?? [];
+    chosen[id] = current.includes(label)
+      ? current.filter(value => value !== label)
+      : multiple ? [...current, label] : [label];
   }
 
   function submit(): void {
@@ -47,13 +55,18 @@
         {#if item.options.length}
           <div class="agent-question-options" role="group" aria-label={item.question}>
             {#each item.options as option (option.label)}
-              <button type="button" class="agent-question-option" class:is-chosen={chosen[item.id] === option.label}
-                aria-pressed={chosen[item.id] === option.label} onclick={() => choose(item.id, option.label)}>
-                <span><Markdown text={option.label} inline links={false} /></span>
-                {#if option.description}<small><Markdown text={option.description} inline links={false} /></small>{/if}
+              <button type="button" class="agent-question-option" class:is-chosen={isChosen(item.id, option.label)}
+                class:is-multiple={item.multiSelect} aria-pressed={isChosen(item.id, option.label)}
+                onclick={() => choose(item.id, option.label, item.multiSelect === true)}>
+                <i class="agent-question-mark" aria-hidden="true"></i>
+                <span class="agent-question-label">
+                  <span><Markdown text={option.label} inline links={false} /></span>
+                  {#if option.description}<small><Markdown text={option.description} inline links={false} /></small>{/if}
+                </span>
               </button>
             {/each}
           </div>
+          {#if item.multiSelect}<p class="agent-question-hint">Choose any that apply</p>{/if}
         {/if}
         {#if item.allowOther}
           <input class="agent-question-input" type={item.secret ? 'password' : 'text'} autocomplete="off" spellcheck={!item.secret}
@@ -82,16 +95,25 @@
   .agent-question-header { color: var(--tx-4); font-size: var(--fs-xs); font-weight: var(--fw-medium); }
   .agent-question-text { margin: 0; color: var(--tx); font-size: var(--fs-md); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
   .is-settled .agent-question-text { color: var(--tx-2); font-size: var(--fs-sm); }
-  .agent-question-options { display: flex; flex-direction: column; gap: 4px; }
+  .agent-question-options { display: flex; flex-direction: column; gap: 2px; }
   .agent-question-option {
-    display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; padding: 6px 9px;
+    display: flex; align-items: flex-start; gap: 9px; width: 100%; padding: 6px 9px;
     border-radius: var(--r-md); color: var(--tx-2); font-size: var(--fs-sm); text-align: left;
     transition: background var(--dur-1), color var(--dur-1);
   }
   .agent-question-option:hover { background: var(--ink-2); color: var(--tx); }
-  .agent-question-option.is-chosen { background: var(--tx); color: var(--bg-panel); }
+  .agent-question-option.is-chosen { background: var(--ink-2); color: var(--tx); }
+  .agent-question-label { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
   .agent-question-option small { color: var(--tx-3); font-size: var(--fs-xs); line-height: 1.4; }
-  .agent-question-option.is-chosen small { color: color-mix(in srgb, var(--bg-panel) 72%, transparent); }
+  /* A bullet that fills when chosen: round for one answer, square for several. */
+  .agent-question-mark {
+    flex: none; width: 8px; height: 8px; margin-top: 6px; border-radius: 50%;
+    box-shadow: inset 0 0 0 1.5px var(--tx-4); transition: background var(--dur-1), box-shadow var(--dur-1);
+  }
+  .agent-question-option.is-multiple .agent-question-mark { border-radius: 2px; }
+  .agent-question-option:hover .agent-question-mark { box-shadow: inset 0 0 0 1.5px var(--tx-2); }
+  .agent-question-option.is-chosen .agent-question-mark { background: var(--accent); box-shadow: inset 0 0 0 1.5px var(--accent); }
+  .agent-question-hint { margin: 0; color: var(--tx-4); font-size: var(--fs-xs); }
   .agent-question-input {
     height: 28px; padding: 0 9px; border-radius: var(--r-md); background: var(--bg-panel);
     color: var(--tx); font-size: var(--fs-sm); box-shadow: inset 0 0 0 var(--hairline) var(--line-2);

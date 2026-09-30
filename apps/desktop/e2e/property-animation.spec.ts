@@ -111,3 +111,33 @@ test('text, shader, extension, blend, and mask stopwatches animate their real va
   }
   expect(session.diagnostics.pageErrors).toEqual([]);
 });
+
+test('dragging a timeline value adjusts the same property on every selected layer in one undo step', async ({ session }) => {
+  const { page } = session;
+  await page.waitForFunction(() => { const PM = (window as any).PM, timeline = PM.Kernel.services.get('timeline'); return !!timeline?.cv; });
+  const ids = await page.evaluate(() => {
+    const PM = (window as any).PM, timeline = PM.Kernel.services.get('timeline');
+    PM.replaceProject(PM.mkProject({ name: 'Bulk value drag', dur: 5 }));
+    const a = PM.mkLayer('shape', { name: 'A', dur: 5, p: { 'position.x': 100, 'position.y': 0 }, d: { w: 60, h: 60 } });
+    const b = PM.mkLayer('shape', { name: 'B', dur: 5, p: { 'position.x': 300, 'position.y': 500 }, d: { w: 60, h: 60 } });
+    PM.proj.layers = [a, b]; PM.ProjectIndex.invalidate(); PM.touch();
+    PM.selectLayers([a.id, b.id]); PM.sel.chan = 'position.y';
+    timeline.reveal(a, ['position.y']); timeline.reveal(b, ['position.y']);
+    PM.bus.emit('layers'); PM.invalidate();
+    return [a.id, b.id];
+  });
+  const rowPoint = (id: string) => page.evaluate(id => {
+    const PM = (window as any).PM, timeline = PM.Kernel.services.get('timeline'), rect = timeline.cv.getBoundingClientRect();
+    const index = timeline.rows.findIndex((row: any) => row.L.id === id && row.key === 'position.y');
+    return index < 0 ? null : { x: rect.x + timeline.propertyValueX + 12, y: rect.y + timeline.ruler + index * timeline.row - timeline.scrollY + timeline.row / 2 };
+  }, id);
+  await expect.poll(() => rowPoint(ids[1]!)).not.toBeNull();
+  const coords = (await rowPoint(ids[1]!))!;
+  const values = () => page.evaluate(ids => ids.map(id => { const PM = (window as any).PM, L = PM.L(id); return PM.evP(L, L.p['position.y'], PM.time ?? 0, 'position.y'); }), ids);
+  await page.mouse.move(coords.x, coords.y); await page.mouse.down();
+  await page.mouse.move(coords.x + 30, coords.y, { steps: 5 }); await page.mouse.up();
+  await expect.poll(values).toEqual([30, 530]);
+  await page.evaluate(() => (window as any).PM.hist.undo());
+  expect(await values()).toEqual([0, 500]);
+  expect(session.diagnostics.pageErrors).toEqual([]);
+});

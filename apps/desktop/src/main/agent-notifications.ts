@@ -10,9 +10,13 @@ export function registerAgentNotifications(ipc: Pick<IpcMain, 'handle'>, ctx: {
     if (!ctx.isTrustedSenderContents(event.sender)) return;
     if (!options || !AGENT_SOUNDS.includes(options.sound)) return;
     if (options.preview !== true && Notification.isSupported()) {
-      const notification = new Notification({
-        title: 'Powermove', body: 'Your agent has finished. Your result is ready.', silent: true,
-      });
+      // A question names what the agent is asking; anything else is a finish.
+      const question = typeof options.question === 'string'
+        ? options.question.replace(/[\u0000-\u001f\u007f-\u009f]+/gu, ' ').replace(/\s+/gu, ' ').trim().slice(0, 240)
+        : '';
+      const notification = new Notification(question
+        ? { title: 'Your agent has a question', body: question, silent: true }
+        : { title: 'Powermove', body: 'Your agent has finished. Your result is ready.', silent: true });
       notification.on('click', () => {
         const window = BrowserWindow.fromWebContents(event.sender);
         if (!window || window.isDestroyed()) return;

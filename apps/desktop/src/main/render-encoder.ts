@@ -31,7 +31,10 @@ export class RenderEncoder {
   async finish(token:string,owner:number){const job=this.job(token,owner);if(!job.bytes||job.bytes%job.frameBytes)throw new Error('Incomplete render frame');job.process.stdin.end();await job.done;
     const audio=await stat(job.audio).catch(()=>null);if(audio?.size){const mux=path.join(job.dir,job.options.format==='prores'?'final.mov':'final.mp4');await new Promise<void>((resolve,reject)=>{const p=spawn(this.binary,['-hide_banner','-loglevel','error','-i',job.file,'-i',job.audio,'-map','0:v','-map','1:a','-c:v','copy','-c:a',job.options.format==='prores'?'pcm_s24le':'aac','-shortest','-y',mux]);let error='';p.stderr.on('data',d=>error+=d);p.on('error',reject);p.on('close',code=>code===0?resolve():reject(new Error(error)));});job.file=mux;}return job.file;
   }
-  async release(token:string,owner:number){const job=this.job(token,owner);this.jobs.delete(token);if(job.process.exitCode===null)job.process.kill();await job.done.catch(()=>undefined);await rm(job.dir,{recursive:true,force:true});}
+  // A cancelled job's output is discarded. ffmpeg defers SIGTERM while it is
+  // blocked reading frames from the still-open stdin, so close the pipe and
+  // kill it outright; otherwise release never settles and the export stays busy.
+  async release(token:string,owner:number){const job=this.job(token,owner);this.jobs.delete(token);if(job.process.exitCode===null&&job.process.signalCode===null){job.process.stdin.destroy();job.process.kill('SIGKILL');}await job.done.catch(()=>undefined);await rm(job.dir,{recursive:true,force:true});}
 }
 export function registerRenderEncoder(ipc:IpcMain,ctx:{isTrustedSender:(event:any)=>boolean}) {
   const binary=app.isPackaged?path.join(process.resourcesPath,'encoder','ffmpeg'):path.join(app.getAppPath(),'node_modules','ffmpeg-static','ffmpeg');

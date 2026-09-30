@@ -58,4 +58,34 @@ test.describe('@export-mp4 H.264 delivery', () => {
     expect(exported.presentedFrames).toBeGreaterThan(0);
     expect(session.diagnostics.pageErrors).toEqual([]);
   });
+  test('cancelling releases the encoder so playback resumes', async ({ session }) => {
+    test.setTimeout(45_000);
+    await session.openEditor();
+    const { page } = session;
+    await session.app.evaluate(({ dialog }, filePath) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath }); },
+      path.join(session.userData, 'cancelled.mp4'));
+    await page.evaluate(() => {
+      const PM = (window as any).PM;
+      PM.pause();
+      PM.proj = PM.mkProject({ name: 'Cancel MP4', w: 640, h: 360, fps: 30, dur: 30, bg: '#ff6633' });
+      (window as any).__exportResult = PM.Export.run({ format: 'mp4', audio: false, mblur: false, range: 'all' });
+    });
+    const progress = page.getByRole('dialog', { name: 'Exporting Cancel MP4' });
+    await expect(progress.getByRole('progressbar')).toHaveAttribute('aria-valuenow', /[1-9]/);
+    await progress.getByRole('button', { name: 'Cancel', exact: true }).click();
+    // ffmpeg ignores SIGTERM while blocked on its open frame pipe; a hung
+    // release left Export.busy set, which suspends the preview loop.
+    const result = await page.evaluate(async () => {
+      const PM = (window as any).PM;
+      const exported = await (window as any).__exportResult;
+      PM.setTime(0, { force: true }); PM.play();
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const advanced = PM.time; PM.pause();
+      return { exported, busy: PM.Export.busy, advanced };
+    });
+    expect(result.exported).toEqual({ cancelled: true });
+    expect(result.busy).toBe(false);
+    expect(result.advanced).toBeGreaterThan(0.2);
+    expect(session.diagnostics.pageErrors).toEqual([]);
+  });
 });

@@ -1755,9 +1755,7 @@ function drawGutter(c: any, W: any, H: any, dynamicOnly = false): boolean {
       const iy = y + T.row / 2;
       c.fillStyle = pal.body; roundRect(c, 74 + indent, iy - 8, 16, 16, 3); c.fill();
       c.strokeStyle = pal.ring; c.lineWidth = 1; c.stroke();
-      c.font = '600 8px ' + fui(); c.fillStyle = pal.primary; c.textAlign = 'center';
-      c.fillText((L.type === 'group' ? 'G' : BADGE[L.type] || '·').toUpperCase().slice(0, 1), 82 + indent, iy + .5);
-      c.textAlign = 'left';
+      icoLayerType(c, L.type, 82 + indent, iy, pal.primary);
       c.font = (sel ? '500 ' : '400 ') + '12px ' + fui();
       c.fillStyle = sel ? theme.tx : theme.tx2;
       const hasParentControl = layerSupportsTransform(L.type);
@@ -1825,9 +1823,7 @@ function drawGutter(c: any, W: any, H: any, dynamicOnly = false): boolean {
       c.globalAlpha = .7;
       c.fillStyle = pal.body; roundRect(c, 74, iy - 8, 16, 16, 3); c.fill();
       c.setLineDash([3, 2]); c.strokeStyle = pal.primary; c.lineWidth = 1; c.stroke(); c.setLineDash([]);
-      c.font = '600 8px ' + fui(); c.fillStyle = pal.primary; c.textAlign = 'center'; c.textBaseline = 'middle';
-      c.fillText((type ? BADGE[type] : 'new').toUpperCase().slice(0, 1), 82, iy + .5);
-      c.textAlign = 'left';
+      icoLayerType(c, type, 82, iy, pal.primary);
       c.font = '400 12px ' + fui(); c.fillStyle = theme.tx2;
       clipText(c, d.name, 96, iy, Math.max(0, T.gut - 12 - 96));
       c.globalAlpha = 1;
@@ -1871,6 +1867,49 @@ function icoAnimationDiamond(c: any, x: number, y: number, animated: boolean, cu
   c.save(); c.strokeStyle = animated ? theme.accent : theme.tx3; c.fillStyle = theme.accent; c.lineWidth = 1.2;
   c.beginPath(); c.moveTo(x, y - 5); c.lineTo(x + 4, y); c.lineTo(x, y + 5); c.lineTo(x - 4, y); c.closePath();
   if (current) c.fill(); else c.stroke(); c.restore();
+}
+const LAYER_TYPE_ICONS: Record<string, string> = {
+  group: 'stack', text: 'type', shape: 'shape', solid: 'solid', shader: 'wand', extension: 'puzzle',
+  null: 'anchor', image: 'image', video: 'film', audio: 'music'
+};
+type IconPart = { path: Path2D; fill: boolean; stroke: boolean; width: number };
+const layerIconParts = new Map<string, IconPart[]>();
+/* Draws the app-registry (Phosphor-style) glyph for a layer type, tinted to `color`. */
+function icoLayerType(c: any, type: string | null, x: number, y: number, color: string) {
+  const name = LAYER_TYPE_ICONS[type ?? ''] ?? 'dot';
+  let parts = layerIconParts.get(name);
+  if (!parts) {
+    const inherited = (el: Element, attr: string) => {
+      for (let n: Element | null = el; n && n.tagName.toLowerCase() !== 'svg'; n = n.parentElement) if (n.hasAttribute(attr)) return n.getAttribute(attr);
+      return null;
+    };
+    parts = Array.from(iconNode(api, name).querySelectorAll('path,rect,circle'), el => {
+      const num = (k: string) => Number(el.getAttribute(k) ?? 0);
+      let path: Path2D;
+      if (el.tagName === 'path') path = new Path2D(el.getAttribute('d') ?? '');
+      else {
+        path = new Path2D();
+        if (el.tagName === 'rect') {
+          const rx = num('rx');
+          path.roundRect(num('x'), num('y'), num('width'), num('height'), rx);
+        } else path.arc(num('cx'), num('cy'), num('r'), 0, Math.PI * 2);
+      }
+      const fillAttr = inherited(el, 'fill'), strokeAttr = inherited(el, 'stroke');
+      return {
+        path, fill: fillAttr !== 'none', stroke: !!strokeAttr && strokeAttr !== 'none',
+        width: Number(inherited(el, 'stroke-width') ?? 16)
+      };
+    });
+    layerIconParts.set(name, parts);
+  }
+  const size = 11, k = size / 256;
+  c.save(); c.translate(x - size / 2, y - size / 2); c.scale(k, k);
+  c.fillStyle = color; c.strokeStyle = color; c.lineCap = 'round'; c.lineJoin = 'round';
+  for (const part of parts) {
+    if (part.fill) c.fill(part.path);
+    if (part.stroke) { c.lineWidth = part.width; c.stroke(part.path); }
+  }
+  c.restore();
 }
 let scaleLinkPaths: Path2D[] | null = null;
 function icoScaleLink(c: any, x: number, y: number, linked: boolean) {
@@ -2133,6 +2172,18 @@ function drawGraph(c: any, W: any, H: any) {
     c.fillText('Select keyframes in the timeline to edit their curves', (W + T.gut) / 2, (H + plotTop) / 2);
     c.textAlign = 'left'; c.restore(); return;
   }
+  /* The same property on several layers edits as one curve: draw the focused
+     layer's and let easing and key edits fan out to the rest through `linked`. */
+  const linked = series;
+  const shared = new Map<string, any>();
+  for (const axis of series) {
+    const current = shared.get(axis.key);
+    if (!current || (axis.L.id === target.L.id && current.L.id !== target.L.id)) shared.set(axis.key, axis);
+  }
+  series = series.filter((axis: any) => shared.get(axis.key) === axis);
+  // Hidden curves must not keep hit targets from a frame that still drew them.
+  for (const axis of linked) if (!series.includes(axis)) axis.prop.kf.forEach((key: any) => api.uiState.setKeyHandles(key, { ho: null, hi: null, pt: null }));
+  const layerCount = (axis: any) => linked.filter((other: any) => other.key === axis.key).length;
   const L = target.L, speedMode=T.graphType==='speed';
   /* "Merge selected curves" folds the selected channels into the single curve
      they describe together: the magnitude of the combined vector (combined
@@ -2167,7 +2218,7 @@ function drawGraph(c: any, W: any, H: any) {
   if (T.graphDragBounds) [vmin, vmax] = T.graphDragBounds;
   const top = plotTop + 42, bot = Math.max(top + 1, H - 16);
   const v2y = (v: any) => bot - (v - vmin) / (vmax - vmin) * (bot - top);
-  T._graph = { target, series, vmin, vmax, v2y, y2v: (y: any) => vmin + (bot - y) / (bot - top) * (vmax - vmin), points: [], selectionBounds: null, transform: null };
+  T._graph = { target, series, linked, vmin, vmax, v2y, y2v: (y: any) => vmin + (bot - y) / (bot - top) * (vmax - vmin), points: [], selectionBounds: null, transform: null };
 
   /* value gridlines */
   c.strokeStyle = INK.grid; c.font = '400 9.5px ' + fui(); c.fillStyle = theme.tx3;
@@ -2300,7 +2351,8 @@ function drawGraph(c: any, W: any, H: any) {
   for (const [index, axis] of series.entries()) {
     const label = axis.label === 'fontAxis.wght' ? 'Weight' : axis.label;
     const unit = api.model.CH[axis.key]?.unit;
-    const text = label + (unit ? ` (${unit}${speedMode ? '/s' : ''})` : speedMode ? ' /s' : '');
+    const layers = layerCount(axis);
+    const text = label + (unit ? ` (${unit}${speedMode ? '/s' : ''})` : speedMode ? ' /s' : '') + (layers > 1 ? ` · ${layers} layers` : '');
     const width = c.measureText(text).width + 25;
     if (legendX + width > W - 8) { c.fillStyle = theme.tx3; c.fillText('…', legendX, plotTop + 17); break; }
     c.fillStyle = graphAxisColor(axis.key, index);
@@ -2778,15 +2830,58 @@ function scaleValueCommand(row: any, index: number, time: number) {
   return (value: number) => typeof binding.command === 'function' ? binding.command(value) : { ...binding.command, value };
 }
 
+/** The dragged row plus the same property on every other selected, unlocked layer. */
+function propertyDragRows(row: any) {
+  const peers = api.selection.layers()
+    .filter((id: string) => id !== row.L.id)
+    .map((id: string) => api.model.layer(id))
+    .filter((L: any) => L && !L.lock && !api.groups.ancestors(L).some((group: any) => group.lock))
+    .map((L: any) => {
+      const peer = timelineProperties(api, L, space3d).find((item: any) => item.key === row.key);
+      return peer && { kind: 'prop', L, ...peer };
+    })
+    .filter(Boolean);
+  return [row, ...peers];
+}
+
+/** Selected keyframes this value field should edit. With the playhead resting
+ *  between selected keys (no key under it), editing the field adjusts those keys
+ *  rather than dropping a new keyframe at the playhead. */
+function selectedValueKeys(row: any, axes: any[], time: number) {
+  const selected = new Set(api.selection.resolveSelectedKeys());
+  if (!selected.size || axes.some(axis => api.anim.hasKeyAt(row.L, axis.prop, time))) return null;
+  const perAxis = axes.map(axis => axis.prop.kf.filter((key: any) => selected.has(key) && typeof key.v === 'number')
+    .map((key: any) => ({ key, start: key.v as number })));
+  return perAxis.some(keys => keys.length) ? perAxis : null;
+}
+/** Move every selected key by the same amount (`to - from`), so gaps between keys never change;
+ *  a linked scale applies that amount to both axes. */
+function applySelectedValueKeys(keys: Array<Array<{ key: any; start: number }>>, index: number, from: number, to: number, linked: boolean) {
+  keys.forEach((axisKeys, axisIndex) => {
+    if (!linked && axisIndex !== index) return;
+    axisKeys.forEach(({ key, start }) => { key.v = start + (to - from); });
+  });
+  api.anim.touch();
+}
+
 function dragPropertyValue(event: any, row: any, rowIndex: number) {
-  let axes = trackChannels(row).map(axis => ({ ...axis, value: api.anim.evP(row.L, axis.prop, api.transport.time(), axis.key), meta: propertyMetadata(api, row.L, axis.key) }));
+  const time = api.transport.time();
   const scaleIndex = isScaleTrack(row) ? scaleValueIndex(event.offsetX) : 0;
-  if (!axes.every(axis => typeof axis.value === 'number')) {
+  const channels = (target: any) => trackChannels(target).map(axis => ({ ...axis, value: api.anim.evP(target.L, axis.prop, time, axis.key), meta: propertyMetadata(api, target.L, axis.key) }));
+  if (!channels(row).every(axis => typeof axis.value === 'number')) {
     editPropertyValue(row, rowIndex, scaleIndex); return;
   }
-  const time = api.transport.time();
-  const scaleCommand = isScaleTrack(row) ? scaleValueCommand(row, scaleIndex, time) : null;
-  if (scaleCommand) axes = [axes[scaleIndex]!];
+  // Every selected layer showing this property moves by the same drag delta,
+  // each from its own starting value.
+  const targets = propertyDragRows(row).flatMap((target: any) => {
+    const axes = channels(target);
+    if (!axes.every(axis => typeof axis.value === 'number')) return [];
+    const keyed = selectedValueKeys(target, trackChannels(target), time);
+    const scaleCommand = !keyed && isScaleTrack(target) ? scaleValueCommand(target, scaleIndex, time) : null;
+    return [{ target, axes: scaleCommand || (keyed && isScaleTrack(target)) ? [axes[scaleIndex]!] : axes, scaleCommand, keyed }];
+  });
+  const keyedEdit = targets.some(item => item.keyed);
+  const label = targets.length > 1 ? `Adjust ${row.label} on ${targets.length} layers` : `Adjust ${row.label}`;
   let editing = false;
   let control: any;
   const cancelOnEscape = (event: KeyboardEvent) => {
@@ -2800,18 +2895,19 @@ function dragPropertyValue(event: any, row: any, rowIndex: number) {
     cursor: 'ew-resize',
     move: (dx: number, _dy: number, ev: any) => {
       if (!editing && Math.abs(dx) < 3) return;
-      if (!editing) { api.edit.begin(`Adjust ${row.label}`, { origin: 'timeline' }); editing = true; }
-      axes.forEach(axis => {
+      if (!editing) { keyedEdit ? api.history.begin(label) : api.edit.begin(label, { origin: 'timeline' }); editing = true; }
+      for (const { target, axes, scaleCommand, keyed } of targets) axes.forEach(axis => {
         const value = draggedPropertyValue(axis.value, dx, axis.meta, !!ev.altKey, !!ev.shiftKey);
-        if (scaleCommand) {
+        if (keyed) applySelectedValueKeys(keyed, trackChannels(target).findIndex(item => item.key === axis.key), axis.value, value, !!target.L.scaleLinked && isScaleTrack(target));
+        else if (scaleCommand) {
           const commands = scaleCommand(value);
           for (const command of Array.isArray(commands) ? commands : [commands]) api.edit.dispatch(command);
-        } else api.edit.dispatch({ type: 'set_property', target: row.L.id, path: axis.key, value, time, mode: 'auto', preserveHandEdits: false });
+        } else api.edit.dispatch({ type: 'set_property', target: target.L.id, path: axis.key, value, time, mode: 'auto', preserveHandEdits: false });
       });
       invalidate();
     },
-    up: () => { cleanup(); if (editing) api.edit.commit(`Adjust ${row.label}`); else editPropertyValue(row, rowIndex, scaleIndex); },
-    cancel: () => { cleanup(); if (editing) api.edit.cancel(); }
+    up: () => { cleanup(); if (editing) keyedEdit ? api.history.commit(label) : api.edit.commit(label); else editPropertyValue(row, rowIndex, scaleIndex); },
+    cancel: () => { cleanup(); if (editing) keyedEdit ? (api.history.cancel(), api.anim.touch()) : api.edit.cancel(); }
   });
 }
 
@@ -2853,7 +2949,12 @@ function editPropertyValue(row: any, rowIndex: number, scaleIndex = 0) {
     else if (save) {
       const parts = axes.length > 1 ? input.value.split(',').map((value: string) => value.trim()) : [input.value];
       const next = values.map((value, index) => typeof value === 'number' ? Number(parts[index] ?? parts[0]) : typeof value === 'boolean' ? parts[index] === 'true' : parts[index]);
-      if (next.every(value => typeof value !== 'number' || Number.isFinite(value))) api.edit.apply(scaleCommand ? scaleCommand(Number(next[0])) : axes.map((axis, index) => ({
+      const keyed = next.every(value => typeof value === 'number' && Number.isFinite(value)) ? selectedValueKeys(row, trackChannels(row), time) : null;
+      if (keyed) {
+        const all = trackChannels(row);
+        api.history.do(`Edit ${row.label}`, () => axes.forEach((axis, index) => applySelectedValueKeys(keyed, all.findIndex(item => item.key === axis.key), values[index] as number, next[index] as number, scale && !!row.L.scaleLinked)));
+        api.transport.invalidate();
+      } else if (next.every(value => typeof value !== 'number' || Number.isFinite(value))) api.edit.apply(scaleCommand ? scaleCommand(Number(next[0])) : axes.map((axis, index) => ({
         type: 'set_property', target: row.L.id, path: axis.key, value: next[index], time, mode: 'auto', preserveHandEdits: false
       })), { label: `Edit ${row.label}`, origin: 'timeline' });
     }
@@ -3278,7 +3379,7 @@ function graphDown(e: any, x: any, y: any) {
 }
 
 function dragGraphSelection(e: any, g: any, L: any, click?: () => void) {
-  const visibleProperties = new Set(g.series.map((axis: any) => axis.prop));
+  const visibleProperties = new Set((g.linked ?? g.series).map((axis: any) => axis.prop));
   const entries = selectedKeyEntries().filter((entry: any) => !entry.L.lock && visibleProperties.has(entry.prop));
   if (!entries.length) return;
   const snapshot = captureKeyframeGesture(entries);
@@ -3420,7 +3521,7 @@ function dragGraphTransform(e: any, g: any, grip: GraphTransformHandle) {
 function dragHandle(e: any, k: any, which: 'eo' | 'ei', g: any, kf: any, L: any, clickedAxis: any) {
   if (L.lock) return;
   const trackKey = clickedAxis?.trackKey ?? clickedAxis?.key;
-  const axes = g.series.filter((axis: any) => (axis.trackKey ?? axis.key) === trackKey && !axis.L.lock);
+  const axes = (g.linked ?? g.series).filter((axis: any) => (axis.trackKey ?? axis.key) === trackKey && !axis.L.lock);
   const candidates = axes.flatMap((axis: any) => axis.prop.kf.map((key: any) => ({ axis, key })));
   const clickedIndex = kf.indexOf(k);
   const explicitlySelected = new Set(api.selection.keys());

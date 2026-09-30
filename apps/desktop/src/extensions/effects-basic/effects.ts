@@ -69,7 +69,7 @@ const FX: Record<string, Omit<EffectDefinition, 'id' | 'rawShader'>> = {
       o = vec4(clamp(c.rgb + (c.rgb - b.rgb*.25) * (u_p0/100.), 0., 4.), c.a);`, 'uniform float u_p0;'),
   },
   glow: {
-    label: 'Glow', group: 'Stylize', passes: 3,
+    label: 'Glow', group: 'Light & Shadow', passes: 3,
     params: [{ k: 'threshold', label: 'Threshold', def: 55, min: 0, max: 100, step: 1, unit: '%' },
              { k: 'radius', label: 'Radius', def: 60, min: 0, max: 400, step: 1, unit: 'px' },
              { k: 'intensity', label: 'Intensity', def: 90, min: 0, max: 400, step: 1, unit: '%' }],
@@ -142,7 +142,7 @@ const FX: Record<string, Omit<EffectDefinition, 'id' | 'rawShader'>> = {
       o = vec4(clamp(c.rgb + n * (u_p0/100.) * c.a, 0., 8.), c.a);`, 'uniform float u_p0,u_p1;'),
   },
   vignette: {
-    label: 'Vignette', group: 'Stylize', passes: 1,
+    label: 'Vignette', group: 'Light & Shadow', passes: 1,
     params: [{ k: 'amount', label: 'Amount', def: 45, min: 0, max: 100, step: 1, unit: '%' },
              { k: 'feather', label: 'Feather', def: 60, min: 1, max: 100, step: 1, unit: '%' }],
     frag: F(`
@@ -174,7 +174,7 @@ const FX: Record<string, Omit<EffectDefinition, 'id' | 'rawShader'>> = {
       o = texture(u_tex, uv);`, 'uniform float u_p0;'),
   },
   posterize: {
-    label: 'Posterize', group: 'Stylize', passes: 1,
+    label: 'Posterize', group: 'Color', passes: 1,
     params: [{ k: 'levels', label: 'Levels', def: 6, min: 2, max: 64, step: 1, unit: '' }],
     frag: F(`
       vec4 c = texture(u_tex, v_st); if (c.a<.0005){o=c;return;}
@@ -192,7 +192,7 @@ const FX: Record<string, Omit<EffectDefinition, 'id' | 'rawShader'>> = {
       o = texture(u_tex, v_st + d);`, 'uniform float u_p0,u_p1,u_p2;'),
   },
   shadow: {
-    label: 'Drop Shadow', group: 'Stylize', passes: 3,
+    label: 'Drop Shadow', group: 'Light & Shadow', passes: 3,
     params: [{ k: 'distance', label: 'Distance', def: 20, min: 0, max: 400, step: 1, unit: 'px' },
              { k: 'angle', label: 'Angle', def: 135, min: -360, max: 360, step: 1, unit: '°' },
              { k: 'softness', label: 'Softness', def: 40, min: 0, max: 300, step: 1, unit: 'px' },

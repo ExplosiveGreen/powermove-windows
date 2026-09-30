@@ -1,9 +1,9 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ show: vi.fn(), play: vi.fn(), handle: vi.fn() }));
+const mocks = vi.hoisted(() => ({ show: vi.fn(), play: vi.fn(), handle: vi.fn(), create: vi.fn() }));
 vi.mock('electron', () => ({
   app: { isPackaged: false, getAppPath: () => '/test/powermove' },
   BrowserWindow: { fromWebContents: vi.fn() },
-  Notification: class { static isSupported() { return true; } on() {} show() { mocks.show(); } },
+  Notification: class { static isSupported() { return true; } constructor(options: unknown) { mocks.create(options); } on() {} show() { mocks.show(); } },
 }));
 vi.mock('node:child_process', () => ({ execFile: mocks.play }));
 import { registerAgentNotifications } from './agent-notifications';
@@ -40,4 +40,10 @@ it('plays the approved bundled sound for completion and preview', () => {
     expect(mocks.play).toHaveBeenCalledTimes(2);
     expect(mocks.play).toHaveBeenCalledWith('/usr/bin/afplay', ['/test/powermove/resources/sounds/little-victory-deep.wav'], expect.any(Function));
   }
+});
+
+it('names the question when the agent asks one', () => {
+  handler()({ sound: 'None', question: 'Replace the title\nor add a group?' });
+  expect(mocks.create).toHaveBeenCalledWith({ title: 'Your agent has a question', body: 'Replace the title or add a group?', silent: true });
+  expect(mocks.show).toHaveBeenCalledTimes(1);
 });

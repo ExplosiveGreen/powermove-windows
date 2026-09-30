@@ -137,6 +137,28 @@ describe('legacy history install', () => {
 });
 
 describe('selection history', () => {
+  it('preserves multiple redo steps through selection but replaces them on a new edit', () => {
+    const PM = historyRegistry();
+    PM.proj.layers = [{ id: 'a' }, { id: 'b' }];
+    PM.sel = { layers: ['a'], keys: [], chan: null };
+    PM.hist.do('First edit', () => { PM.proj.value = 2; });
+    PM.hist.do('Second edit', () => { PM.proj.value = 3; });
+    PM.hist.undo();
+    PM.hist.undo();
+    const before = structuredClone(PM.sel);
+    PM.sel.layers = ['b'];
+    PM.hist.selection(before, PM.sel);
+    expect(PM.hist.redo()).toBe(true);
+    expect(PM.proj.value).toBe(2);
+    expect(PM.hist.redo()).toBe(true);
+    expect(PM.proj.value).toBe(3);
+    PM.hist.undo();
+    PM.hist.do('New edit', () => { PM.proj.value = 4; });
+    expect(PM.hist.canRedo()).toBe(false);
+    PM.hist.undo();
+    expect(PM.proj.value).toBe(2);
+  });
+
   it('restores selection when no timeline service is registered', () => {
     const PM = historyRegistry();
     PM.proj.layers = [{ id: 'a' }, { id: 'b' }];

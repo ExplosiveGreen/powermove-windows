@@ -995,6 +995,7 @@ export function nudgeKeyframes(PM: PMRegistry, frames?: any): unknown {
       prop.kf = prop.kf.filter((key: any) => selectedKeys.has(key)
         || !destinations.has(Math.round(Number(key.t) * fps)));
     }
+    for (const prop of destinationFrames.keys()) temporalKeys(prop.kf);
     for (const entry of selected) entry.key.t = Math.round((Number(entry.key.t) + delta) * fps) / fps;
     for (const prop of destinationFrames.keys()) prop.kf.sort((a: any, b: any) => Number(a.t) - Number(b.t));
     PM.touch?.();
@@ -1343,6 +1344,7 @@ export function deleteSelection(PM: PMRegistry): unknown {
         const remaining = prop.kf.filter((key: any) => !ids.has(key.i));
         if (prop.kf.length && !remaining.length) prop.v = PM.evP(layer, prop, PM.time, path);
         prop.kf = remaining;
+        temporalKeys(prop.kf);
       }));
       PM.sel.keys = [];
       PM.touch(); PM.bus.emit('sel'); PM.invalidate();

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildClaudeArgv,
+  claudeUserMessage,
   CLAUDE_EDITOR_SANDBOX_SETTINGS,
   CLAUDE_PROJECT_SANDBOX_SETTINGS
 } from './adapter';
@@ -44,7 +45,8 @@ describe('Claude CLI adapter', () => {
     });
 
     expect(argv).toEqual(expect.arrayContaining([
-      '--print', '--output-format', 'stream-json', '--include-partial-messages',
+      '--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--include-partial-messages',
+      '--permission-prompt-tool', 'stdio',
       '--tools', 'default', '--mcp-config', '{"mcpServers":{}}',
       '--json-schema', JSON.stringify(schema), '--model', 'sonnet', '--effort', 'high',
       '--resume', '11111111-1111-4111-8111-111111111111',
@@ -56,7 +58,11 @@ describe('Claude CLI adapter', () => {
     expect(argv).not.toContain('--strict-mcp-config');
     expect(argv).not.toContain('--disable-slash-commands');
     expect(argv[argv.indexOf('--allowedTools') + 1]).toContain('Skill');
-    expect(argv.at(-1)).toContain('/tmp/reference.png');
+    expect(argv.join(' ')).not.toContain('Make the title bounce');
+    expect(JSON.parse(claudeUserMessage('Make the title bounce', ['/tmp/reference.png']))).toMatchObject({
+      type: 'user', parent_tool_use_id: null,
+      message: { role: 'user', content: [{ type: 'text', text: expect.stringContaining('/tmp/reference.png') }] }
+    });
     expect(JSON.parse(CLAUDE_PROJECT_SANDBOX_SETTINGS)).toMatchObject({
       sandbox: { enabled: true, allowUnsandboxedCommands: false, failIfUnavailable: true }
     });
@@ -111,7 +117,8 @@ describe('Claude CLI adapter', () => {
       schema, prompt: 'Inspect', imagePaths: [], model: null, reasoningEffort: null,
       sessionId: null, access: 'editor', instructions: 'Inspect only.', nativeTools
     });
-    // dontAsk would otherwise still auto-approve sandboxed Bash.
+    // Anything unlisted goes to the runner's permission prompt, which denies it.
+    expect(argv[argv.indexOf('--permission-mode') + 1]).toBe('default');
     expect(JSON.parse(argv[argv.indexOf('--settings') + 1]!).sandbox).toMatchObject({ enabled: true, autoAllowBashIfSandboxed: false });
     const disallowed = argv[argv.indexOf('--disallowedTools') + 1]!.split(',');
     expect(disallowed).toEqual(expect.arrayContaining(['Bash', 'Monitor', 'PowerShell', 'Write', 'Edit', 'NotebookEdit']));

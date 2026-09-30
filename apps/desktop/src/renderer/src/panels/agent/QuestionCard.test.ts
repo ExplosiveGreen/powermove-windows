@@ -100,3 +100,21 @@ it('formats question prose, options, and settled answers', () => {
   flushSync();
   expect(target.querySelector('.agent-question-answer .is-bold')?.textContent).toBe('Bold');
 });
+
+it('takes several options for a multi-select question, and one otherwise', () => {
+  const answerQuestion = vi.fn();
+  const question = step({ questions: [
+    { id: 'parts', header: '', question: 'Which parts?', allowOther: true, secret: false, multiSelect: true,
+      options: [{ label: 'Title', description: '' }, { label: 'Tabs', description: '' }] },
+    { id: 'where', header: '', question: 'Where?', allowOther: false, secret: false,
+      options: [{ label: 'Top', description: '' }, { label: 'Bottom', description: '' }] }
+  ] });
+  instance = mount(QuestionCard, { target, props: { PM: { AgentUI: { answerQuestion } }, step: question } });
+  flushSync();
+  const options = target.querySelectorAll<HTMLButtonElement>('.agent-question-option');
+  for (const index of [0, 1, 2, 3]) { options[index]!.click(); flushSync(); }
+  expect(options[0]!.getAttribute('aria-pressed')).toBe('true');
+  expect(options[2]!.getAttribute('aria-pressed')).toBe('false');
+  [...target.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Answer')!.click();
+  expect(answerQuestion).toHaveBeenCalledWith('call_q', { parts: ['Title', 'Tabs'], where: ['Bottom'] });
+});

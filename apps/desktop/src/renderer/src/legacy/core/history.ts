@@ -266,6 +266,9 @@ export function install(PM: PMRegistry): void {
     },
     selection(before: any, after: any) {
       if (pending || JSON.stringify(before) === JSON.stringify(after)) return null;
+      // Looking at another layer after Undo is navigation, not a new edit.
+      // Keep the redo chain until a document or workspace change replaces it.
+      if (idx < stack.length - 1) return null;
       const previous = clone(before), next = clone(after), projectId = PM.proj.id;
       const restoreSelection = (selection: any) => {
         if (PM.proj.id !== projectId) return;

@@ -6,6 +6,7 @@ export const AGENT_MODELS = {
   compatible: [{ id: 'configured', label: 'Connected model' }],
   chatgpt: [
     { id: 'gpt-6-astra', label: 'GPT 6 Astra' },
+    { id: 'gpt-6.1-sol', label: 'GPT 6.1 Sol' },
     { id: 'gpt-6-sol', label: 'GPT 6 Sol' },
     { id: 'gpt-6-luna', label: 'GPT 6 Luna' },
     { id: 'gpt-5.6-sol', label: '5.6 Sol' },
@@ -70,7 +71,8 @@ export function modelEfforts(provider: string, model: string | null): ReasoningE
     return discoveredCodexEfforts.get(model)!;
   }
   if (provider === 'chatgpt') {
-    return model === 'gpt-6-sol' ? [...STANDARD_REASONING_EFFORTS, 'ultra'] : STANDARD_REASONING_EFFORTS;
+    return model === 'gpt-6-sol' || model === 'gpt-6.1-sol'
+      ? [...STANDARD_REASONING_EFFORTS, 'ultra'] : STANDARD_REASONING_EFFORTS;
   }
   if (provider === 'claude' && model && discoveredClaudeEfforts.has(model)) {
     return discoveredClaudeEfforts.get(model)!;

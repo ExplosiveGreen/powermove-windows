@@ -1,6 +1,6 @@
 import { test, expect } from './helpers/app';
 
-test('Astra selection reaches the request and Claude selections preserve capabilities', async ({ session }) => {
+test('Sol 6.1 and Astra selections reach the request and Claude selections preserve capabilities', async ({ session }) => {
   await session.openEditor();
   const page = session.page;
   await page.evaluate(() => {
@@ -12,12 +12,18 @@ test('Astra selection reaches the request and Claude selections preserve capabil
       return { text: JSON.stringify({ summary: 'Model routing verified', commands: [], artifacts: [], externalActions: [], notes: [] }) };
     };
   });
+  await page.locator('select[aria-label="Model"]').selectOption('gpt-6.1-sol');
+  await page.locator('select[aria-label="Reasoning effort"]').selectOption('ultra');
+  await page.getByRole('textbox', { name: 'Message Powermove agent', exact: true }).fill('Check Sol 6.1 routing');
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__selectedModel)).toEqual({ model: 'gpt-6.1-sol', effort: 'ultra' });
+  await expect(page.locator('.agent-msg.assistant')).toContainText('Model routing verified');
   await page.locator('select[aria-label="Model"]').selectOption('gpt-6-astra');
   await page.locator('select[aria-label="Reasoning effort"]').selectOption('max');
   await page.getByRole('textbox', { name: 'Message Powermove agent', exact: true }).fill('Check routing');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__selectedModel)).toEqual({ model: 'gpt-6-astra', effort: 'max' });
-  await expect(page.locator('.agent-msg.assistant')).toContainText('Model routing verified');
+  await expect(page.locator('.agent-msg.assistant').last()).toContainText('Model routing verified');
   const claude = await page.evaluate(() => {
     const ui = (window as any).PM.AgentUI;
     ui.setProvider('claude');

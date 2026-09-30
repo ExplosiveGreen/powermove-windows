@@ -390,7 +390,11 @@ PM.removeKey = (p: any, k: any) => {
   // A single remaining key evaluates to its value everywhere. Keep that value
   // when its removal turns this channel back into a static property.
   if (p.kf.length && !remaining.length) p.v = p.kf[0].v;
-  p.kf = remaining; PM.touch();
+  p.kf = remaining;
+  // Legacy ease accessors resolve neighbours from the array they were built
+  // for; rebind them so the surviving keys see their new neighbours.
+  temporalKeys(p.kf);
+  PM.touch();
 };
 PM.hasKeyAt = (L: any, p: any, T: any) => p.kf.find((k: any) => Math.abs(k.t - (T - L.from)) < .5 / PM.proj.fps) || null;
 

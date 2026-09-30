@@ -3,8 +3,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import type { CodexRunRequest, CodexRunResult, CodexTraceEvent } from '../../shared/ipc';
-import { isRecord } from '../../shared/guards';
+import type { CodexAnswerRequest, CodexQuestion, CodexRunRequest, CodexRunResult, CodexTraceEvent } from '../../shared/ipc';
+import { isRecord, isString } from '../../shared/guards';
 import { collectArtifacts } from '../codex/artifacts';
 import { publishExtensionChanges, withStageSnapshot } from '../codex/change-history';
 import { AgentResultValidationError, repairAgentResult } from '../codex/result-repair';
@@ -25,7 +25,7 @@ import {
   type AgentWorkspace,
   type CodexAuthority
 } from '../codex/workspace';
-import { buildClaudeArgv } from './adapter';
+import { buildClaudeArgv, claudeUserMessage } from './adapter';
 import { loadUserMcpServers, type UserMcpServers } from '../agent-tools/user-mcp';
 import { discoverClaudeBinary } from './env';
 import { ClaudeEventParser } from './events';
@@ -35,6 +35,33 @@ import { imageExtension } from '../image-extension';
 
 const DEFAULT_TIMEOUT_MS = 3_600_000;
 const MAX_DIAGNOSTIC_BYTES = 2 * 1024 * 1024;
+const QUESTION_LIMITS = { questions: 6, options: 8, header: 80, question: 1_000, label: 160, description: 400 } as const;
+
+function clip(value: unknown, limit: number): string {
+  return typeof value === 'string' ? value.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim().slice(0, limit) : '';
+}
+
+/** AskUserQuestion input, bounded for the renderer. Claude always accepts a typed "Other". */
+function askUserQuestions(itemId: string, input: Record<string, unknown>): { questions: CodexQuestion[]; texts: Map<string, string> } {
+  const texts = new Map<string, string>();
+  const entries = Array.isArray(input.questions) ? input.questions.slice(0, QUESTION_LIMITS.questions) : [];
+  const questions = entries.flatMap((entry, index): CodexQuestion[] => {
+    if (!isRecord(entry) || !isString(entry.question)) return [];
+    const question = clip(entry.question, QUESTION_LIMITS.question);
+    if (!question) return [];
+    const id = `${itemId}-${index}`;
+    texts.set(id, entry.question);
+    const options = (Array.isArray(entry.options) ? entry.options : []).slice(0, QUESTION_LIMITS.options).flatMap((option) => {
+      const label = isRecord(option) ? clip(option.label, QUESTION_LIMITS.label) : '';
+      return label ? [{ label, description: clip((option as Record<string, unknown>).description, QUESTION_LIMITS.description) }] : [];
+    });
+    return [{
+      id, header: clip(entry.header, QUESTION_LIMITS.header), question, options,
+      allowOther: true, secret: false, ...(entry.multiSelect === true ? { multiSelect: true } : {})
+    }];
+  });
+  return { questions, texts };
+}
 
 type SpawnLike = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
 
@@ -54,9 +81,19 @@ export interface ClaudeRunOptions {
   externalMcpServers?: UserMcpServers;
 }
 
+/** An AskUserQuestion call held open on the CLI's permission prompt. */
+interface HeldQuestion {
+  controlId: string;
+  input: Record<string, unknown>;
+  /** Question id → the question text Claude keys its answers by. */
+  texts: Map<string, string>;
+}
+
 interface ActiveRun {
   request: CodexRunRequest;
   child: ChildProcess | null;
+  /** Held questions by tool_use id (the trace item id). */
+  questions: Map<string, HeldQuestion>;
   layout: AgentWorkspace | null;
   killTimer: NodeJS.Timeout | null;
   userData: string;
@@ -140,7 +177,7 @@ export class ClaudeRunner {
     }
 
     const state: ActiveRun = {
-      request: req, child: null, layout: null, killTimer: null,
+      request: req, child: null, questions: new Map(), layout: null, killTimer: null,
       userData: options.userData, sessionWrite: Promise.resolve()
     };
     this.active.set(req.id, state);
@@ -167,7 +204,7 @@ export class ClaudeRunner {
           access: 'editor',
           nativeTools: options.nativeTools,
           externalMcpServers
-        }), null, options);
+        }), claudeUserMessage(req.prompt, editor.imagePaths), null, options);
         if (this.cancelled.has(req.id)) return failure('The Claude run was cancelled.', true);
         if (attempt.code !== 0 || attempt.resultError) return failure(humanizeFailure(attempt, 'Claude generation failed.'));
         const output = attempt.output ?? (() => {
@@ -209,7 +246,7 @@ export class ClaudeRunner {
           }),
           nativeTools: options.nativeTools,
           externalMcpServers
-        }), layout, options);
+        }), claudeUserMessage(prompt, layout.imagePaths), layout, options);
         if (this.cancelled.has(req.id)) throw new Error('The Claude run was cancelled.');
         return result;
       };
@@ -300,6 +337,66 @@ export class ClaudeRunner {
     await Promise.all([...this.active.keys()].map((id) => this.cancel(id)));
   }
 
+  /** Settles a held AskUserQuestion with the person's answers; none means skipped. */
+  answer(req: CodexAnswerRequest): boolean {
+    const state = this.active.get(req.id);
+    const held = state?.questions.get(req.itemId);
+    if (!state || !held) return false;
+    state.questions.delete(req.itemId);
+    const answers = Object.fromEntries([...held.texts].flatMap(([id, text]) => {
+      const chosen = (req.answers[id] ?? []).map((answer) => answer.trim()).filter(Boolean);
+      return chosen.length ? [[text, chosen.join(', ')]] : [];
+    }));
+    this.respondControl(state, held.controlId, Object.keys(answers).length
+      ? { behavior: 'allow', updatedInput: { ...held.input, answers } }
+      : { behavior: 'deny', message: 'The user skipped the question. Continue with your best judgement.' });
+    return true;
+  }
+
+  private respondControl(state: ActiveRun, requestId: string, response: Record<string, unknown>): void {
+    const stdin = state.child?.stdin;
+    if (!stdin || stdin.destroyed || stdin.writableEnded) return;
+    stdin.write(`${JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response } })}\n`);
+  }
+
+  /* The stdio permission prompt. AskUserQuestion becomes a question card and
+     waits for the person; every other prompt is denied, as --print would
+     without a prompt tool, so this channel never widens a run's access. */
+  private control(state: ActiveRun, event: Record<string, unknown>, onTrace?: (step: CodexTraceEvent) => void): void {
+    const requestId = isString(event.request_id, 200) ? event.request_id : null;
+    if (!requestId) return;
+    if (event.type === 'control_cancel_request') {
+      for (const [itemId, held] of state.questions) {
+        if (held.controlId !== requestId) continue;
+        state.questions.delete(itemId);
+        onTrace?.({ kind: 'question-closed', itemId });
+      }
+      return;
+    }
+    const request = isRecord(event.request) ? event.request : {};
+    if (request.subtype !== 'can_use_tool') {
+      const stdin = state.child?.stdin;
+      if (stdin && !stdin.destroyed && !stdin.writableEnded) {
+        stdin.write(`${JSON.stringify({ type: 'control_response', response: { subtype: 'error', request_id: requestId, error: 'Unsupported by Powermove.' } })}\n`);
+      }
+      return;
+    }
+    const itemId = isString(request.tool_use_id, 120) ? request.tool_use_id : null;
+    const input = isRecord(request.input) ? request.input : {};
+    if (request.tool_name === 'AskUserQuestion' && itemId && onTrace && !state.questions.has(itemId)) {
+      const { questions, texts } = askUserQuestions(itemId, input);
+      if (questions.length) {
+        state.questions.set(itemId, { controlId: requestId, input, texts });
+        onTrace({ kind: 'question', itemId, questions, transport: 'reply', blocking: true });
+        return;
+      }
+    }
+    this.respondControl(state, requestId, {
+      behavior: 'deny',
+      message: `Powermove does not allow ${isString(request.tool_name, 80) ? request.tool_name : 'this tool'} in this run.`
+    });
+  }
+
   private async execute(
     req: CodexRunRequest,
     state: ActiveRun,
@@ -307,6 +404,7 @@ export class ClaudeRunner {
     configDirectory: string,
     cwd: string,
     argv: string[],
+    message: string,
     layout: AgentWorkspace | null,
     options: ClaudeRunOptions
   ): Promise<Attempt> {
@@ -317,7 +415,7 @@ export class ClaudeRunner {
         cwd,
         detached: true,
         env: isolatedClaudeEnvironment(configDirectory),
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['pipe', 'pipe', 'pipe']
       });
     } catch (error) {
       return {
@@ -327,6 +425,9 @@ export class ClaudeRunner {
       };
     }
     state.child = child;
+    // A CLI that exits early closes its end; the exit status reports why.
+    child.stdin?.on('error', () => undefined);
+    child.stdin?.write(message);
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     const parser = new ClaudeEventParser({
@@ -334,6 +435,9 @@ export class ClaudeRunner {
       onTrace: options.onTrace,
       onWarning: options.onWarning,
       projectCwd: cwd,
+      onControl: (event) => this.control(state, event, options.onTrace),
+      // The CLI reads more turns until stdin closes; one prompt is one run.
+      onResult: () => { child.stdin?.end(); },
       onSessionId: (sessionId) => {
         if (!layout) return;
         state.sessionWrite = state.sessionWrite
@@ -355,6 +459,8 @@ export class ClaudeRunner {
         settled = true;
         clearTimeout(timer);
         parser.finish();
+        // Held questions die with the process; the renderer closes their cards.
+        state.questions.clear();
         void state.sessionWrite.then(() => resolve({
           code,
           signal,

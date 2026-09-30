@@ -1,7 +1,7 @@
 import { createAgentCheckpoint } from './checkpoint';
 import { bridge } from '../../kernel/bridge';
 import { noticeKind, stated } from '../../errors/presentation';
-import { notifyAgentFinished } from '../../panels/agent/notification-preferences';
+import { notifyAgentFinished, notifyAgentQuestion } from '../../panels/agent/notification-preferences';
 /* Ported from js/assistant/spatial.js — behavior-preserving. */
 import type { PMRegistry } from '../registry';
 import { LIMITS, type CodexTraceEvent, type ReasoningEffort } from '../../../../shared/ipc';
@@ -1539,8 +1539,9 @@ function reduceTrace(step: CodexTraceEvent, session: any = activeSession()) {
       blocking: transport === 'reply' && step.blocking === true, status: 'open',
       ...(transport === 'reply' && session.codexRequestId ? { requestId: session.codexRequestId } : {}),
     });
-    // A run that stopped to ask needs the person back, like a finished one.
-    if (transport === 'reply' && step.blocking) { session.activity = 'Waiting for your answer…'; notifyAgentFinished(); }
+    if (transport === 'reply' && step.blocking) session.activity = 'Waiting for your answer…';
+    // Any question needs the person back, even one the agent keeps working through.
+    notifyAgentQuestion(String(step.questions[0]?.question || ''));
   } else if (step.kind === 'question-closed') {
     const question: any = findQuestion(session, step.itemId);
     if (question?.status === 'open') question.status = 'closed';

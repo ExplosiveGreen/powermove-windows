@@ -206,7 +206,8 @@ function createBridge(link: ReconnectingLink, hello: WebHello, storeSnapshot: Re
     agentNotification: async (options) => {
       if (options.preview) return;
       if (typeof Notification !== 'undefined' && Notification.permission === 'default') await Notification.requestPermission().catch(() => undefined);
-      notify('Powermove', 'Your agent has finished. Your result is ready.');
+      if (options.question) notify('Your agent has a question', options.question.slice(0, 240));
+      else notify('Powermove', 'Your agent has finished. Your result is ready.');
     },
     ping: () => link.invoke<string>(IPC.ping),
     remote: true,

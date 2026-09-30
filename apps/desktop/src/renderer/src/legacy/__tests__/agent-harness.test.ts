@@ -23,6 +23,25 @@ function harnessEditor(): PMRegistry {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('agent harness oracle', () => {
+  it('can redo an undone agent run after selecting another layer', async () => {
+    const PM = harnessEditor();
+    const existing = PM.mkLayer('shape');
+    PM.proj.layers = [existing];
+    PM.ProjectIndex.invalidate();
+    PM.CodexBridge = { request: async () => JSON.stringify({ status: 'pass', commands: [], reviewTimes: [] }) };
+    const proposal = PM.AgentHarness.sanitizeProposal({
+      label: 'Add title', reviewTimes: [],
+      commands: [{ type: 'add_layer', id: 'redo-title', layerType: 'text', content: { text: 'Keep me' } }],
+    });
+    const run = await PM.AgentHarness.execute('Add a title', proposal);
+    expect(PM.AgentHarness.rollback(run.checkpoint)).toBe(true);
+    expect(PM.L('redo-title')).toBeNull();
+    PM.selectLayers([existing.id]);
+    expect(PM.sel.layers).toEqual([existing.id]);
+    expect(PM.hist.redo()).toBe(true);
+    expect(PM.L('redo-title')?.d.text).toBe('Keep me');
+  });
+
   it('selects panel targets directly and rejects missing IDs without partial selection or edits', async () => {
     const PM = harnessEditor();
     const a = PM.mkLayer('shape'), b = PM.mkLayer('text');

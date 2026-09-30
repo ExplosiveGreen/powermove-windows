@@ -534,7 +534,7 @@ export function registerCodexIpc(
     requireTrusted(event, ctx);
     const req = requireAnswerRequest(rawRequest);
     if (owners.get(req.id) !== event.sender) return { accepted: false };
-    return { accepted: appServerRunner.answer(req) };
+    return { accepted: appServerRunner.answer(req) || claudeRunner.answer(req) };
   });
 
   ipcMain.handle(IPC.codexCancel, async (event, rawRequest: unknown) => {

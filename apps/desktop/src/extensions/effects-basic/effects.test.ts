@@ -28,4 +28,19 @@ describe('effects-basic', () => {
     expect(definition?.frag).toMatch(/^#version 300 es/);
     expect(definition?.frag).toContain('void main()');
   });
+
+  it('organizes effects into families by what they do', () => {
+    const groups: Record<string, string[]> = {};
+    for (const { id, group } of EFFECTS) (groups[group] ??= []).push(id);
+
+    expect(groups).toEqual({
+      'Blur & Sharpen': ['blur', 'motionblurDir', 'sharpen'],
+      'Light & Shadow': ['glow', 'vignette', 'shadow'],
+      Color: ['color', 'levels', 'duotone', 'posterize', 'invert'],
+      Stylize: ['grain', 'pixelate'],
+      Distort: ['chroma', 'displace'],
+      Generate: ['gradient']
+    });
+    expect(Object.keys(groups)).toEqual(['Blur & Sharpen', 'Light & Shadow', 'Color', 'Stylize', 'Distort', 'Generate']);
+  });
 });

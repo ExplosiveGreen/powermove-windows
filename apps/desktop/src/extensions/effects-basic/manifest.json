@@ -3,7 +3,7 @@
   "name": "Basic effects",
   "version": "1.0.0",
   "apiVersion": 1,
-  "description": "Powermove's built-in blur, color, stylize and distortion effects.",
+  "description": "Powermove's built-in blur, color, light, stylize, distortion and generator effects.",
   "entry": "index.ts",
   "contributes": ["effects"],
   "author": "powermove"

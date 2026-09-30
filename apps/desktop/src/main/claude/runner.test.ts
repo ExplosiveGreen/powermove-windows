@@ -40,10 +40,29 @@ function request(overrides: Partial<CodexRunRequest> = {}): CodexRunRequest {
   };
 }
 
-function successfulChild(output: unknown = { message: 'hello' }): EventEmitter & { stdout: PassThrough; stderr: PassThrough; pid: number; killed: boolean; kill: ReturnType<typeof vi.fn> } {
-  const child = new EventEmitter() as EventEmitter & {
-    stdout: PassThrough; stderr: PassThrough; pid: number; killed: boolean; kill: ReturnType<typeof vi.fn>;
-  };
+type FakeChild = EventEmitter & {
+  stdin: PassThrough; stdout: PassThrough; stderr: PassThrough; pid: number; killed: boolean; kill: ReturnType<typeof vi.fn>;
+  /** Everything the runner wrote to stdin. */
+  written(): string;
+};
+
+function fakeChild(): FakeChild {
+  const child = new EventEmitter() as FakeChild;
+  let input = '';
+  child.stdin = new PassThrough();
+  child.stdin.on('data', (chunk: Buffer) => { input += chunk.toString('utf8'); });
+  child.written = () => input;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.pid = 919191;
+  child.killed = false;
+  child.kill = vi.fn(() => { child.killed = true; return true; });
+  return child;
+}
+
+function successfulChild(output: unknown = { message: 'hello' }, onChild?: (child: FakeChild) => void): FakeChild {
+  const child = fakeChild();
+  onChild?.(child);
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
   child.pid = 919191;
@@ -67,6 +86,7 @@ describe('Claude runner', () => {
     try {
       const stages: string[] = [];
       const prompts: string[][] = [];
+      const inputs: Array<() => string> = [];
       const result = await new ClaudeRunner().run(request({ mode: 'autonomous', access: 'project', projectJSON: '{}', threadId: 'mod-repair' }), {
         userData, extensionsDir: path.join(userData, 'extensions'), apiPackFiles: async () => [], binary: '/fake/claude',
         spawnProcess: (_binary, args) => {
@@ -78,14 +98,15 @@ describe('Claude runner', () => {
           writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ id: 'anchor-presets', name: 'Anchors', version: '1.0.0', apiVersion: 1, entry: 'index.ts' }));
           writeFileSync(path.join(dir, 'index.ts'), stages.length === 1 ? 'export const = ;' : 'export default function activate() {}');
           expect(existsSync(path.join(userData, 'extensions', 'anchor-presets'))).toBe(false);
-          return successfulChild({ summary: 'Added anchors', commands: [], artifacts: [], externalActions: [], notes: [], extensions: [{ id: 'anchor-presets', action: 'created' }] }) as never;
+          return successfulChild({ summary: 'Added anchors', commands: [], artifacts: [], externalActions: [], notes: [], extensions: [{ id: 'anchor-presets', action: 'created' }] },
+            child => inputs.push(child.written)) as never;
         }
       });
       expect(result).toMatchObject({ ok: true, extensions: [{ id: 'anchor-presets', action: 'created' }] });
       expect(stages).toHaveLength(2);
       expect(stages[0]).toBe(stages[1]);
       expect(prompts[1]).toContain('--resume');
-      expect(prompts[1]!.join(' ')).toContain('failed compilation');
+      expect(inputs[1]!()).toContain('failed compilation');
       expect(await readFile(path.join(userData, 'extensions', 'anchor-presets', 'index.ts'), 'utf8')).toContain('activate');
     } finally { await rm(userData, { recursive: true, force: true }); }
   });
@@ -151,7 +172,7 @@ describe('Claude runner', () => {
     expect(spawnProcess).toHaveBeenCalledWith(
       '/bin/claude',
       expect.arrayContaining(['--print', '--output-format', 'stream-json', '--tools', 'default']),
-      expect.objectContaining({ detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+      expect.objectContaining({ detached: true, stdio: ['pipe', 'pipe', 'pipe'] })
     );
     const argv = (spawnProcess.mock.calls[0] as unknown as [string, string[]])[1];
     expect(JSON.parse(argv[argv.indexOf('--mcp-config') + 1]!)).toEqual({
@@ -183,5 +204,76 @@ describe('Claude runner', () => {
       { kind: 'answer', text: 'Preparing ' },
       { kind: 'answer', text: 'the Claude result' }
     ]);
+  });
+
+  it('holds AskUserQuestion open for the person and denies every other permission prompt', async () => {
+    const runner = new ClaudeRunner();
+    const traces: unknown[] = [];
+    const child = fakeChild();
+    const line = (value: unknown) => child.stdout.write(`${JSON.stringify(value)}\n`);
+    const result = runner.run(request({ id: 'claude-question' }), {
+      userData: '/tmp/powermove-claude-question', extensionsDir: '/tmp/powermove-extensions', apiPackFiles: async () => [],
+      binary: '/bin/claude', spawnProcess: () => child as never, onTrace: (step) => traces.push(step)
+    });
+    await vi.waitFor(() => expect(child.written()).toContain('Return a greeting'));
+    const question = {
+      question: 'Replace the Store title or add a group?', header: 'Promo', multiSelect: false,
+      options: [{ label: 'Update the existing title', description: 'Edit in place' }, { label: 'Add a separate group', description: '' }]
+    };
+    line({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1' } } });
+    line({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_q', name: 'AskUserQuestion' } } });
+    line({ type: 'stream_event', event: { type: 'content_block_stop', index: 0 } });
+    line({ type: 'control_request', request_id: 'perm-bash', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls' }, tool_use_id: 'toolu_b' } });
+    line({ type: 'control_request', request_id: 'perm-q', request: {
+      subtype: 'can_use_tool', tool_name: 'AskUserQuestion', tool_use_id: 'toolu_q', input: { questions: [question] }
+    } });
+    await vi.waitFor(() => expect(traces).toContainEqual({
+      kind: 'question', itemId: 'toolu_q', transport: 'reply', blocking: true,
+      questions: [{ id: 'toolu_q-0', header: 'Promo', question: question.question, allowOther: true, secret: false, options: question.options }]
+    }));
+    // The question is a card, never a tool row.
+    expect(traces.some((step) => (step as { itemId?: string }).itemId === 'toolu_q' && (step as { kind: string }).kind !== 'question')).toBe(false);
+    const responses = () => child.written().split('\n').filter(Boolean).map((text) => JSON.parse(text)).filter((message) => message.type === 'control_response');
+    expect(responses()).toEqual([{ type: 'control_response', response: { subtype: 'success', request_id: 'perm-bash',
+      response: { behavior: 'deny', message: 'Powermove does not allow Bash in this run.' } } }]);
+
+    expect(runner.answer({ id: 'claude-question', itemId: 'toolu_q', answers: { 'toolu_q-0': ['Add a separate group'] } })).toBe(true);
+    expect(runner.answer({ id: 'claude-question', itemId: 'toolu_q', answers: {} })).toBe(false);
+    await vi.waitFor(() => expect(responses()).toHaveLength(2));
+    expect(responses()[1]).toEqual({ type: 'control_response', response: { subtype: 'success', request_id: 'perm-q', response: {
+      behavior: 'allow', updatedInput: { questions: [question], answers: { [question.question]: 'Add a separate group' } }
+    } } });
+
+    line({ type: 'result', subtype: 'success', is_error: false, result: '{"message":"done"}', structured_output: { message: 'done' } });
+    await vi.waitFor(() => expect(child.stdin.writableEnded).toBe(true));
+    child.stdout.end();
+    child.emit('close', 0, null);
+    await expect(result).resolves.toEqual({ ok: true, text: '{"message":"done"}', access: 'editor' });
+  });
+
+  it('declines a skipped question and closes one the CLI withdraws', async () => {
+    const runner = new ClaudeRunner();
+    const traces: unknown[] = [];
+    const child = fakeChild();
+    const line = (value: unknown) => child.stdout.write(`${JSON.stringify(value)}\n`);
+    const result = runner.run(request({ id: 'claude-skip' }), {
+      userData: '/tmp/powermove-claude-skip', extensionsDir: '/tmp/powermove-extensions', apiPackFiles: async () => [],
+      binary: '/bin/claude', spawnProcess: () => child as never, onTrace: (step) => traces.push(step)
+    });
+    const ask = (id: string) => line({ type: 'control_request', request_id: `perm-${id}`, request: {
+      subtype: 'can_use_tool', tool_name: 'AskUserQuestion', tool_use_id: id, input: { questions: [{ question: 'Which?', options: [] }] }
+    } });
+    ask('toolu_a');
+    ask('toolu_b');
+    await vi.waitFor(() => expect(traces.filter((step) => (step as { kind: string }).kind === 'question')).toHaveLength(2));
+    expect(runner.answer({ id: 'claude-skip', itemId: 'toolu_a', answers: { 'toolu_a-0': ['  '] } })).toBe(true);
+    await vi.waitFor(() => expect(child.written()).toContain('"behavior":"deny","message":"The user skipped the question.'));
+    line({ type: 'control_cancel_request', request_id: 'perm-toolu_b' });
+    await vi.waitFor(() => expect(traces).toContainEqual({ kind: 'question-closed', itemId: 'toolu_b' }));
+    expect(runner.answer({ id: 'claude-skip', itemId: 'toolu_b', answers: { 'toolu_b-0': ['x'] } })).toBe(false);
+    line({ type: 'result', subtype: 'success', is_error: false, result: '{"message":"ok"}', structured_output: { message: 'ok' } });
+    child.stdout.end();
+    child.emit('close', 0, null);
+    await expect(result).resolves.toMatchObject({ ok: true });
   });
 });

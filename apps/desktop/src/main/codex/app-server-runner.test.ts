@@ -87,6 +87,33 @@ function request(): CodexRunRequest {
 }
 
 describe('CodexAppServerRunner steering', () => {
+  it('passes GPT-6.1 Sol and Ultra to the native thread and turn', async () => {
+    const child = new FakeAppServer();
+    const runner = new CodexAppServerRunner({
+      discoverBinary: async () => '/fake/codex',
+      prepareHome: async () => '/tmp/powermove-app-server-test',
+      spawnProcess: () => child as unknown as ChildProcessWithoutNullStreams,
+      requestTimeoutMs: 500,
+      turnTimeoutMs: 5_000
+    });
+    const run = runner.run({ ...request(), model: 'gpt-6.1-sol', reasoningEffort: 'ultra' }, {
+      userData: '/tmp/powermove-app-server-test'
+    });
+    await vi.waitFor(() => expect(child.messages.some(message => message.method === 'turn/start')).toBe(true));
+    expect(child.messages.find(message => message.method === 'thread/start')?.params.model).toBe('gpt-6.1-sol');
+    expect(child.messages.find(message => message.method === 'turn/start')?.params).toMatchObject({
+      model: 'gpt-6.1-sol', effort: 'ultra'
+    });
+    child.notify('item/completed', {
+      threadId: 'thr_123', turnId: 'turn_456', item: { type: 'agentMessage', text: '{"kind":"scene"}' }
+    });
+    child.notify('turn/completed', {
+      threadId: 'thr_123', turn: { id: 'turn_456', status: 'completed', error: null }
+    });
+    await expect(run).resolves.toMatchObject({ ok: true, text: '{"kind":"scene"}' });
+    await runner.shutdown();
+  });
+
   it('configures editor threads with user MCP tools alongside live-inspection tools', async () => {
     const child = new FakeAppServer();
     const runner = new CodexAppServerRunner({
@@ -464,15 +491,21 @@ describe('CodexAppServerRunner questions', () => {
     await runner.shutdown();
   });
 
-  it('shows async message questions without mistaking them for the final answer', async () => {
+  it('shows async message questions as one card, never as prose or the final answer', async () => {
     const { child, runner, traces, run } = start();
     await vi.waitFor(() => expect(child.messages.some((message) => message.method === 'turn/start')).toBe(true));
-    child.notify('item/completed', { ...scope, item: {
-      type: 'agentMessage', id: 'msg_q', text: 'Quick check while I keep going.', delivery: 'async',
+    // `request_user_input_async` (Codex 0.159): started and completed carry the same item.
+    const item = {
+      type: 'agentMessage', id: 'msg_q', text: 'Keep the logo?\n- Yes\n- No\n\nAny deadline?', delivery: 'async', phase: 'final_answer',
       questions: [{ title: 'Keep the logo?', options: ['Yes', 'No'] }, { title: 'Any deadline?', options: null }]
-    } });
-    await vi.waitFor(() => expect(traces.some((step) => step.kind === 'question')).toBe(true));
-    expect(traces).toContainEqual({ kind: 'answer', text: 'Quick check while I keep going.' });
+    };
+    child.notify('item/started', { ...scope, item });
+    child.notify('item/agentMessage/delta', { ...scope, itemId: 'msg_q', delta: 'Keep the logo?' });
+    child.notify('item/completed', { ...scope, item });
+    child.notify('item/completed', { ...scope, item: { type: 'agentMessage', id: 'msg_update', text: 'Still going.', delivery: 'async' } });
+    await vi.waitFor(() => expect(traces).toContainEqual({ kind: 'answer', text: 'Still going.' }));
+    expect(traces.filter((step) => step.kind === 'question')).toHaveLength(1);
+    expect(traces.filter((step) => step.kind === 'answer')).toEqual([{ kind: 'answer', text: 'Still going.' }]);
     expect(traces.find((step) => step.kind === 'question')).toEqual({
       kind: 'question', itemId: 'msg_q', transport: 'message', blocking: false,
       questions: [

@@ -378,7 +378,8 @@ export interface CodexQuestion {
   /** A typed answer is accepted alongside (or instead of) the options. */
   allowOther: boolean;
   /** The answer is sensitive and must not be echoed back into the transcript. */
-  secret: boolean;
+  secret: boolean;  /** More than one option may be chosen. */
+  multiSelect?: boolean;
 }
 
 export interface CodexFixPromptFile {
@@ -640,7 +641,8 @@ export interface PowermoveBridge {
     status(): Promise<import('./compatible-provider').CompatibleProviderConfig>;
     configure(input: import('./compatible-provider').CompatibleProviderInput): Promise<import('./compatible-provider').CompatibleProviderConfig>;
   };
-  agentNotification(options: { sound: string; preview?: boolean }): Promise<void>;
+  /** `question` turns the finished banner into one naming the agent's question. */
+  agentNotification(options: { sound: string; preview?: boolean; question?: string }): Promise<void>;
   ping(): Promise<string>;
   fontFamilies?(): Promise<string[] | null>;
   versions: { electron: string; chrome: string; node: string };

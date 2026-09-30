@@ -1,4 +1,5 @@
 import { captureFontAnchor } from './font-anchor';
+import { captureSizeAnchor, sizeAnchorOffset, sizeBounds } from './size-anchor';
 import { temporalKeys } from './temporal-bridge';
 import { validMatteSource } from './matte';
 import { canAnimateContent, evaluatedValue, isProperty } from './content-properties';
@@ -818,9 +819,18 @@ function runOne(sourceCommand: any, meta: any = {}) {
   const command: any = policy.command;
   const fontLayer = findLayer(command.target || command.layer || command.targetId);
   captureFontAnchor(PM, fontLayer, command);
+  captureSizeAnchor(PM, fontLayer, command);
   const anchorEdit = fontLayer?.d?.fontAnchorBounds && command.type === 'set_property'
     && ['anchor.x', 'anchor.y'].includes(command.path || command.channel);
   const anchorRaster = anchorEdit ? PM.raster(fontLayer, 1, command.time ?? PM.time) : null;
+  const sizeAnchorEdit = fontLayer?.d?.sizeAnchorBounds && command.type === 'set_property'
+    && ['anchor.x', 'anchor.y'].includes(command.path || command.channel);
+  const nativeSizeBounds = sizeAnchorEdit ? sizeBounds(PM, fontLayer, command.time ?? PM.time) : null;
+  const sizeOffset = nativeSizeBounds ? sizeAnchorOffset(PM, fontLayer, command.time ?? PM.time) : null;
+  const sizeAnchorBounds = nativeSizeBounds && sizeOffset ? {
+    x0: nativeSizeBounds.x0 + sizeOffset.x, x1: nativeSizeBounds.x1 + sizeOffset.x,
+    y0: nativeSizeBounds.y0 + sizeOffset.y, y1: nativeSizeBounds.y1 + sizeOffset.y,
+  } : null;
   let data: any;
   switch (command.type) {
     case 'set_property': data = setProperty(command); break;
@@ -857,6 +867,19 @@ function runOne(sourceCommand: any, meta: any = {}) {
       ref[start] = anchor - (anchor - bounds[start]) / span * referenceSpan;
       ref[end] = ref[start] + referenceSpan;
     }
+  }
+  if (sizeAnchorBounds) {
+    // Moving the pivot must preserve the current artwork before the next resize.
+    const ref = fontLayer.d.sizeAnchorBounds;
+    for (const axis of ['x', 'y'] as const) {
+      const start = `${axis}0` as const, end = `${axis}1` as const;
+      const span = sizeAnchorBounds[end] - sizeAnchorBounds[start], referenceSpan = ref[end] - ref[start];
+      if (span <= 0) continue;
+      const anchor = PM.ev(fontLayer, 'anchor.' + axis, command.time ?? PM.time);
+      ref[start] = anchor - (anchor - sizeAnchorBounds[start]) / span * referenceSpan;
+      ref[end] = ref[start] + referenceSpan;
+    }
+    PM.touch();
   }
   if (['add_layer', 'delete_layers', 'reorder_layer', 'group_layers', 'ungroup_layers', 'move_to_group'].includes(command.type)
       || command.type === 'set_layer' && Object.keys(command.patch || {}).some((key: any) => ['name', 'from', 'duration', 'visible', 'parent'].includes(key))) {

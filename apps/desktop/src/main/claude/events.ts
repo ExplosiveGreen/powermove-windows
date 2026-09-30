@@ -11,8 +11,16 @@ export interface ClaudeEventCallbacks {
   onTrace?: (step: CodexTraceEvent) => void;
   onSessionId?: (sessionId: string) => void;
   onWarning?: (message: string) => void;
+  /** A `control_request` or `control_cancel_request` from the CLI (stdio permission prompts). */
+  onControl?: (event: Record<string, unknown>) => void;
+  /** The turn's `result` arrived; the CLI waits on stdin until it closes. */
+  onResult?: () => void;
   projectCwd?: string;
 }
+
+/* AskUserQuestion is shown as a question card (via the permission prompt),
+   never as a tool row. */
+const QUESTION_TOOL = 'AskUserQuestion';
 
 interface StreamedToolBlock {
   id: string;
@@ -66,6 +74,7 @@ export class ClaudeEventParser {
   private streamingMode = false;
   private compactionId: string | null = null;
   private compactions = 0;
+  private readonly hiddenToolIds = new Set<string>();
 
   constructor(private readonly callbacks: ClaudeEventCallbacks = {}) {}
 
@@ -131,12 +140,17 @@ export class ClaudeEventParser {
       this.systemEvent(event);
       return;
     }
+    if (event.type === 'control_request' || event.type === 'control_cancel_request') {
+      this.callbacks.onControl?.(event);
+      return;
+    }
     if (event.type === 'result') {
       this.structuredOutput = event.structured_output;
       this.resultText = isString(event.result) ? event.result : '';
       if (event.is_error === true || event.subtype === 'error') {
         this.resultError = normalizedText(event.result, 4_000) || 'Claude generation failed.';
       }
+      this.callbacks.onResult?.();
     }
   }
 
@@ -187,6 +201,7 @@ export class ClaudeEventParser {
       if (index === null || !isRecord(block) || block.type !== 'tool_use') return;
       if (!isString(block.id, 120) || !isString(block.name, 80)) return;
       if (!current.tools.has(index) && current.tools.size >= MAX_TOOL_BLOCKS) return;
+      if (block.name === QUESTION_TOOL) { this.hiddenToolIds.add(block.id); return; }
       const name = normalizedText(block.name, 80) || 'tool';
       current.tools.set(index, { id: block.id, name, partialJson: '', detailUnavailable: false });
       this.callbacks.onTrace?.({
@@ -276,6 +291,7 @@ export class ClaudeEventParser {
       return;
     }
     if (value.type !== 'tool_use' || !isString(value.id, 120) || !isString(value.name, 80)) return;
+    if (value.name === QUESTION_TOOL) { this.hiddenToolIds.add(value.id); return; }
     const name = normalizedText(value.name, 80) || 'tool';
     const detail = toolDetail(name, value.input, this.callbacks.projectCwd);
     this.callbacks.onTrace?.({
@@ -290,6 +306,7 @@ export class ClaudeEventParser {
 
   private toolResult(value: unknown): void {
     if (!isRecord(value) || value.type !== 'tool_result' || !isString(value.tool_use_id, 120)) return;
+    if (this.hiddenToolIds.has(value.tool_use_id)) return;
     let content = '';
     if (isString(value.content)) content = value.content;
     else if (Array.isArray(value.content)) {

@@ -1,4 +1,5 @@
 import { videoClipsAt } from '../core/video-timeline';
+import { sizeAnchorOffset } from '../core/size-anchor';
 import { previewSeekFrame, seekPreviewVideo } from '../core/video-seek';
 import { layerVideoElement, videoInstanceTextureKey } from '../core/video-instances';
 import { videoPlaybackTime } from '../../../../shared/video-timing';
@@ -837,6 +838,14 @@ function meshExtensionQuad(L: any, T: any, w: number, h: number, targetW: number
 }
 
 function contentQuad(L: any, T: any, W: any, H: any, clip?: RasterWindow) {
+  const source = nativeContentQuad(L, T, W, H, clip);
+  if (!source || source.screenSpace) return source;
+  const offset = sizeAnchorOffset(PM, L, T);
+  if (!offset.x && !offset.y) return source;
+  return { ...source, ax: source.ax - offset.x, ay: source.ay - offset.y };
+}
+
+function nativeContentQuad(L: any, T: any, W: any, H: any, clip?: RasterWindow) {
   /* returns {tex, w, h, ax, ay, uv:[ox,oy,sx,sy], fromFbo, solid, tmp} */
   const d = resolveContent(PM, L, T);
   if (L.type === 'solid') {
@@ -876,6 +885,9 @@ function contentQuad(L: any, T: any, W: any, H: any, clip?: RasterWindow) {
         ? [plane[0] * sx, plane[1] * sy, plane[2] * sx, plane[3] * sy, plane[4] * sx, plane[5] * sy]
         : !is3DLayer(PM, L) ? scaledWorld(L, T, W, H) : null;
       if (visibleWorld) {
+        const offset = sizeAnchorOffset(PM, L, T);
+        visibleWorld[4] += visibleWorld[0] * offset.x + visibleWorld[2] * offset.y;
+        visibleWorld[5] += visibleWorld[1] * offset.x + visibleWorld[3] * offset.y;
         if (clip) { visibleWorld[4] -= clip.x; visibleWorld[5] -= clip.y; }
         if (L.type === 'shape') {
           const plan = previewShapeRaster(d, ss, visibleWorld, clip?.width ?? W, clip?.height ?? H);
@@ -1832,6 +1844,15 @@ GL.pick = (x: any, y: any, T: any, options: { includeLocked?: boolean } = {}) =>
 };
 /** Layer-space bounds (before transform), relative to the layer anchor origin. */
 GL.bounds = (L: any, T: any) => {
+  const bounds = nativeBounds(L, T);
+  if (!bounds) return bounds;
+  const offset = sizeAnchorOffset(PM, L, T);
+  if (!offset.x && !offset.y) return bounds;
+  return { ...bounds, x0: bounds.x0 + offset.x, x1: bounds.x1 + offset.x,
+    y0: bounds.y0 + offset.y, y1: bounds.y1 + offset.y,
+    ax: bounds.ax - offset.x, ay: bounds.ay - offset.y };
+};
+function nativeBounds(L: any, T: any) {
   if (L.type === 'group') return PM.groupBounds(L, T);
   const d = resolveContent(PM, L, T);
   let w, h, ax, ay;

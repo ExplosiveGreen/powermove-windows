@@ -50,6 +50,8 @@ interface ActiveTurn extends RunCallbacks {
   sawUnscopedAgentMessageDelta: boolean;
   /** Held `request_user_input` calls: trace item id → App Server request id. */
   questions: Map<string, string | number>;
+  /** Async question messages already shown as a question card. */
+  questionMessageIds: Set<string>;
   resolve(result: CodexRunResult): void;
   timer: NodeJS.Timeout;
 }
@@ -356,6 +358,7 @@ export class CodexAppServerRunner {
           agentMessageDeltaItemIds: new Set(),
           sawUnscopedAgentMessageDelta: false,
           questions: new Map(),
+          questionMessageIds: new Set(),
           resolve,
           timer,
           onProgress: options.onProgress,
@@ -656,11 +659,15 @@ export class CodexAppServerRunner {
     }
 
     if (methodIs(method, 'item/started') && isRecord(params.item)) {
+      if (this.questionMessage(turn, params.item)) return;
       const trace = appServerToolStart(params.item);
       if (trace) turn.onTrace?.(trace);
       return;
     }
     if (methodIs(method, 'item/agentMessage/delta') && isString(params.delta)) {
+      // A question's text is shown by its card, not repeated as prose.
+      if (isString(params.itemId, TRACE_ITEM_ID_CHARS * 2)
+        && turn.questionMessageIds.has(params.itemId.slice(0, TRACE_ITEM_ID_CHARS))) return;
       const text = fragmentText(params.delta);
       if (text) turn.onTrace?.({ kind: 'answer', text });
       if (isString(params.itemId, TRACE_ITEM_ID_CHARS * 2)) {
@@ -686,20 +693,16 @@ export class CodexAppServerRunner {
         turn.onTrace?.(toolTrace);
         return;
       }
+      if (this.questionMessage(turn, item)) return;
       if (normalizedItemType(item.type) === 'agentmessage' && isString(item.text)) {
         const itemId = traceItemId(item);
-        const questions = itemId ? messageQuestions(itemId, item.questions) : [];
-        /* An async message (a mid-run update or question) is never the
-           structured final answer, even when it lands last before the JSON. */
-        const interim = item.delivery === 'async' || questions.length > 0;
-        if (!interim) turn.finalText = item.text;
+        /* An async message (a mid-run update) is never the structured final
+           answer, even when it lands last before the JSON. */
+        if (item.delivery !== 'async') turn.finalText = item.text;
         const alreadyStreamed = turn.sawUnscopedAgentMessageDelta || (itemId !== null && turn.agentMessageDeltaItemIds.has(itemId));
         if (!alreadyStreamed) {
           const text = fragmentText(item.text);
           if (text) turn.onTrace?.({ kind: 'answer', text });
-        }
-        if (itemId && questions.length) {
-          turn.onTrace?.({ kind: 'question', itemId, questions, transport: 'message', blocking: false });
         }
       }
       return;
@@ -715,6 +718,21 @@ export class CodexAppServerRunner {
     } else {
       this.finish(turn, { ok: false, error: appServerError(params.turn, 'ChatGPT generation failed.'), cancelled: false });
     }
+  }
+
+  /* `request_user_input_async` arrives as an agent message carrying
+     `questions`. The model keeps working; the card is its only rendering, so
+     its text (the question plus a bulleted option list) is not also prose. */
+  private questionMessage(turn: ActiveTurn, item: Record<string, unknown>): boolean {
+    if (normalizedItemType(item.type) !== 'agentmessage') return false;
+    const itemId = traceItemId(item);
+    if (!itemId) return false;
+    if (turn.questionMessageIds.has(itemId)) return true;
+    const questions = messageQuestions(itemId, item.questions);
+    if (!questions.length) return false;
+    turn.questionMessageIds.add(itemId);
+    turn.onTrace?.({ kind: 'question', itemId, questions, transport: 'message', blocking: false });
+    return true;
   }
 
   private handleExit(error: Error): void {
