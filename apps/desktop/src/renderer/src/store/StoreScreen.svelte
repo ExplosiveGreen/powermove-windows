@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { openProjectPicker } from './project-picker';
+  import { openProjectPicker, openSearchPicker } from './project-picker';
   import { tick, untrack } from 'svelte';
   import { fade, fly } from 'svelte/transition';
   import BackTitle from '../controls/BackTitle.svelte';
@@ -394,10 +394,13 @@
       toast('Nothing to publish yet. Extensions you or your agent make show up under Yours.');
       return;
     }
-    openPopoverMenu({
-      anchor: event.currentTarget,
-      label: 'Publish',
-      items: ready.map((item) => ({ label: item.publish === 'update' ? `${item.name} (update)` : item.name, run: () => void publish(item) }))
+    const byId = new Map(ready.map((item) => [item.localId, item]));
+    openSearchPicker(event.currentTarget, {
+      items: ready.map((item) => ({ id: item.localId, title: item.name, meta: item.publish === 'update' ? 'Update' : 'New' })),
+      placeholder: 'Search extensions to publish…',
+      label: 'Publish extension',
+      emptyNone: 'Nothing to publish yet. Extensions you or your agent make show up under Yours.',
+      onchoose: async (id) => { const item = byId.get(id); if (item) await publish(item); }
     });
   }
 
