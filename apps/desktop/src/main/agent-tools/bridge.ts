@@ -15,8 +15,11 @@ import {
 import { isRecord, isString } from '../../shared/guards';
 import { EXTENSION_ID } from '../../shared/extensions';
 import { forkBuiltinExtension } from '../extensions/fork';
-import { POWERMOVE_AGENT_TOOLS, POWERMOVE_APP_AGENT_TOOLS, type NativeMcpServerConfig } from './spec';
+import { POWERMOVE_AGENT_TOOLS, POWERMOVE_APP_AGENT_TOOLS, POWERMOVE_STORE_TOOL_NAMES, type NativeMcpServerConfig } from './spec';
+import type { StoreAgentGateway, StoreInstallInput, StorePublishInput, StoreSearchInput } from '../cloud/store-agent';
 import { userInput, type UserInput } from '../user-input';
+
+const STORE_TOOL_NAMES = new Set<string>(POWERMOVE_STORE_TOOL_NAMES);
 
 const TOOL_TIMEOUT_MS = 120_000;
 const MAX_SOCKET_REQUEST_BYTES = 2 * 1024 * 1024;
@@ -121,6 +124,8 @@ export interface PowermoveAgentToolBridgeOptions {
   commandArgs?: string[];
   timeoutMs?: number;
   stageForkRebase?(options: { forkId: string; stagingDirectory: string }): Promise<unknown>;
+  /** The Store as the agent uses it; absent when cloud is unconfigured. */
+  storeAgent?: StoreAgentGateway | null;
   /** Test seam: the app windows' input record. */
   userInput?: Pick<UserInput, 'drive'>;
 }
@@ -412,6 +417,9 @@ export class PowermoveAgentToolBridge {
         content: [{ type: 'text', text: JSON.stringify(result) }]
       };
     }
+    if (STORE_TOOL_NAMES.has(tool)) {
+      return this.callStoreTool(session, tool, args);
+    }
     const response = tool === 'stage_fork_rebase'
       ? await this.callStageForkRebase(session, args, workspace)
       : tool === 'capture_panel'
@@ -421,6 +429,35 @@ export class PowermoveAgentToolBridge {
         : await this.callRenderer(session, tool, args);
     session.noteResponse(response);
     return response;
+  }
+
+  /** Store tools run entirely in main (network/install/publish), never the
+   * renderer, and never touch the live composition — so no revision or
+   * `noteResponse` bookkeeping, like the fork branch. */
+  private async callStoreTool(session: PowermoveAgentToolSession, tool: string, args: Record<string, unknown>): Promise<AgentToolResponseEvent> {
+    const store = this.options.storeAgent;
+    if (!store) throw new Error('The Powermove Store is unavailable in this run (the app may be offline or signed out).');
+    const result = await this.dispatchStoreTool(store, tool, args);
+    return {
+      runId: session.runId, callId: `tool-${randomUUID()}`,
+      ok: true,
+      content: [{ type: 'text', text: JSON.stringify(result ?? { ok: true }) }]
+    };
+  }
+
+  private dispatchStoreTool(store: StoreAgentGateway, tool: string, args: Record<string, unknown>): Promise<unknown> {
+    switch (tool) {
+      case 'store_search': return store.search(args as StoreSearchInput);
+      case 'store_extension': return store.detail(String(args['handle']), String(args['slug']));
+      case 'store_source': return store.source(String(args['releaseId']), args['path'] != null ? String(args['path']) : undefined);
+      case 'store_library': return store.library();
+      case 'store_install': return store.install(args as unknown as StoreInstallInput);
+      case 'store_update': return store.update(String(args['localId']));
+      case 'store_uninstall': return store.uninstall(String(args['localId']));
+      case 'store_publish_prepare': return store.publishPrepare(String(args['localId']));
+      case 'store_publish': return store.publish(args as unknown as StorePublishInput);
+      default: throw new Error(`Unknown Powermove Store tool: ${tool}`);
+    }
   }
 
   private async callStageForkRebase(

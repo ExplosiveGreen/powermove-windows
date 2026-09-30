@@ -49,6 +49,7 @@ import { buildFixPrompt, buildRebasePrompt } from './instructions';
 import { restoreExtensionChangeSet } from './change-history';
 import { agentWorkspaceRoot, safeAgentComponent, sessionPathFor, type AgentApiPackFile } from './workspace';
 import { PowermoveAgentToolBridge, type PowermoveAgentToolSession } from '../agent-tools/bridge';
+import type { StoreAgentGateway } from '../cloud/store-agent';
 import { readForkRebaseInfo, stageForkRebase } from '../extensions/rebase';
 
 const FIX_PROMPT_ERROR_CHARS = 4_000;
@@ -69,6 +70,8 @@ export interface CodexIpcContext {
   claudeBinaryPref?(): string | null;
   openExternal(url: string): Promise<void>;
   refreshExtensions?(ids: string[]): Promise<void>;
+  /** The Store as the agent uses it; null/absent when cloud is unconfigured. */
+  storeAgent?(): StoreAgentGateway | null;
   /** Standalone MCP shim copied beside the packaged app resources. */
   agentToolServerPath?: string;
   /** Defaults to process.execPath (Electron with ELECTRON_RUN_AS_NODE=1). */
@@ -328,6 +331,7 @@ export function registerCodexIpc(
         mcpServerPath: ctx.agentToolServerPath,
         ...(ctx.agentToolCommand ? { command: ctx.agentToolCommand } : {}),
         ...(ctx.agentToolCommandArgs ? { commandArgs: ctx.agentToolCommandArgs } : {}),
+        storeAgent: ctx.storeAgent?.() ?? null,
         stageForkRebase: ({ forkId, stagingDirectory }) => stageForkRebase({
           forkId,
           stagingDirectory,
