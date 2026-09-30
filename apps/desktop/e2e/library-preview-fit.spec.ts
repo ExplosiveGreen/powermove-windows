@@ -18,6 +18,7 @@ test('library previews contain tall panel content without changing the live pane
   });
   const card = page.locator('[data-panel-id="fit-fixture"]');
   await expect(card).toBeVisible();
+  await card.scrollIntoViewIfNeeded();
   await expect(card.locator('.library-clone')).toBeAttached();
   const geometry = await card.evaluate(card => {
     const clone = card.querySelector<HTMLElement>('.library-clone')!;
@@ -39,6 +40,11 @@ test('built-in Library previews fit their scrollable content', async ({ session 
   await page.waitForFunction(() => Boolean((window as any).PM?.GL?.gl));
   await page.evaluate(() => (window as any).PM.LibraryUI.open());
   await expect(page.locator('#library-screen')).toHaveAttribute('data-previews', 'ready');
+  const cards = page.locator('.library-card[data-panel-id]');
+  for (const card of await cards.all()) {
+    await card.scrollIntoViewIfNeeded();
+    await expect(card.locator('.library-clone')).toBeAttached();
+  }
   await expect(page.locator('.library-clone').first()).toBeAttached();
   const clipped = await page.locator('.library-clone').evaluateAll(clones => clones.flatMap(clone => {
     return [...clone.querySelectorAll<HTMLElement>('*')].filter(node =>

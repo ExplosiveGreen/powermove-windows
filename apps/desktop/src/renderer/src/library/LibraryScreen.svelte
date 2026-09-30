@@ -14,6 +14,7 @@
   import { deletePanel, deletedPanelIds } from './panel-deletion';
   import { panelBelongsInLibrary, panelPreviewSize } from './panel-preview';
   import { panelFrameOf } from '../kernel/panel-frame';
+  import { placePanel } from '../layout/portal';
   import { artFor, statusText, storeBridge } from '../store/data';
   import type { LibraryItemDto } from '../../../shared/store-ipc';
   import { coverSize, MAX_PREVIEW_HEIGHT, MAX_PREVIEW_WIDTH, packRows, panelSource, shelfScale, SHELF_LABEL, SHELF_ORDER, type CoverSize, type ShelfId } from './shelves';
@@ -169,6 +170,15 @@
   const DEFAULT_COVER = { width: 360, height: 240 };
   const WORKSPACE_COVER = { width: 480, height: 300 };
   let shelfWidth = $state(0);
+  function measureShelves(node: HTMLElement) {
+    const observer = new ResizeObserver(([entry]) => {
+      /* The shelves stay mounted behind the editor. Hiding them must not
+         repack every book into a zero-width row. */
+      if (entry && entry.contentRect.width > 0) shelfWidth = entry.contentRect.width;
+    });
+    observer.observe(node);
+    return { destroy() { observer.disconnect(); } };
+  }
   const scale = $derived(shelfScale(shelfWidth));
   const rowWidth = $derived(Math.max(1, shelfWidth - LEDGE_INSET * 2));
   const storeAvailable = $derived(!!PM.StoreUI?.open);
@@ -312,9 +322,10 @@
   /* Travels `node` from the `from` box to where it already sits. Transform
      only: any opacity on the moving panel — or on an ancestor fading it in —
      reads as a flash rather than as one object changing place. */
-  function flip(node: HTMLElement, from: DOMRect, done?: () => void): Animation | null {
-    const to = node.getBoundingClientRect();
-    if (!from.width || !from.height || !to.width || !to.height) { done?.(); return null; }
+  type Flight = { cancel(): void };
+  function flip(node: HTMLElement, from: DOMRect, done?: (finished: boolean) => void,
+    to = node.getBoundingClientRect()): Flight | null {
+    if (!from.width || !from.height || !to.width || !to.height) { done?.(true); return null; }
     const origin = node.style.transformOrigin;
     node.style.transformOrigin = '0 0';
     const shift = `translate(${from.left - to.left}px,${from.top - to.top}px)`;
@@ -323,10 +334,18 @@
       [{ transform: `${shift} ${scale}` }, { transform: 'none' }],
       { duration: FLIP_MS, easing: FLIP_EASE }
     );
-    const settle = () => { node.style.transformOrigin = origin; done?.(); };
-    animation.onfinish = settle;
-    animation.oncancel = settle;
-    return animation;
+    let settled = false;
+    const settle = (finished: boolean) => {
+      if (settled) return;
+      settled = true;
+      node.style.transformOrigin = origin;
+      done?.(finished);
+    };
+    animation.onfinish = () => settle(true);
+    animation.oncancel = () => settle(false);
+    /* Animation cancel events arrive later. Clean up now so an old flight
+       cannot clear or complete a newer one after a quick Back or reopen. */
+    return { cancel() { animation.cancel(); settle(false); } };
   }
 
   /* cloneNode leaves canvases blank and drops live form values; copy both so
@@ -389,13 +408,9 @@
     }
   }
 
-  /* On the way back the card cannot simply be flipped: at stage size it is
-     clipped by its own tile and by the scrolling grid. So a copy of the card
-     flies over the whole screen instead, and the card itself stays hidden
-     until the copy lands on it. Anchored to #library-screen — a fixed ghost
-     would be re-based by any transformed ancestor, and .library-card takes a
-     transform on hover. */
-  let flying: Animation | null = null;
+  /* The cached snapshot flies above the scrolling shelves on the way back.
+     Moving it avoids cloning the panel and copying its canvas bitmaps again. */
+  let flying: Flight | null = null;
 
   function flyBack(id: string, from: DOMRect): void {
     const card = cardBox(id);
@@ -404,20 +419,30 @@
     const to = card.getBoundingClientRect();
     const base = rootEl.getBoundingClientRect();
     if (!to.width || !to.height) return;
-    const ghost = card.cloneNode(true) as HTMLElement;
-    ghost.classList.add('library-fly');
+    const preview = previews.get(id);
+    const frame = preview?.frame;
+    const ghost = frame ? document.createElement('div') : card.cloneNode(true) as HTMLElement;
+    ghost.classList.add('library-live', 'library-fly');
+    ghost.classList.toggle('is-clipped', !!preview?.clipped);
     ghost.style.left = `${to.left - base.left}px`;
     ghost.style.top = `${to.top - base.top}px`;
     ghost.style.width = `${to.width}px`;
     ghost.style.height = `${to.height}px`;
-    copyLiveState(card, ghost);
+    if (frame && preview) {
+      frame.style.transform = `scale(${to.width / preview.width})`;
+      ghost.appendChild(frame);
+    }
     rootEl.appendChild(ghost);
     card.style.visibility = 'hidden';
     flying = flip(ghost, from, () => {
       flying = null;
+      if (frame?.parentNode === ghost && card.isConnected) {
+        card.appendChild(frame);
+        card.classList.add('has-preview');
+      }
       ghost.remove();
       card.style.visibility = '';
-    });
+    }, to);
   }
 
   /* What travels is the cover's snapshot, not the live panel: a live panel
@@ -437,10 +462,18 @@
     /* Render the editor now so the stage frame can be measured at its real
        size before the first painted frame of the animation. */
     flushSync();
+    rootEl?.focus({ preventScroll: true });
     const stage = stageBox();
     const joined = () => { if (editingId === id) { landed = true; focusScope(id); } };
-    if (stage) flip(stage, from, joined);
-    else joined();
+    if (stage) {
+      const to = stage.getBoundingClientRect();
+      const preview = previews.get(id);
+      if (preview?.frame) preview.frame.style.transform = `scale(${to.width / preview.width})`;
+      flying = flip(stage, from, (finished) => {
+        flying = null;
+        if (finished) joined();
+      }, to);
+    } else joined();
   }
 
   function focusScope(id: string): void {
@@ -455,6 +488,8 @@
     if (!editingId) return;
     const id = editingId;
     const from = animate && wantsMotion() ? stageBox()?.getBoundingClientRect() ?? null : null;
+    flying?.cancel();
+    returnBorrowedPanel?.();
     editingId = null;
     landed = false;
     /* The agent may have changed it: re-snapshot this one cover, after it lands. */
@@ -468,28 +503,32 @@
   /* Borrows the live panel element from the layout pool, exactly like the
      panel pop-out does, so the editor previews the real panel — state,
      handlers and agent edits included — then hands it back on teardown. */
+  let returnBorrowedPanel: (() => void) | null = null;
   function mirrorPanel(node: HTMLElement, id: string) {
     const element = PM.panelInst?.[id]?.el as HTMLElement | undefined;
+    const originalParent = element?.parentElement;
     let borrowed: HTMLElement | null = null;
     if (element && !element.classList.contains('popped')) {
       borrowed = element;
       borrowed.classList.add('popped');
-      node.appendChild(borrowed);
+      placePanel(node, borrowed);
     }
-    return {
-      destroy() {
-        if (!borrowed) return;
-        borrowed.classList.remove('popped');
-        const host = document.querySelector<HTMLElement>(
-          `#pm-panel-pool [data-panel-host="${CSS.escape(id)}"]`
-        );
-        host?.appendChild(borrowed);
-        borrowed = null;
-        /* Layout.apply flushes synchronously; running it inside this teardown
-           (itself a Svelte flush) would abort the view swap, so defer it. */
-        queueMicrotask(() => PM.Layout?.apply?.(PM.WS?.current));
-      }
+    const restore = () => {
+      if (returnBorrowedPanel === restore) returnBorrowedPanel = null;
+      if (!borrowed) return;
+      borrowed.classList.remove('popped');
+      const host = document.querySelector<HTMLElement>(
+        `#body [data-panel-slot="${CSS.escape(id)}"]`
+      ) ?? document.querySelector<HTMLElement>(
+        `#pm-panel-pool [data-panel-host="${CSS.escape(id)}"]`
+      ) ?? (originalParent?.isConnected ? originalParent : null);
+      if (host) placePanel(host, borrowed);
+      borrowed = null;
     };
+    /* Return before Svelte detaches the stage. A disconnected iframe cannot
+       be moved in place and would reload even through placePanel. */
+    returnBorrowedPanel = restore;
+    return { destroy: restore };
   }
 
   /* Stands the cover's snapshot in the stage for the flight, scaled to fill
@@ -499,7 +538,6 @@
     const frame = preview?.frame;
     if (!frame || !preview) return {};
     frame.parentNode?.removeChild(frame);
-    frame.style.transform = `scale(${node.clientWidth / preview.width})`;
     node.appendChild(frame);
     return {
       destroy() {
@@ -543,19 +581,43 @@
      replacement is ready, so a cover never blinks back to its placeholder. */
   const previews = new Map<string, Preview>();
 
-  /* Building a snapshot forces layout on a whole panel's DOM, so builds run a
-     few per frame, top of the shelves first, and wait out any travel in
-     flight — the click that opened the Library, or a panel landing back on
-     its shelf, is never the frame that pays for them. */
+  /* Observe the scroll area once. Covers just below it are prepared ahead of
+     scrolling; distant shelves do not clone or measure any panel DOM. */
+  const previewVisibility = new Map<Element, (nearby: boolean) => void>();
+  let previewObserver: IntersectionObserver | null = null;
+  function observePreview(node: HTMLElement, changed: (nearby: boolean) => void): () => void {
+    if (!previewObserver) {
+      previewObserver = new IntersectionObserver((entries) => {
+        for (const entry of entries) previewVisibility.get(entry.target)?.(entry.isIntersecting);
+      }, { root: node.closest('.library-content'), rootMargin: '200px 0px' });
+    }
+    previewVisibility.set(node, changed);
+    previewObserver.observe(node);
+    return () => {
+      previewObserver?.unobserve(node);
+      previewVisibility.delete(node);
+      if (!previewVisibility.size) { previewObserver?.disconnect(); previewObserver = null; }
+    };
+  }
+
+  /* Cloning and measuring nearby panels runs in short batches, leaving time
+     between builds for scrolling, typing and navigation. A cover travelling
+     back from the editor lands before any replacement is measured. */
   const buildQueue: Array<() => void> = [];
   let pumping = false;
   /* A hidden or busy window can hold animation frames back; a timer keeps
      the queue moving regardless. Whichever fires first runs the step. */
   function nextFrame(step: () => void): void {
     let ran = false;
-    const run = () => { if (!ran) { ran = true; step(); } };
-    window.requestAnimationFrame(run);
-    window.setTimeout(run, 64);
+    const run = () => {
+      if (ran) return;
+      ran = true;
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+      step();
+    };
+    const frame = window.requestAnimationFrame(run);
+    const timer = window.setTimeout(run, 64);
   }
   function scheduleBuild(task: () => void): void {
     buildQueue.push(task);
@@ -565,7 +627,7 @@
   function pumpBuilds(): void {
     if (!flying) {
       const start = performance.now();
-      while (buildQueue.length && performance.now() - start < 8) buildQueue.shift()!();
+      while (buildQueue.length && performance.now() - start < 4) buildQueue.shift()!();
     }
     if (buildQueue.length) { nextFrame(pumpBuilds); return; }
     pumping = false;
@@ -637,6 +699,8 @@
     let current = params;
     let shown: Preview | null = null;
     let alive = true;
+    let nearby = false;
+    let queuedStamp: string | null = null;
     function fit(): void {
       const size = shown?.frame ? { width: shown.width, height: shown.height } : panelPreviewSize(PM.PANELS?.[current.id] ?? {});
       const cover = coverSize(size, current.scale, current.maxWidth);
@@ -661,19 +725,22 @@
         frame.classList.add('is-fresh');
         frame.addEventListener('animationend', () => frame.classList.remove('is-fresh'), { once: true });
       }
-      if (preview?.frame && preview.frame.parentNode !== node) node.appendChild(preview.frame);
-      node.classList.toggle('has-preview', !!preview?.frame);
+      if (nearby && preview?.frame && preview.frame.parentNode !== node
+        && !preview.frame.parentElement?.classList.contains('library-fly')) node.appendChild(preview.frame);
+      node.classList.toggle('has-preview', preview?.frame?.parentNode === node);
       node.classList.toggle('is-clipped', !!preview?.clipped);
       fit();
     }
     function attach(): void {
       const cached = previews.get(current.id);
       show(cached ?? null);
-      if (cached?.stamp === current.stamp) return;
+      if (!nearby || cached?.stamp === current.stamp || queuedStamp === current.stamp) return;
       const id = current.id;
       const stamp = current.stamp;
+      queuedStamp = stamp;
       scheduleBuild(() => {
-        if (!alive || current.id !== id || current.stamp !== stamp) return;
+        if (queuedStamp === stamp) queuedStamp = null;
+        if (!alive || !nearby || !isOpen() || editingId || current.id !== id || current.stamp !== stamp) return;
         const previous = shown?.frame;
         const next = buildPreview(node, id, stamp);
         if (previous && previous !== next.frame) previous.remove();
@@ -683,6 +750,10 @@
     }
     paintArt();
     attach();
+    const unobserve = observePreview(node, (visible) => {
+      nearby = visible;
+      if (nearby) attach();
+    });
     return {
       update(next: PreviewParams) {
         const stale = next.id !== current.id || next.stamp !== current.stamp;
@@ -693,6 +764,7 @@
       },
       destroy() {
         alive = false;
+        unobserve();
         /* The snapshot stays cached for the next book that shows this panel. */
         if (shown?.frame?.parentNode === node) shown.frame.remove();
         node.classList.remove('has-preview', 'is-clipped');
@@ -845,6 +917,7 @@
       <BackTitle
         {PM}
         class="library-title"
+        animateText={false}
         text={editingPanel ? pageTitle : 'Library'}
         back={!!editingPanel}
         label="Back to panels"
@@ -912,8 +985,8 @@
           {/if}
         </aside>
       </div>
-    {:else}
-      <div class="library-shell" in:fade={pageSettle()}>
+    {/if}
+      <div class="library-shell" style:display={editingPanel ? 'none' : undefined} in:fade={pageSettle()}>
         <nav class="library-sidebar" aria-label="Library sections">
           <label class="library-search">
             <Icon {PM} name="search" />
@@ -982,7 +1055,7 @@
               class:is-empty={shelves.length === 0}
               style:--shelf-gap={`${SHELF_GAP}px`}
               style:--ledge-inset={`${LEDGE_INSET}px`}
-              bind:clientWidth={shelfWidth}
+              use:measureShelves
             >
               {#each shelves as shelf (shelf.id)}
                 <section class="library-shelf" aria-label={shelf.label}>
@@ -1018,7 +1091,6 @@
           </div>
         </main>
       </div>
-    {/if}
   </section>
 </div>
 

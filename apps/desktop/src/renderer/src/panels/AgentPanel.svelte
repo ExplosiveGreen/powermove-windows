@@ -137,11 +137,16 @@
 
   $effect(() => {
     agentState.revision;
-    if (!scroller || showSetup || hasConversationSelection()) return;
-    if (!userScrolled || distanceFromBottom() < 160) {
-      const el = scroller;
-      window.requestAnimationFrame(() => { if (!hasConversationSelection()) el.scrollTo({ top: el.scrollHeight }); });
-    }
+    if (!scroller || showSetup) return;
+    const el = scroller;
+    /* Selection and scroll geometry can force layout. Read them together on
+       the next frame, after a library view swap has finished changing DOM. */
+    const frame = window.requestAnimationFrame(() => {
+      if (!hasConversationSelection() && (!userScrolled || distanceFromBottom() < 160)) {
+        el.scrollTo({ top: el.scrollHeight });
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
   });
 
   $effect(() => {

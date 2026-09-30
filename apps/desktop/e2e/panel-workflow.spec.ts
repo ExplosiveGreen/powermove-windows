@@ -98,6 +98,7 @@ libraryTest('library shows a panel grid, adds panels to the workspace, and edits
   });
   expect(shelfScale.timeline).toBeCloseTo(shelfScale.notes, 2);
   const timelinePreview = library.locator('[data-panel-id="timeline"] .library-live-frame');
+  await library.locator('[data-panel-id="timeline"]').scrollIntoViewIfNeeded();
   await expect(timelinePreview).toHaveCSS('width', '800px');
   await expect(timelinePreview).toHaveCSS('height', '440px');
   const timelineFit = await library.locator('[data-panel-id="timeline"] .library-clone').evaluate((clone) => {

@@ -10,6 +10,7 @@
     PM,
     text,
     back = false,
+    animateText = true,
     label,
     onback,
     class: className = ''
@@ -17,6 +18,7 @@
     PM: Record<string, any>;
     text: string;
     back?: boolean;
+    animateText?: boolean;
     /** Accessible name while it is a button; defaults to "Back to {text}". */
     label?: string;
     onback?: () => void;
@@ -40,7 +42,11 @@
     onkeydown={(event) => { if (back && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); go(); } }}
   >
     <span class="pm-back-title-chev" aria-hidden="true"><Icon {PM} name="chev" /></span>
-    <Scritto value={text} />
+    {#if animateText}
+      <Scritto value={text} />
+    {:else}
+      <span>{text}</span>
+    {/if}
   </span>
 </h1>
 
