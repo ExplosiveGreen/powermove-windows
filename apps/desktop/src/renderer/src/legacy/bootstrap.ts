@@ -9,6 +9,7 @@ import { installSvelteOverlays } from '../overlays/install';
 import { installForkUpdates } from '../shell/fork-updates';
 import { installExtensionUpdateNotices } from '../shell/extension-update-notices';
 import { installAppUpdates } from '../shell/app-updates';
+import { installWhatsNew } from '../shell/whats-new';
 
 import { BUILTIN_EXTENSIONS } from '../kernel/builtins';
 import { bootExtensions, installKernel } from '../kernel/install';
@@ -116,6 +117,7 @@ const INSTALLS: Array<[string, (PM: PMRegistry) => void]> = [
   ['ui/store', installStoreUi],
   ['cloud/account', installCloudAccount],
   ['vars', installVars],
+  ['shell/whats-new', (PM) => void installWhatsNew(PM)],
   /* Extensions load last: every kernel registry is populated and the whole
      legacy UI is mounted, so an extension can override any of it. */
   ['kernel/boot', (PM) => void bootExtensions(PM.Kernel, BUILTIN_EXTENSIONS).then(() => PM.Kernel.events.emit('extensions:ready', {})).catch((error) => console.error('[kernel] boot failed', error))]

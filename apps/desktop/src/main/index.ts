@@ -1,6 +1,7 @@
 import { registerFontsIpc } from './fonts';
 import { registerAgentNotifications } from './agent-notifications';
 import { installUpdates } from './updates';
+import { installWhatsNew, whatsNewOptions } from './whats-new';
 import { installTextContextMenu } from './text-context-menu';
 import { installPermissionHandlers } from './permissions';
 import { registerRenderEncoder } from './render-encoder';
@@ -1185,6 +1186,7 @@ if (!hasSingleInstanceLock) {
       closeWindow: () => currentEditor()?.close()
     });
     if (!isBackgroundTest) installUpdates(menu);
+    if (!isBackgroundTest || process.env['POWERMOVE_WHATS_NEW_SINCE']) installWhatsNew(ipcMain, whatsNewOptions(process.env));
 
     if (isBackgroundTest) app.dock?.hide();
     const completedOnboarding = await onboardingCompleted(app.getPath('userData'));

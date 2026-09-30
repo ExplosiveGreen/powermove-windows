@@ -137,7 +137,9 @@ export const IPC = {
   updateStatus: 'update:status',
   updateCheck: 'update:check',
   updateInstall: 'update:install',
-  updateChanged: 'update:changed' // main → renderer
+  updateChanged: 'update:changed', // main → renderer
+  whatsNewPending: 'whats-new:pending',
+  whatsNewSeen: 'whats-new:seen'
 } as const;
 
 /** Auto-update lifecycle as the renderer sees it. `ready` means Squirrel has
@@ -148,6 +150,22 @@ export interface AppUpdateState {
   current: string;
   /** Version being downloaded or staged, when known. */
   version: string | null;
+}
+
+/** One GitHub release's notes, as markdown. */
+export interface WhatsNewRelease {
+  version: string;
+  name: string;
+  notes: string;
+  url: string;
+  date: string | null;
+}
+
+/** Release notes to show on the first launch after an update, newest first. */
+export interface WhatsNew {
+  current: string;
+  previous: string;
+  releases: WhatsNewRelease[];
 }
 
 /* ── windows ────────────────────────────────────── */
@@ -837,6 +855,14 @@ export interface PowermoveBridge {
     /** Quit normally (save barrier included), install the staged update, relaunch. */
     install(): Promise<void>;
     onChanged(cb: (state: AppUpdateState) => void): () => void;
+  };
+
+  /** Release notes since the last version the user ran (desktop only). */
+  whatsNew?: {
+    /** The notes to show, once per launch; null when there is nothing new. */
+    pending(): Promise<WhatsNew | null>;
+    /** The notes were shown; don't show them again for this version. */
+    seen(): Promise<void>;
   };
 
   extensions: PowermoveExtensionsBridge;

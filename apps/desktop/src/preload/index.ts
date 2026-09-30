@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'ele
 import {
   IPC,
   type AppUpdateState,
+  type WhatsNew,
   type ArtifactFile,
   type AttachmentRevealRequest,
   type CaptureResult,
@@ -349,6 +350,10 @@ const bridge: PowermoveBridge = {
       ipcRenderer.on(IPC.updateChanged, listener);
       return () => ipcRenderer.removeListener(IPC.updateChanged, listener);
     }
+  },
+  whatsNew: {
+    pending: () => ipcRenderer.invoke(IPC.whatsNewPending) as Promise<WhatsNew | null>,
+    seen: () => ipcRenderer.invoke(IPC.whatsNewSeen) as Promise<void>
   },
 
   onMenuCommand: (cb) => {
