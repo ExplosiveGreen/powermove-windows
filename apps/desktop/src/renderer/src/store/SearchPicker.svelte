@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
   import '../controls/search-picker.css';
-  import { relativeOpened } from '../panels/agent/threads';
-  let { anchor, projects, currentId, onchoose, onclose }: {
-    anchor: HTMLElement; projects: Array<{ id: string; name: string; updatedAt?: number }>;
-    currentId?: string; onchoose: (id: string) => Promise<void>; onclose: () => void;
+  export interface SearchPickerItem { id: string; title: string; meta?: string; current?: boolean }
+  let { anchor, items, placeholder, label, emptyNone, onchoose, onclose }: {
+    anchor: HTMLElement; items: SearchPickerItem[];
+    placeholder: string; label: string; emptyNone: string;
+    onchoose: (id: string) => Promise<void>; onclose: () => void;
   } = $props();
   let query = $state(''), pending = $state(false), error = $state('');
   let popup: HTMLDivElement, search: HTMLInputElement, glider: HTMLDivElement;
@@ -12,8 +13,7 @@
   let side = $state<'top' | 'bottom'>('bottom');
   let closing = false, gliderOn = false;
   let closeTimer: ReturnType<typeof setTimeout> | undefined;
-  const openedAt = Date.now();
-  const matches = $derived(projects.filter(p => p.name.toLowerCase().includes(query.trim().toLowerCase())));
+  const matches = $derived(items.filter(i => i.title.toLowerCase().includes(query.trim().toLowerCase())));
   function finish() { onclose(); }
   export function dismiss(focus = true) {
     if (closing) return;
@@ -28,7 +28,7 @@
     if (pending || closing) return;
     pending = true; error = '';
     try { await onchoose(id); dismiss(false); }
-    catch (e) { error = e instanceof Error ? e.message : 'Could not open this project.'; }
+    catch (e) { error = e instanceof Error ? e.message : 'Could not open this.'; }
     finally { pending = false; }
   }
   function rest() { glider?.classList.remove('on'); gliderOn = false; }
@@ -56,6 +56,7 @@
     if (event.key === 'Enter' && target === search && matches[0]) { event.preventDefault(); void choose(matches[0].id); }
   }
   function place() {
+    if (!popup) return;
     const a = anchor.getBoundingClientRect();
     width = Math.min(Math.max(Math.ceil(a.width), 248), window.innerWidth - 16);
     const h = Math.min(popup.offsetHeight || 360,360);
@@ -66,7 +67,7 @@
     left = Math.max(8,Math.min(a.left,window.innerWidth - width - 8));
   }
   onMount(() => {
-    void tick().then(() => { if (closing) return; place(); popup.dataset.state = 'open'; search.focus(); });
+    void tick().then(() => { if (closing || !popup) return; place(); popup.dataset.state = 'open'; search.focus(); });
     const outside = (e: PointerEvent) => { if (!popup.contains(e.target as Node) && !anchor.contains(e.target as Node)) dismiss(false); };
     const scroll = (e: Event) => { if (!popup.contains(e.target as Node)) dismiss(false); };
     const leave = () => dismiss(false);
@@ -76,15 +77,15 @@
   });
   onDestroy(() => { clearTimeout(closeTimer); popup?.removeEventListener('animationend',finish); });
 </script>
-<div class="pm-menu thread-popup" bind:this={popup} role="dialog" aria-label="Open in project" tabindex="-1" onkeydown={key} data-side={side} style:left={`${left}px`} style:top={`${top}px`} style:width={`${width}px`} style:max-height={`${maxHeight}px`}>
-  <input class="thread-search" bind:this={search} bind:value={query} oninput={rest} placeholder="Search projects…" aria-label="Search projects" autocomplete="off" spellcheck="false" />
-  <div class="thread-list" role="listbox" aria-label="Projects" tabindex="-1" onpointerleave={rest} onpointermove={(event) => { const row = (event.target as HTMLElement).closest<HTMLElement>('.thread-row'); if (row) glideTo(row); }}>
+<div class="pm-menu thread-popup" bind:this={popup} role="dialog" aria-label={label} tabindex="-1" onkeydown={key} data-side={side} style:left={`${left}px`} style:top={`${top}px`} style:width={`${width}px`} style:max-height={`${maxHeight}px`}>
+  <input class="thread-search" bind:this={search} bind:value={query} oninput={rest} {placeholder} aria-label={placeholder} autocomplete="off" spellcheck="false" />
+  <div class="thread-list" role="listbox" aria-label={label} tabindex="-1" onpointerleave={rest} onpointermove={(event) => { const row = (event.target as HTMLElement).closest<HTMLElement>('.thread-row'); if (row) glideTo(row); }}>
     <div class="pm-menu-glider thread-glider" bind:this={glider} aria-hidden="true"></div>
-    {#each matches as project (project.id)}
-      <div class="thread-row" class:current={project.id === currentId} role="option" tabindex="-1" aria-selected={project.id === currentId} aria-disabled={pending} onfocus={(event) => glideTo(event.currentTarget)} onclick={() => void choose(project.id)} onkeydown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); void choose(project.id); } }}>
-        <span class="thread-row-text"><span class="thread-row-title">{project.name}</span><span class="thread-row-meta" class:current={project.id === currentId}>{project.id === currentId ? 'Current' : project.updatedAt ? relativeOpened(project.updatedAt,openedAt) : 'Saved project'}</span></span>
+    {#each matches as item (item.id)}
+      <div class="thread-row" class:current={item.current} role="option" tabindex="-1" aria-selected={item.current === true} aria-disabled={pending} onfocus={(event) => glideTo(event.currentTarget)} onclick={() => void choose(item.id)} onkeydown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); void choose(item.id); } }}>
+        <span class="thread-row-text"><span class="thread-row-title">{item.title}</span>{#if item.meta}<span class="thread-row-meta" class:current={item.current}>{item.meta}</span>{/if}</span>
       </div>
-    {:else}<p class="thread-empty">{projects.length ? `No projects match “${query.trim()}”.` : 'Create a project first to use this extension.'}</p>{/each}
+    {:else}<p class="thread-empty">{items.length ? `No matches for “${query.trim()}”.` : emptyNone}</p>{/each}
   </div>
   {#if error}<p class="thread-empty" role="alert">{error}</p>{/if}
 </div>
