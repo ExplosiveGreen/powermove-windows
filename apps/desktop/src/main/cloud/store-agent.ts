@@ -228,7 +228,7 @@ export function createStoreAgentGateway(options: StoreAgentGatewayOptions): Stor
       return result;
     },
 
-    publishPrepare(localId) {
+    async publishPrepare(localId) {
       requirePublisher();
       return publisher.prepare(localId);
     },
