@@ -3,6 +3,7 @@
   import Icon from './Icon.svelte';
   import type { PanelProps } from './registerSveltePanel';
   import { bridge } from '../kernel/bridge';
+  import { createCompThumbnails } from './comp-thumbnails.svelte';
 
   interface Asset {
     id: string;
@@ -38,6 +39,7 @@
   const comps = $derived((doc.tick.project, doc.tick.structure, doc.tick.history, doc.proj,
     (PM.Comps?.list?.() ?? []) as CompItem[]));
   let selectedCompId = $state<string | null>(null);
+  const compThumbs = createCompThumbnails(PM);
   let draggingCompId = $state<string | null>(null);
   const assets = $derived((doc.tick.assets, doc.proj, Object.values(doc.proj?.assets ?? {}) as Asset[]));
   let selectedAssetId = $state<string | null>(null);
@@ -59,6 +61,13 @@
       PM.Kernel?.services.get('viewer')?.preview?.clear?.();
     };
   });
+
+  /* Re-render composition thumbnails once the project settles after any change. */
+  $effect(() => {
+    const { values, structure, project, assets: media, history } = doc.tick;
+    compThumbs.refresh(`${doc.generation}:${values}:${structure}:${project}:${media}:${history}`);
+  });
+  $effect(() => () => compThumbs.dispose());
 
   /* Project tabs can also change through the keyboard or commands, without a
      pointer event. A source preview belongs only to the project that selected
@@ -572,8 +581,10 @@
         onkeydown={(event) => handleCompKeydown(event, comp)}
       >
         <span class="asset-preview comp" style={`--comp-bg:${comp.bg || '#000000'};--comp-ratio:${comp.w}/${comp.h}`}>
-          <span class="comp-frame" aria-hidden="true"></span>
-          <Icon {PM} name="layers" />
+          <span class="comp-frame" aria-hidden="true">
+            {#if compThumbs.urls[comp.id]}<img class="comp-thumb" src={compThumbs.urls[comp.id]} alt="" />{/if}
+          </span>
+          {#if !compThumbs.urls[comp.id]}<Icon {PM} name="layers" />{/if}
           <span class="asset-badge">{mediaDuration(comp.dur) || `${comp.dur}s`}</span>
           {#if comp.open}<span class="comp-open" role="img" aria-label="Open in the timeline"></span>{/if}
           <span class="asset-actions">

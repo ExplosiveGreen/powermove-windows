@@ -1781,15 +1781,17 @@ GL.render = (T: any, opt: any = {}) => {
 };
 
 /** Render one frame and read back raw RGBA pixels (bottom-up, premultiplied).
-    Opaque callers can request topDownOpaque for directly consumable image data. */
+    Opaque callers can request topDownOpaque for directly consumable image data.
+    `opt.comp` renders another composition record instead of the open one. */
 GL.renderToPixels = (T: any, W: any, H: any, opt: any = {}) => {
   const gl = GL.gl; if (!gl) return null;
   const previousPreviews = useVideoPreviews; useVideoPreviews = false;
+  const comp = opt.comp || PM.proj;
   PM.beginEval(T);
   let acc;
   try {
-    PM.scope.push(PM.proj);
-    try { acc = GL.renderProject(PM.proj, T, W, H, opt); }
+    PM.scope.push(comp);
+    try { acc = GL.renderProject(comp, T, W, H, opt); }
     finally { PM.scope.pop(); }
     bind(acc);
     const px = new Uint8Array(W * H * 4);
