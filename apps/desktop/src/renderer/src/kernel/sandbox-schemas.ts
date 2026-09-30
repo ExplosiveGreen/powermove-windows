@@ -14,10 +14,14 @@ const data: z.ZodType<Json> = z.lazy(() => z.union([
 const shape = <T extends z.ZodRawShape>(fields: T) => z.object(fields).strict();
 
 export const registrationSchemas = {
-  effects: shape({ id, label, group: small, params: z.array(data).max(32), frag: z.string().min(1).max(65_536), passes: z.number().int().min(1).max(8).optional(), keepOrig: z.boolean().optional(), rawShader: z.boolean().optional() }),
+  effects: shape({ id, label, group: small, params: z.array(data).max(32), frag: z.string().min(1).max(65_536), passes: z.number().int().min(1).max(8).optional(), keepOrig: z.boolean().optional(), backdrop: z.boolean().optional(), rawShader: z.boolean().optional(), viewportSafe: z.boolean().optional(), viewportPadding: z.array(z.string()).max(32).optional() }),
   transitions: shape({ id, label, group: small.optional(), params: z.array(data).max(32), frag: z.string().min(1).max(65_536), rawShader: z.boolean().optional() }),
   layers: shape({ id, label, version: z.number().int().nonnegative(), icon: small.optional(), color: small.optional(), width: z.number().finite().optional(), height: z.number().finite().optional(), params: z.array(data).max(32), defaults: z.record(z.string(), data).optional(), renderer: z.union([shape({ kind: z.literal('fragment'), fragment: z.string().max(65_536) }), shape({ kind: z.literal('mesh'), assetField: id })]) }),
-  theme: shape({ id, name: label, scheme: z.enum(['light', 'dark', 'auto']), tokens: z.record(z.string().startsWith('--').max(128), small).optional(), darkTokens: z.record(z.string().startsWith('--').max(128), small).optional(), css: z.string().max(65_536).optional() }),
+  // rootAttributes is accepted here but stripped for sandboxed themes in sandboxTheme() (sandbox-host.ts): the schema must not reject a field the host neutralizes.
+  theme: shape({ id, name: label, scheme: z.enum(['light', 'dark', 'auto']), tokens: z.record(z.string().startsWith('--').max(128), small).optional(), darkTokens: z.record(z.string().startsWith('--').max(128), small).optional(), css: z.string().max(65_536).optional(), rootAttributes: z.record(z.string().max(128), small).optional() }),
+  // inFields/looseModifiers/priority are deliberately NOT accepted: sandboxed
+  // bindings are forced to priority >= 1000 and may not fire in fields, so an
+  // untrusted extension cannot hijack a chord (see sandbox-host.test.ts).
   keybindings: shape({ key: id, command: id, args: z.array(data).max(32).optional(), repeat: z.boolean().optional() }),
   'media-defaults': shape({ anchor: shape({ x: z.number().finite(), y: z.number().finite() }) }),
   commands: shape({ id, label, category: small.optional(), kb: small.nullable().optional(), run: handle, when: handle.optional() }),
@@ -26,6 +30,9 @@ export const registrationSchemas = {
   menus: shape({ location: z.enum(['titlebar:right', 'panel:context', 'layer:context', 'timeline:context', 'viewer:context']), items: handle }),
   // Interest in an event name; listeners stay in the sandbox document.
   events: shape({ event: id }),
+  // Only these layout hints cross to a sandboxed (iframe) panel; headless,
+  // hideMoveHandle, moveSlot and the component/build/header handles deliberately
+  // do not (panelInfo in shim-api.ts), so the schema rejects them.
   panels: shape({ id, title: label, icon: small.optional(), size: z.number().finite().optional(), min: z.number().finite().optional(), flush: z.boolean().optional(), noscroll: z.boolean().optional() })
 } as const;
 
