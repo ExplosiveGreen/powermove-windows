@@ -3,6 +3,7 @@ import { layerDrop } from './layer-drop';
 import { graphSample, velocityDialog, scaleGraphDialog } from './graph-controls';
 import { temporalKeys, type KernelEvents, type PowermoveAPI, type Space3DAPI } from 'powermove';
 import { createGraphSampleCache } from './graph-sample-cache';
+import { createTextStagger, type StaggerHit } from './text-stagger';
 import { createDirectionalSnapper, drawDirectionalSnapGuide } from './directional-snap';
 import { graphAxisColor, graphValueTicks, graphKeyShape, graphPlotTop } from './graph-presentation';
 import { adjacentKeyframe } from './keyframe-navigation';
@@ -584,6 +585,7 @@ let refreshActiveScrub: (() => void) | null = null;
 // Pointer feedback remains continuous; the transport still selects project frames.
 let scrubPresentationTime: number | null = null;
 const playheadTime = () => scrubPresentationTime ?? api.transport.time();
+const textStagger = createTextStagger(api);
 
 function listen(target: any, event: string, handler: any, options?: any, bucket = runtimeCleanups) {
   target?.addEventListener?.(event, handler, options);
@@ -1620,6 +1622,7 @@ function drawClip(c: any, L: any, y: any) {
     c.fill();
   }
   c.restore();
+  if (L.type === 'text') textStagger.draw(c, L, t2x, yy, hh, pal.primary);
   if (L.type === 'audio') drawAudioClipWaveform(c, L, {
     x: x0, y: yy, width: w, height: hh, color: pal.primary,
   });
@@ -2547,7 +2550,9 @@ function onMove(e: any) {
     if (!workHit && hr && hr.row.kind === 'layer') {
       const L = hr.row.L;
       const x0 = t2x(L.from), x1 = t2x(L.from + L.dur);
+      const stagger = L.lock ? null : textStagger.hit(L, x, y, t2x, rowY(hr.i) + 1, T.row - 2);
       if (Math.abs(x - x0) < 5 || Math.abs(x - x1) < 5) cur = 'ew-resize';
+      else if (stagger) { cur = stagger.part === 'end' ? 'ew-resize' : 'grab'; title = stagger.band.animator.name; }
       else if (x > x0 && x < x1) cur = 'grab';
     } else if (!workHit && hr && hr.row.kind === 'prop') {
       const nearKey = hr.row.prop.kf.some((key: any) => Math.abs(t2x(hr.row.L.from + key.t) - x) < 6);
@@ -2631,7 +2636,28 @@ function onDown(e: any) {
   if (L.lock && (Math.abs(x - x0) < 5 || Math.abs(x - x1) < 5)) return;
   if (Math.abs(x - x0) < 5) return trim(e, 'in');
   if (Math.abs(x - x1) < 5) return trim(e, 'out');
+  const stagger = L.lock ? null : textStagger.hit(L, x, y, t2x, rowY(hr.i) + 1, T.row - 2);
+  if (stagger) return dragStagger(e, L, stagger);
   if (x > x0 && x < x1) return slide(e);
+}
+
+/* Moves a stagger text animator's Start, or stretches its timing from the end. */
+function dragStagger(e: any, L: any, { band, part }: StaggerHit) {
+  const fps = api.project.get().fps;
+  const label = part === 'body' ? 'Move text animation' : 'Stretch text animation';
+  let moved = false;
+  api.edit.begin(label, { origin: 'timeline' });
+  beginDrag(e, {
+    cursor: part === 'body' ? 'grabbing' : 'ew-resize',
+    move: (dx: number) => {
+      moved = true;
+      for (const [key, value] of Object.entries(textStagger.drag(band, part, dx / T.pps, fps)))
+        api.edit.dispatch({ type: 'set_property', target: L.id, path: `ta.${band.animator.id}.${key}`, value, time: api.transport.time(), mode: 'auto', preserveHandEdits: false });
+      invalidate();
+    },
+    up: () => { moved ? api.edit.commit(label) : api.edit.cancel(); invalidate(); },
+    cancel: () => { api.edit.cancel(); invalidate(); },
+  });
 }
 
 function panViewport(e: PointerEvent) {

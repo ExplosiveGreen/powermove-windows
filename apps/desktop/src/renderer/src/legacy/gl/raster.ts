@@ -9,7 +9,8 @@ import {
   isImageExtension, isVideoExtension, mayNeedVideoProxy, mediaExtension, needsImageConversion, needsVideoProxy,
 } from '../../../../shared/media-formats';
 import { fontAnchorOffset } from '../core/font-anchor';
-import { animatedGlyphs, textControlValues } from '../core/text-animation';
+import { animatedGlyphs, isIdentityGlyph, textAnimationKey, textAnimationState } from '../core/text-animation';
+import { glyphLayout, textSourceLines } from '../core/text-layout';
 import { rasterPaths, pathValues, groupMatrix } from '../core/vector-paths';
 import { createVariableFontRenderer, variationEntries, variationSettings } from '../../typography/font-renderer';
 export { variationEntries as textVariationEntries, variationSettings as formatFontVariationSettings } from '../../typography/font-renderer';
@@ -166,56 +167,6 @@ function resolvedTextContent(input: any, time = PM.time) {
   return resolved;
 }
 
-/** The Type tool's drag gesture creates AE-style paragraph text. Keep the
-    complete source string, but wrap its rendered lines inside the authored
-    box and clip overflow below the box. */
-interface SourceLine { text: string; start: number }
-
-/** Wrapped display lines with the source offset each one starts at. Caret
-    placement maps a source index to the line whose range contains it, so
-    every branch below records where its line begins in the source string. */
-function textSourceLines(d: any, context: any, lineHeight: number): SourceLine[] {
-  const text = String(d.text == null ? '' : d.text);
-  const paragraphs = text.split('\n');
-  const boxWidth = Number(d.boxWidth);
-  const lines: SourceLine[] = [];
-  let offset = 0;
-  if (!d.paragraph || !Number.isFinite(boxWidth) || boxWidth <= 0) {
-    for (const paragraph of paragraphs) { lines.push({ text: paragraph, start: offset }); offset += paragraph.length + 1; }
-    return lines;
-  }
-  const width = (value: string) => context.measureText(value).width;
-  for (const paragraph of paragraphs) {
-    const paragraphStart = offset;
-    offset += paragraph.length + 1;
-    if (!paragraph) { lines.push({ text: '', start: paragraphStart }); continue; }
-    let line = '', lineStart = paragraphStart, tokenStart = paragraphStart;
-    for (const token of paragraph.split(/(\s+)/u).filter(Boolean)) {
-      const candidate = line + token;
-      if (line && width(candidate) > boxWidth) {
-        lines.push({ text: line.trimEnd(), start: lineStart });
-        line = token.trimStart();
-        lineStart = tokenStart + (token.length - line.length);
-      } else {
-        if (!line) lineStart = tokenStart;
-        line = candidate;
-      }
-      tokenStart += token.length;
-      while (line && width(line) > boxWidth) {
-        let cut = 1;
-        while (cut < line.length && width(line.slice(0, cut + 1)) <= boxWidth) cut++;
-        lines.push({ text: line.slice(0, cut), start: lineStart });
-        line = line.slice(cut);
-        lineStart += cut;
-      }
-    }
-    lines.push({ text: line.trimEnd(), start: lineStart });
-  }
-  const boxHeight = Number(d.boxHeight);
-  if (!Number.isFinite(boxHeight) || boxHeight <= 0) return lines;
-  return lines.slice(0, Math.max(1, Math.floor(boxHeight / Math.max(1, lineHeight))));
-}
-
 function textLines(d: any, context: any, lineHeight: number): string[] {
   return textSourceLines(d, context, lineHeight).map(line => line.text);
 }
@@ -265,53 +216,11 @@ PM.textCaretLayout = (input: any, time = PM.time) => textCaretLayout(resolvedTex
    tool needs to reason about glyph placement. The returned offsets are in the
    source text layer's local coordinate system, before its transform. */
 function textLayout(d: any) {
-  const size = Math.max(1, Number(d.size) || 16);
   const meas = getCanvas(8, 8).getContext('2d') as any;
-  const align = d.align === 'center' ? 'center' : d.align === 'right' ? 'right' : 'left';
   meas.font = fontStr(d);
-  meas.textAlign = align;
   meas.textBaseline = 'alphabetic';
   if ('letterSpacing' in meas) meas.letterSpacing = (d.tracking || 0) + 'px';
-  const lh = size * (d.leading || 1.15);
-  const lines = textLines(d, meas, lh);
-  const width = (value: any) => meas.measureText(value).width;
-  const graphemes = (value: any): any[] => {
-    if (typeof Intl !== 'undefined' && Intl.Segmenter) {
-      return [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(value)].map(item => item.segment);
-    }
-    return Array.from(value);
-  };
-  const output: any = { characters: [], words: [], lines: [] };
-  /* measureText(prefix) omits kerning between the prefix and the next glyph.
-     Measuring the joined run and subtracting the isolated segment preserves
-     that incoming pair adjustment when the segment becomes its own layer. */
-  const segmentX = (lineStart: any, prefix: any, segment: any) => lineStart + width(prefix + segment) - width(segment);
-  let characterIndex = 0, wordIndex = 0, lineIndex = 0, sourceOffset=0;
-  lines.forEach((line, row) => {
-    const lineWidth = width(line);
-    const startX = align === 'center' ? -lineWidth / 2 : align === 'right' ? -lineWidth : 0;
-    const y = row * lh;
-    const lineSource=Math.max(sourceOffset,String(d.text||'').indexOf(line,sourceOffset));
-    if (line.length) output.lines.push({ text: line, x: startX, y, line: row, sourceStart: lineSource, index: lineIndex++ });
-
-    let prefix = '';let localWord=-1,wasSpace=true;
-    for (const segment of graphemes(line)) {
-      const x = segmentX(startX, prefix, segment);
-      const space=/^\s+$/u.test(segment);if(!space&&wasSpace)localWord++;
-      if (!space) output.characters.push({ text: segment, x, y, line: row, word:wordIndex+localWord, sourceStart:lineSource+prefix.length,index: characterIndex++ });
-      wasSpace=space;
-      prefix += segment;
-    }
-
-    sourceOffset=lineSource+line.length;
-    const matcher = /\S+/gu;
-    let match;
-    while ((match = matcher.exec(line))) {
-      const prefix = line.slice(0, match.index);
-      output.words.push({ text: match[0], x: segmentX(startX, prefix, match[0]), y, line: row, sourceStart: lineSource + match.index, index: wordIndex++ });
-    }
-  });
-  return output;
+  return glyphLayout(d, meas);
 }
 PM.textLayout = (input: any, time = PM.time) => textLayout(resolvedTextContent(input, time));
 
@@ -455,10 +364,30 @@ function rasterText(d: any, scale: number, crop?: RasterWindow) {
   return { cv, w: g.w, h: g.h, anchorX: g.anchorX, anchorY: g.anchorY, selection: g.selection, blank, sourceWindow };
 }
 
-function rasterAnimatedText(layer:any,d:any,time:number,scale:number) {
-  const glyphs=animatedGlyphs(PM,layer,time,d,textLayout(d)),measure=getCanvas(8,8).getContext('2d')!;
-  const [animators,styles]=textControlValues(PM,layer,time);
-  if(!styles.length&&animators.every((a:any)=>!a.p.x&&!a.p.y&&!a.p.rotation&&!a.p.tracking&&a.p.scale===100&&a.p.opacity===100))return rasterText(d,scale);
+/* The raster cache key needs each animated text layer's unit counts every
+   frame; measure its layout once per typography rather than per frame. */
+const textLayoutCache = new Map<string, any>();
+function cachedTextLayout(d: any) {
+  const key = JSON.stringify(d, (name, value) => name === 'animators' || name === 'styles' || name === 'fontAnchorBounds' ? undefined : value);
+  let layout = textLayoutCache.get(key);
+  if (!layout) {
+    layout = textLayout(d);
+    textLayoutCache.set(key, layout);
+    if (textLayoutCache.size > 128) textLayoutCache.delete(textLayoutCache.keys().next().value!);
+  }
+  return layout;
+}
+
+type TextAnimation = ReturnType<typeof textAnimationState> & { layout: any };
+function textAnimation(layer: any, d: any, time: number): TextAnimation {
+  const layout = cachedTextLayout(d);
+  return { ...textAnimationState(PM, layer, time, layout), layout };
+}
+
+function rasterAnimatedText(layer:any,d:any,time:number,scale:number,animation:TextAnimation) {
+  const glyphs=animatedGlyphs(PM,layer,time,d,animation.layout,animation),measure=getCanvas(8,8).getContext('2d')!;
+  // A settled animation renders exactly like plain text, so reuse that path.
+  if(!animation.styles.length&&glyphs.every(isIdentityGlyph))return rasterText(d,scale);
   // Range font metrics contribute to the following characters' advances.
   for(const line of new Set(glyphs.map((g:any)=>g.line))){
     const run=glyphs.filter((g:any)=>g.line===line);let advance=0;
@@ -466,11 +395,16 @@ function rasterAnimatedText(layer:any,d:any,time:number,scale:number) {
     const align=d.align==='center'?.5:d.align==='right'?1:0;for(const glyph of run)glyph.x-=advance*align;
   }
   let x0=0,y0=0,x1=1,y1=Math.max(1,d.size);
-  const records=glyphs.map((g:any)=>{measure.font=fontStr(g.style);const metrics=measure.measureText(g.text),w=metrics.width,h=Number(g.style.size)||d.size,r=g.rotation*Math.PI/180,c=Math.cos(r)*g.scale,s=Math.sin(r)*g.scale,baseline=g.y+d.size*.82;
-    for(const [x,y] of ([[0,-h],[w,-h],[0,h*.3],[w,h*.3]] as Array<[number,number]>)){const xx=g.x+c*x-s*y,yy=baseline+s*x+c*y;x0=Math.min(x0,xx-4);y0=Math.min(y0,yy-4);x1=Math.max(x1,xx+4);y1=Math.max(y1,yy+4);}return {...g,baseline};});
-  const w=Math.max(1,x1-x0),h=Math.max(1,y1-y0),density=Math.min(scale,8192/w,8192/h),cv=getCanvas(Math.ceil(w*density),Math.ceil(h*density)),ctx=cv.getContext('2d')!;ctx.scale(density,density);ctx.translate(-x0,-y0);
-  for(const g of records){ctx.save();ctx.translate(g.x,g.baseline);ctx.rotate(g.rotation*Math.PI/180);ctx.scale(g.scale,g.scale);ctx.globalAlpha=g.opacity;ctx.font=fontStr(g.style);ctx.fillStyle=g.style.color;ctx.fillText(g.text,0,0);ctx.restore();}
-  return {cv,w,h,anchorX:-x0,anchorY:-y0,selection:{x0,y0,x1,y1,w,h}};
+  const records=glyphs.filter((g:any)=>g.opacity>0).map((g:any)=>{measure.font=fontStr(g.style);const w=measure.measureText(g.text).width,h=Number(g.style.size)||d.size,baseline=g.y+d.size*.82,m=g.matrix,pad=4+g.blur*2;
+    for(const [x,y] of ([[0,-h],[w,-h],[0,h*.3],[w,h*.3]] as Array<[number,number]>)){const xx=g.x+m[0]*x+m[2]*y+m[4],yy=baseline+m[1]*x+m[3]*y+m[5];x0=Math.min(x0,xx-pad);y0=Math.min(y0,yy-pad);x1=Math.max(x1,xx+pad);y1=Math.max(y1,yy+pad);}return {...g,baseline};});
+  const w=Math.max(1,x1-x0),h=Math.max(1,y1-y0),density=Math.min(scale,8192/w,8192/h),cv=getCanvas(Math.ceil(w*density),Math.ceil(h*density)),ctx=cv.getContext('2d')!;
+  for(const g of records){ctx.save();ctx.setTransform(density,0,0,density,-x0*density,-y0*density);ctx.translate(g.x,g.baseline);ctx.transform(...(g.matrix as [number,number,number,number,number,number]));ctx.globalAlpha=g.opacity;
+    // Canvas filters measure in device pixels, independent of the transform.
+    if(g.blur>0.01)ctx.filter=`blur(${g.blur*density}px)`;
+    ctx.font=fontStr(g.style);ctx.fillStyle=g.color??g.style.color;ctx.fillText(g.text,0,0);ctx.restore();}
+  // Select the resting text box: it neither collapses while glyphs are hidden
+  // nor jumps when the animation settles onto the plain-text path.
+  return {cv,w,h,anchorX:-x0,anchorY:-y0,selection:animation.styles.length?{x0,y0,x1,y1,w,h}:textGeometry(d).selection};
 }
 
 /* ── shapes ────────────────────────────────────────────── */
@@ -525,7 +459,7 @@ function rasterShape(d: any, scale: any, crop?: RasterWindow) {
 /** Get (and cache) a rasterized bitmap for a layer. `scale` = render supersample. */
 PM.raster = (L: any, scale: any = 1, time: any = PM.time, uploaded?: (key: string) => any, crop?: RasterWindow) => {
   const d = L.type === 'text' ? resolvedTextContent(L, time) : resolveContent(PM, L, time);
-  const controls=L.type==='text'?textControlValues(PM,L,time):null;
+  const animation=L.type==='text'&&(L.d.animators?.length||L.d.styles?.length)?textAnimation(L,d,time):null;
   // Above the bitmap dimension limit, different requested zoom densities
   // produce identical pixels. Key those sources by their effective density
   // so pinch gestures do not rebuild/upload the same capped bitmap repeatedly.
@@ -533,7 +467,7 @@ PM.raster = (L: any, scale: any = 1, time: any = PM.time, uploaded?: (key: strin
     : L.type === 'text' && !L.d.animators?.length && !L.d.styles?.length ? textRasterGeometry(d, scale).density
     : scale;
   const key = (L.d.paths?.length ? 'paths|'+JSON.stringify(L.d.paths.map((path:any)=>({values:pathValues(PM,L,path,time),matrix:groupMatrix(PM,L,path,time)})))+'|'+scale : L.type === 'text'
-    ? 't|' + [d.text, d.boxWidth, d.boxHeight, d.font, d.weight, d.size, d.tracking, d.leading, d.color, d.align, d.italic, variationSettings(d), JSON.stringify(controls), rasterScale].join('|')
+    ? 't|' + [d.text, d.boxWidth, d.boxHeight, d.font, d.weight, d.size, d.tracking, d.leading, d.color, d.align, d.italic, variationSettings(d), animation ? textAnimationKey(animation) : '', rasterScale].join('|')
     : 's|' + [d.shape, d.color, d.w, d.h, d.radius, d.independentCorners ? cornerRadii(d).join(',') : '', d.smoothing, d.stroke, d.strokeColor, d.points, rasterScale].join('|'))
     + (crop ? `|crop:${crop.x},${crop.y},${crop.width},${crop.height}` : '');
   // Typography anchoring may need a separate, unanimated CPU measurement.
@@ -546,7 +480,7 @@ PM.raster = (L: any, scale: any = 1, time: any = PM.time, uploaded?: (key: strin
   }
   if (!e && !L.d.fontAnchorBounds) { const stub = uploaded?.(key); if (stub && !stub.blank) e = stub; }
   if (!e) {
-    e = L.d.paths?.length ? rasterPaths(PM,L,time,scale) : L.type === 'text' ? (L.d.animators?.length||L.d.styles?.length ? rasterAnimatedText(L,d,time,scale) : rasterText(d, scale, crop)) : rasterShape(d, scale, crop);
+    e = L.d.paths?.length ? rasterPaths(PM,L,time,scale) : L.type === 'text' ? (animation ? rasterAnimatedText(L,d,time,scale,animation) : rasterText(d, scale, crop)) : rasterShape(d, scale, crop);
     e.dirty = true;
     e.used = ++tick;
     e.bytes = Math.max(0, Number(e.cv?.width || 0) * Number(e.cv?.height || 0) * 4);
@@ -580,6 +514,7 @@ PM.raster = (L: any, scale: any = 1, time: any = PM.time, uploaded?: (key: strin
 PM.rasterStats = () => ({ size: cache.size, bytes: cacheBytes, maxBytes: MAX_BYTES });
 PM.rasterClear = () => {
   textGeometryCache.clear();
+  textLayoutCache.clear();
   for (const [key, entry] of [...cache]) release(key, entry);
   PM.GL && PM.GL.dropTextures && PM.GL.dropTextures('r:');
 };

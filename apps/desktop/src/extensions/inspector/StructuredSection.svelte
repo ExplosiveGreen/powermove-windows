@@ -5,6 +5,7 @@
   import Icon from './Icon.svelte';
   import { pathTargets, structuredProperties } from 'powermove';
   import { inspectorRefresh } from './refresh.svelte';
+  import TextAnimators from './TextAnimators.svelte';
 
   const {api,doc,transport,mixed,edit:inspectorEdit,tools,viewer}=inspectorContext();
   const {Section,Row,SelectField,ColorField}=api.ui.controls;
@@ -13,7 +14,6 @@
   const targets=$derived((doc.tick.structure,doc.tick.values,doc.proj,inspectorRefresh.version,pathTargets(layer)));
   const shapeTargets=$derived(targets.filter((target:any)=>target.prefix.startsWith('g.')));
   const maskTargets=$derived(targets.filter((target:any)=>target.prefix.startsWith('mp.')));
-  const textItems=$derived((doc.tick.structure,doc.tick.values,doc.proj,inspectorRefresh.version,[...(layer.d.animators||[]),...(layer.d.styles||[])]));
   const records=$derived((doc.tick.structure,doc.tick.values,doc.proj,inspectorRefresh.version,structuredProperties(layer)));
   let activePathId=$state<string|null>(null);
   const activeTarget=$derived(shapeTargets.find((target:any)=>target.path.id===activePathId) ?? shapeTargets[0] ?? null);
@@ -39,8 +39,6 @@
   function selectPath(target:any,startEditing=false){activePathId=target.path.id;setActivePath(target.path.id);if(startEditing)tools()?.setTool('pen');}
   function addPath(){mutate('Add path',()=>{const path=makePath();(layer.d.paths||=[]).push(path);activePathId=path.id;setActivePath(path.id);});tools()?.setTool('pen');}
   function removePath(target:any){mutate('Remove path',()=>{layer.d.paths=layer.d.paths.filter((path:any)=>path.id!==target.path.id);for(const path of layer.d.paths)if(path.parent===target.path.id)path.parent=null;activePathId=layer.d.paths[0]?.id??null;setActivePath(activePathId);});}
-  function addAnimator(){mutate('Add text animator',()=>{const values={unit:'characters',start:0,end:100,offset:0,smoothness:0,x:0,y:0,rotation:0,scale:100,opacity:100,tracking:0};(layer.d.animators||=[]).push({id:api.util.uid('ta'),name:'Animator '+((layer.d.animators?.length||0)+1),p:Object.fromEntries(Object.entries(values).map(([k,v])=>[k,api.model.P(v)]))});});}
-  function range(){const current=viewer()?.textSelection;const selection=current?.layer===layer.id?current:null;if(!selection || selection.end<=selection.start){api.ui.toast('Select text on the canvas first');return;}mutate('Style text range',()=>{(layer.d.styles||=[]).push({id:api.util.uid('ts'),start:selection.start,end:selection.end,p:{color:api.model.P('#ffffff'),weight:api.model.P(700),size:api.model.P(Number(api.anim.evP(layer,layer.d.size,api.transport.time(),'c.size'))||64)}});});}
   const label=(key:string)=>key.replace(/([A-Z])/g,' $1').replace(/^./,x=>x.toUpperCase());
 </script>
 
@@ -111,19 +109,7 @@
 {/if}
 
 {#if layer.type==='text'}
-  <Section {api} title="Text animation & ranges" />
-  <div class="buttons"><button class="chip" onclick={addAnimator}>Add animator</button><button class="chip" onclick={range}>Style selection</button></div>
-  {#each textItems as item (item.id)}
-    {@const prefix=(item.start===undefined?'ta.':'ts.')+item.id}
-    <details open><summary>{item.name||`Characters ${item.start+1}–${item.end}`}</summary>
-      <button class="chip" onclick={()=>mutate('Remove text control',()=>{layer.d.animators=layer.d.animators?.filter((candidate:any)=>candidate.id!==item.id);layer.d.styles=layer.d.styles?.filter((candidate:any)=>candidate.id!==item.id);})}>Remove</button>
-      {#each records.filter((record:any)=>record.key.startsWith(prefix+'.')) as record (record.key)}
-        {@const value=api.anim.evP(layer,record.prop,transport.time,record.key)}
-        {#if typeof value==='number'}<ChannelRow {layer} channel={record.key} property={record.prop} label={label(record.label)} step={1} />
-        {:else}<AnimatedRow {layer} path={record.key} label={label(record.label)}>{#if record.label==='unit'}<SelectField {api} {mixed} label="Based on" get={()=>value} edit={bind(record.key)} options={['characters','words','lines']} />{:else}<ColorField {api} {mixed} label="Range color" get={()=>value} edit={bind(record.key)} />{/if}</AnimatedRow>{/if}
-      {/each}
-    </details>
-  {/each}
+  <TextAnimators {layer} />
 {/if}
 
 <style>

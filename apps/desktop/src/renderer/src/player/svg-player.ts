@@ -3,6 +3,8 @@ import { validateScene, type WebScene } from './scene';
 import { inspectSvgExport } from './svg-compatibility';
 import { fontAnchorOffset } from '../legacy/core/font-anchor';
 import { sizeAnchorOffset } from '../legacy/core/size-anchor';
+import { animatedGlyphs } from '../legacy/core/text-animation';
+import { glyphLayout } from '../legacy/core/text-layout';
 
 const NS = 'http://www.w3.org/2000/svg';
 export interface SvgPlayerOptions {
@@ -46,7 +48,8 @@ export async function createSvgPlayer(options: SvgPlayerOptions) {
     }
     const nodes = [...scene.project.layers].reverse().filter((l: any) => l.type !== 'group').map((layer: any) => {
       const outer = document.createElementNS(NS, 'g'); outer.dataset.layerId = layer.id;
-      const node = document.createElementNS(NS, layer.type === 'text' ? 'text' : layer.d.shape === 'ellipse' ? 'ellipse' : 'rect');
+      const animated = layer.type === 'text' && !!layer.d.animators?.length;
+      const node = document.createElementNS(NS, animated ? 'g' : layer.type === 'text' ? 'text' : layer.d.shape === 'ellipse' ? 'ellipse' : 'rect');
       outer.append(node); group.append(outer); return { layer, outer, node };
     });
     // Measurement only: no rasterized glyphs/textures are used by SVG output.
@@ -62,15 +65,20 @@ export async function createSvgPlayer(options: SvgPlayerOptions) {
         if (layer.type === 'text') {
           const size = Math.max(1, Number(d.size) || 16), weight = d['fontAxis.wght'] ?? d.weight ?? 500;
           const font = `${d.italic ? 'italic ' : ''}${weight} ${size}px ${JSON.stringify(d.font)}`;
-          node.setAttribute('style', `font:${font};letter-spacing:${Number(d.tracking) || 0}px;white-space:pre`);
-          node.setAttribute('text-anchor', d.align === 'right' ? 'end' : d.align === 'center' ? 'middle' : 'start');
+          const animated = node.tagName === 'g';
+          node.setAttribute('style', `font:${font};letter-spacing:${animated ? 0 : Number(d.tracking) || 0}px;white-space:pre`);
+          node.setAttribute('text-anchor', animated || d.align !== 'right' && d.align !== 'center' ? 'start' : d.align === 'right' ? 'end' : 'middle');
           node.replaceChildren();
+          if (animated) renderGlyphs(node, layer, d, t, size, font);
           let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
           measure.font = font; measure.textAlign = d.align || 'left'; measure.textBaseline = 'alphabetic';
           measure.letterSpacing = `${Number(d.tracking) || 0}px`;
           String(d.text).split('\n').forEach((line, index) => {
-            const y = size * .82 + index * size * (d.leading || 1.15), span = document.createElementNS(NS, 'tspan');
-            span.setAttribute('x', '0'); span.setAttribute('y', String(y)); span.textContent = line; node.append(span);
+            const y = size * .82 + index * size * (d.leading || 1.15);
+            if (!animated) {
+              const span = document.createElementNS(NS, 'tspan');
+              span.setAttribute('x', '0'); span.setAttribute('y', String(y)); span.textContent = line; node.append(span);
+            }
             const m = measure.measureText(line);
             x0 = Math.min(x0, -m.actualBoundingBoxLeft); x1 = Math.max(x1, m.actualBoundingBoxRight);
             y0 = Math.min(y0, y - m.actualBoundingBoxAscent); y1 = Math.max(y1, y + m.actualBoundingBoxDescent);
@@ -87,6 +95,33 @@ export async function createSvgPlayer(options: SvgPlayerOptions) {
           if (layer.type === 'shape') { node.setAttribute('stroke', d.strokeColor || '#ffffff'); node.setAttribute('stroke-width', String(d.stroke || 0)); }
         }
       }
+    }
+    /* Each glyph is its own <text>, posed by the shared animator evaluation. */
+    function renderGlyphs(node: Element, layer: any, d: any, t: number, size: number, font: string) {
+      const defs = document.createElementNS(NS, 'defs');
+      node.append(defs);
+      measure.font = font; measure.textBaseline = 'alphabetic';
+      measure.letterSpacing = `${Number(d.tracking) || 0}px`;
+      animatedGlyphs(PM, layer, t, d, glyphLayout(d, measure)).forEach((glyph: any, index: number) => {
+        if (glyph.opacity <= 0) return;
+        const [a, b, c, e, f, g] = glyph.matrix, baseline = glyph.y + size * .82;
+        const text = document.createElementNS(NS, 'text');
+        text.setAttribute('transform', `matrix(${a} ${b} ${c} ${e} ${f + glyph.x} ${g + baseline})`);
+        text.setAttribute('fill', glyph.color ?? glyph.style.color ?? d.color ?? '#ffffff');
+        if (glyph.opacity < 1) text.setAttribute('opacity', String(glyph.opacity));
+        if (glyph.blur > 0.01) {
+          // The raster blurs after the glyph transform; undo its scale here.
+          const id = `pm-glyph-blur-${layer.id}-${index}`, filter = document.createElementNS(NS, 'filter');
+          const blur = document.createElementNS(NS, 'feGaussianBlur');
+          filter.setAttribute('id', id);
+          for (const [key, value] of Object.entries({ x: '-100%', y: '-100%', width: '300%', height: '300%' })) filter.setAttribute(key, value);
+          blur.setAttribute('stdDeviation', String(glyph.blur / Math.max(1e-3, Math.sqrt(Math.abs(a * e - b * c)))));
+          filter.append(blur); defs.append(filter);
+          text.setAttribute('filter', `url(#${id})`);
+        }
+        text.textContent = glyph.text;
+        node.append(text);
+      });
     }
     function tick(now: number) {
       if (!playing || dead) return;

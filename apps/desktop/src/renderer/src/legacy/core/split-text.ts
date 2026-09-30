@@ -32,22 +32,20 @@ export function splitTextLayers(PM: PMRegistry, ids: string[], mode: TextSplitMo
           const start = Math.max(style.start, sourceStart), end = Math.min(style.end, sourceStart + piece.text.length);
           return end > start ? [{ ...style, id: PM.uid('ts'), start: start - sourceStart, end: end - sourceStart }] : [];
         });
-        // Remap range selectors so a word's first character keeps its original
-        // selector weight instead of restarting the animation at character zero.
+        // Each piece keeps its place in the source's sequence, so a split
+        // word's first character keeps its original selector weight and
+        // stagger timing instead of restarting the animation at character zero.
         const glyphs = layout.characters.filter((glyph: any) => glyph.sourceStart >= sourceStart && glyph.sourceStart < sourceStart + piece.text.length);
         child.d.animators = (source.d.animators || []).map((animator: any) => {
-          const values: any = Object.fromEntries(Object.entries(animator.p).map(([key, prop]) =>
-            [key, PM.evP(source, prop, PM.time, `ta.${animator.id}.${key}`)]));
-          const unit = values.unit || 'characters';
+          const legacy = animator.p?.unit ? PM.evP(source, animator.p.unit, PM.time, `ta.${animator.id}.unit`) : null;
+          const unit = [animator.unit, legacy].find((value: any) => ['characters', 'words', 'lines'].includes(value)) || 'characters';
           const first = glyphs[0];
-          const base = unit === 'lines' ? piece.line : unit === 'words' ? first?.word ?? 0 : first?.index ?? 0;
-          const count = unit === 'lines' ? 1 : unit === 'words' ? new Set(glyphs.map((g: any) => g.word)).size : glyphs.length;
-          const total = layout[unit]?.length || 1, scale = total / Math.max(1, count);
-          values.start = (Number(values.start) + Number(values.offset || 0) - base / total * 100) * scale;
-          values.end = (Number(values.end) + Number(values.offset || 0) - base / total * 100) * scale;
-          values.offset = 0;
-          values.x = Number(values.x || 0) + Number(values.tracking || 0) * (first?.index || 0);
-          return { ...animator, id: PM.uid('ta'), p: Object.fromEntries(Object.entries(values).map(([key, value]) => [key, PM.P(value)])) };
+          const local = unit === 'lines' ? first?.lineUnit ?? piece.line : unit === 'words' ? first?.word ?? 0 : first?.index ?? 0;
+          const clone = JSON.parse(JSON.stringify(animator));
+          delete clone.p.unit;
+          return { ...clone, id: PM.uid('ta'), unit,
+            unitOffset: Number(animator.unitOffset || 0) + local,
+            unitTotal: Math.max(Number(animator.unitTotal || 0), layout[unit]?.length || 1) };
         });
         for (const [axis, offset] of [['x', piece.x + fontOffset.x], ['y', piece.y + fontOffset.y]] as const) {
           const prop = child.p[`anchor.${axis}`];

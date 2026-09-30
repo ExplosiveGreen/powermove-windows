@@ -121,7 +121,22 @@ export interface Transition {
 /** Editable paths and text controls use the same channels as transforms. */
 export interface PathVertex { id:string; p:Record<'x'|'y'|'inX'|'inY'|'outX'|'outY',Channel<number>> }
 export interface VectorPath { id:string; name:string; parent:string|null; vertices:PathVertex[]; p:Record<string,Channel> }
-export interface TextAnimator { id:string; name:string; p:Record<string,Channel> }
+export interface TextAnimator {
+  id:string; name:string; p:Record<string,Channel>;
+  enabled?:boolean;
+  /** Absent on animators saved before selector modes: those are range selectors. */
+  mode?:'stagger'|'range'|'wave';
+  /** Older animators store the unit in a `unit` channel instead. */
+  unit?:'characters'|'words'|'lines';
+  order?:'forward'|'reverse'|'center'|'edges'|'random';
+  seed?:number;
+  /** Stagger mode: `in` settles from the animated values, `out` leaves toward them. */
+  direction?:'in'|'out';
+  easing?:string;
+  shape?:'square'|'rampUp'|'rampDown'|'triangle'|'round';
+  /** Set on split pieces so they keep their position in the source's sequence. */
+  unitOffset?:number; unitTotal?:number;
+}
 export interface TextStyleRange { id:string; start:number; end:number; p:Record<string,Channel> }
 
 export interface SolidContent {

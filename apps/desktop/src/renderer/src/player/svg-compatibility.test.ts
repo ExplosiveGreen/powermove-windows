@@ -29,3 +29,11 @@ describe('SVG compatibility for groups', () => {
     expect(result.reasons[0]).toMatch(/requires? WebGL/);
   });
 });
+
+describe('SVG compatibility for text', () => {
+  const text = (d: Record<string, unknown>) => ({ id: 't', name: 'Title', type: 'text', blend: 'normal', mblur: false, p: {}, fx: [], masks: [], d: { text: channel('Hi'), ...d } });
+  it('renders text animators in SVG but still routes rich text through WebGL', () => {
+    expect(inspectSvgExport({ layers: [text({ animators: [{ id: 'a', p: {} }] })] }).supported).toBe(true);
+    expect(inspectSvgExport({ layers: [text({ styles: [{ id: 's', start: 0, end: 1, p: {} }] })] }).supported).toBe(false);
+  });
+});

@@ -1,4 +1,5 @@
 import { isProperty } from './content-properties';
+import { textAnimatorLabel } from './text-animation';
 export type PathVertex = { id:string; p:Record<string,any> };
 export type VectorPath = { id:string; name:string; parent:string|null; vertices:PathVertex[]; p:Record<string,any> };
 export function makeVectorPath(PM:any,name='Path'):VectorPath {
@@ -16,7 +17,7 @@ export function structuredProperties(layer:any):any[] {
   };
   for(const path of layer.d?.paths || [])collect(path,`g.${path.id}`);
   for(const mask of layer.masks || [])if(mask.path)collect(mask.path,`mp.${mask.id}`);
-  for(const animator of layer.d?.animators || []) for(const [key,prop] of Object.entries(animator.p || {}))if(isProperty(prop))out.push({key:`ta.${animator.id}.${key}`,prop,label:key,group:animator.name || 'Text animator'});
+  for(const animator of layer.d?.animators || []) for(const [key,prop] of Object.entries(animator.p || {}))if(isProperty(prop))out.push({key:`ta.${animator.id}.${key}`,prop,label:textAnimatorLabel(key),group:animator.name || 'Text animator'});
   for(const range of layer.d?.styles || [])for(const [key,prop] of Object.entries(range.p || {}))if(isProperty(prop))out.push({key:`ts.${range.id}.${key}`,prop,label:key,group:'Text range'});
   return out;
 }
