@@ -151,6 +151,12 @@
     color: var(--tx);
   }
 
+  /* Icons have no intrinsic size; match the panel header actions. */
+  .section-action :global(svg) {
+    width: 13px;
+    height: 13px;
+  }
+
   .path-list {
     display: flex;
     flex-direction: column;

@@ -301,13 +301,16 @@
   .section-head { position: relative; }
   .section-head :global(.sec) { margin-top: 8px; border-top: 1px solid var(--section-line); }
 
+  /* Center on the title, below the heading's 8px margin and 1px rule. */
   .section-action {
-    position: absolute; right: 0; top: 50%;
+    position: absolute; right: 0; top: calc(50% + 4.5px);
     display: grid; width: 24px; height: 24px; padding: 0; place-items: center;
     transform: translateY(-50%);
     border: 0; border-radius: var(--r-xs); background: transparent; color: var(--tx-3);
   }
   .section-action:hover { background: var(--ink-1); color: var(--tx); }
+  /* Icons have no intrinsic size; match the panel header actions. */
+  .section-action :global(svg) { width: 13px; height: 13px; }
 
   .presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
   .preset {

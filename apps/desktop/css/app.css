@@ -1191,7 +1191,8 @@ select.pm-select-native{position:absolute!important;width:1px!important;height:1
 .pm-select:hover .pm-select-chevron,.pm-select[aria-expanded=true] .pm-select-chevron{color:var(--tx-2)}
 .pm-select:focus-visible{outline:0;box-shadow:var(--focus-ring)}
 .pm-select:disabled{opacity:.5;pointer-events:none}
-.pm-select.sel{height:28px;padding:0 24px 0 8px}
+/* .pm-select resets font to shed native select styling; keep .sel's field type. */
+.pm-select.sel{height:28px;padding:0 24px 0 8px;font-size:var(--fs-xs);font-family:var(--f-mono)}
 .pm-select.sel .pm-select-chevron{right:6px;width:11px;height:11px;margin-top:-5.5px}
 /* Visible controls replace native selects, including their sizing rules. */
 .agent-modelbar .pm-select{flex:0 1 auto;min-width:0;max-width:160px;padding:2px 20px 2px 4px;border:0;border-radius:var(--r-sm);background:transparent;box-shadow:none;color:inherit;font:inherit}
