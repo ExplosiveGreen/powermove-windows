@@ -468,14 +468,19 @@ function createWindow(options: EditorWindowOptions = {}): BrowserWindow {
     height: 900,
     minWidth: 980,
     minHeight: 640,
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 14, y: 15 },
-    // The window canvas is a native material: the desktop blurs through
-    // behind the panels, and it goes flat when the window loses focus, the
-    // way Finder and Xcode do. The renderer paints only a tint over it
-    // (see `--bg-window` in css/app.css), so no opaque backgroundColor here.
-    vibrancy: 'sidebar',
-    visualEffectState: 'followWindow',
+    // macOS-only chrome: hidden traffic lights and a vibrant canvas. Other
+    // platforms keep the native frame (with its caption buttons) and an
+    // opaque canvas painted by the renderer.
+    ...(process.platform === 'darwin' ? {
+      titleBarStyle: 'hiddenInset' as const,
+      trafficLightPosition: { x: 14, y: 15 },
+      // The window canvas is a native material: the desktop blurs through
+      // behind the panels, and it goes flat when the window loses focus, the
+      // way Finder and Xcode do. The renderer paints only a tint over it
+      // (see `--bg-window` in css/app.css), so no opaque backgroundColor here.
+      vibrancy: 'sidebar' as const,
+      visualEffectState: 'followWindow' as const
+    } : {}),
     webPreferences: {
       ...testOptions.webPreferences,
       preload: path.join(__dirname, '../preload/index.js'),

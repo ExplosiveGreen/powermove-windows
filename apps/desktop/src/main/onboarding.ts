@@ -89,8 +89,11 @@ export function onboardingWelcomeOptions(
     show: false,
     skipTaskbar: backgroundTest,
     focusable: !backgroundTest,
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 14, y: 15 },
+    // macOS-only chrome; other platforms keep the native frame.
+    ...(process.platform === 'darwin' ? {
+      titleBarStyle: 'hiddenInset' as const,
+      trafficLightPosition: { x: 14, y: 15 }
+    } : {}),
     backgroundColor: LIGHT_BACKGROUND,
     webPreferences: {
       preload: path.join(__dirname, '../preload/onboarding.js'),
