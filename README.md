@@ -1,4 +1,11 @@
-# Powermove
+# Powermove — Unofficial Windows Port
+
+> **This is an unofficial community port of [Powermove](https://github.com/iterative-computer/powermove) for Windows.**
+> The original project is macOS-only and built by [iterative-computer](https://github.com/iterative-computer) — please support them.
+> Windows installers live under [Releases](https://github.com/ExplosiveGreen/powermove-windows/releases).
+> Everything below this notice is the original README, kept 1-to-1.
+
+---
 
 The video editor that rewrites itself around your work.
 
