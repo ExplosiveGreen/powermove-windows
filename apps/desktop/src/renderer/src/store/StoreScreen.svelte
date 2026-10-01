@@ -22,6 +22,7 @@
   import { openSandboxCheckSheet } from './sandbox-check-sheet';
   import { bridge } from '../kernel/bridge';
   import StoreIcon from './StoreIcon.svelte';
+  import { STORE_FLAGS } from './flags';
 
   /* Two places and seven kinds. Browse is the storefront; a kind is the store
      narrowed to one shelf; Library is everything on this Mac, in one list. */
@@ -121,8 +122,9 @@
   const yoursCalm = $derived(groups.yours.filter((item) => !needsAttention(item)));
   const sections = $derived(browse.status === 'ready' ? browse.value.map((section) => ({ ...section, listings: section.items.map(toListing) })) : []);
   /* The carousel: the curated shelf, then each kind that has something on it.
-     Explore goes to the whole collection. */
-  const slides = $derived(sections
+     Explore goes to the whole collection. Hidden behind STORE_FLAGS.collections:
+     no slides means no carousel, and the shelves below stand on their own. */
+  const slides = $derived((STORE_FLAGS.collections ? sections : [])
     .filter((section) => section.id === 'featured' || isKind(section.id))
     .slice(0, 4)
     .map((section) => {

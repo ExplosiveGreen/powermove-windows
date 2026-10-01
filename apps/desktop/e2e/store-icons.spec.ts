@@ -31,10 +31,9 @@ test('loads Store icons in the built desktop app and keeps artwork when an image
   const session = await launchApp({ env: { POWERMOVE_REGISTRY_URL: origin } });
   try {
     await session.page.evaluate(() => (window as any).PM.StoreUI.open());
-    const carousel = session.page.locator('.st-slide-icon img').first();
+    // The collections carousel is behind STORE_FLAGS.collections; shelf cards always show.
     const card = session.page.locator('.st-item-icon img').first();
-    await expect(carousel).toHaveAttribute('src', `${origin}${iconPath}`);
-    await expect.poll(() => carousel.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
+    await expect(card).toHaveAttribute('src', `${origin}${iconPath}`);
     await expect.poll(() => card.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
     await session.page.getByRole('button', { name: 'Open Glass blur', exact: true }).last().click();
     const hero = session.page.locator('.st-detail-head img');
