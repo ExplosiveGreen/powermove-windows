@@ -155,10 +155,14 @@ export async function unpackProjectFileBlob(file: Blob): Promise<any> {
 
 /** Stage native ranges on disk, then commit file-backed Blobs to the media store. */
 export async function restoreProjectFileStream(document: any, media: ProjectMediaRange[], store: MediaStore,
-  read: (offset: number, length: number) => Promise<Uint8Array>): Promise<void> {
+  read: (offset: number, length: number) => Promise<Uint8Array>,
+  onProgress?: (completed: number, total: number) => void): Promise<void> {
   const assets = fileAssets(document);
   const sources = media.filter(source => assets[source.id]);
   if (!sources.length) { await restoreProjectFileMedia(document, store); return; }
+  const total = sources.reduce((sum, source) => sum + source.length, 0);
+  let completed = 0;
+  const advance = (bytes: number) => { completed += bytes; onProgress?.(completed, total); };
   /* A browser served by `powermove serve` stages in memory: OPFS needs a secure
      context, and current Chromium keeps IndexedDB blobs as references to the
      staged file, which is gone once staging is cleaned up. */
@@ -173,6 +177,7 @@ export async function restoreProjectFileStream(document: any, media: ProjectMedi
         chunks.push(chunk);
         digest?.update(chunk);
         offset += chunk.length;
+        advance(chunk.length);
       }
       if (digest && digest.digest() !== source.sha256) throw new Error('The project media checksum does not match.');
       if (!await store.put(source.id, new Blob(chunks as BlobPart[], { type: source.type }), assets[source.id], source.revision)) {
@@ -197,6 +202,7 @@ export async function restoreProjectFileStream(document: any, media: ProjectMedi
         await writer.write(new Uint8Array(chunk));
         digest?.update(chunk);
         offset += chunk.length;
+        advance(chunk.length);
       }
       await writer.close(); writer = undefined;
       if (digest && digest.digest() !== source.sha256) throw new Error('The project media checksum does not match.');

@@ -769,13 +769,16 @@ hostBridge()?.onProjectOpenExternal?.(async result => {
   }
 });
 async function openProjectFile(file: any, association?: { path: string; projectId: string }) {
+  const opening = createImportProgress('Opening project', PM);
+  opening.update({ label: file.name });
   try {
     let o: any, mediaRestored = false;
     if (file.native && 'token' in file.native) {
       const bridge = hostBridge()!.projectRead!;
       const { token, document, media } = file.native;
       try {
-        await restoreProjectFileStream(document, media, PM.MediaStore, (offset, length) => bridge.read(token, offset, length));
+        await restoreProjectFileStream(document, media, PM.MediaStore, (offset, length) => bridge.read(token, offset, length),
+          (completed, total) => opening.update({ label: file.name, completed, total }));
         o = document; mediaRestored = true;
       } finally { await bridge.close(token); }
     } else if (file.native) o = unpackProjectFile(file.native.data);
@@ -821,9 +824,12 @@ async function openProjectFile(file: any, association?: { path: string; projectI
     const workspace = rememberedWorkspace || o.ws;
     if (workspace?.layout?.docks) PM.WS.restoreSnapshot(workspace);
     captureProjectSession();
-    PM.toast('Opened ' + file.name, 2200, { error: false });
+    opening.finish('Opened ' + file.name, 2200);
     PM.ProjectsScreen?.hide?.();
-  } catch (e: any) { PM.toast('Could not open project: ' + e.message, 4500); }
+  } catch (e: any) {
+    opening.close();
+    PM.toast('Could not open project: ' + e.message, 4500);
+  }
 }
 PM.newProject = () => {
   /* New projects start from the current one's format: the next composition is
@@ -1195,9 +1201,7 @@ async function importFiles(files: any, placement?: { at: number; index?: number 
     for (const f of files) {
       if (/\.pmv$/i.test(f.name)) {
         if (replaceAssetId != null) throw new Error('Choose a media file to replace this media');
-        const opening = createImportProgress('Opening project', PM);
-        opening.update({ label: f.name });
-        try { await openProjectFile(f); } finally { opening.close(); }
+        await openProjectFile(f);
         continue;
       }
       if (!PM.assetKind(f)) { PM.toast('Unsupported file · ' + f.name, 2200, { error: true }); continue; }
