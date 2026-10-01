@@ -35,6 +35,11 @@ const HOST_EVENTS = new Set(['project:changed', 'selection', 'time', 'transport'
 // the common case of naming your one effect/panel after the extension; the dot is
 // still required for suffixes so `foo` can't claim `foo-bar.*`.
 export const ownId = (extension: string, id: string): boolean => id === extension || id.startsWith(`${extension}.`);
+/** Place a store extension's id in its own namespace (idempotent): a bare `hud`
+ * becomes `contour-hud.hud`; anything already in the namespace is left alone. The
+ * system does this at the sandbox boundary so authors never prefix, yet the kernel
+ * and projects only ever see globally-unique ids. */
+export const qualifyId = (extension: string, id: string): string => id && !ownId(extension, id) ? `${extension}.${id}` : id;
 /** Distinct CSP violations remembered (and logged) per extension session. */
 const MAX_VIOLATION_KEYS = 100;
 /* assets.import files skip the RPC byte limit (importedFile); these caps
@@ -252,10 +257,12 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     if (!permissions.includes('project:write') && (namespace === 'project' && method !== 'snapshot' || namespace === 'transport'))
       denied(`${namespace}.${method} requires project:write permission`, 'project:write');
     if (namespace === 'commands') {
-      const command = String(parsed[0]);
-      const owner = reg.commands.topEntry(command)?.ownerId;
-      const own = ownId(record.id, command) && owner === record.id;
-      if (!own && !(permissions.includes('project:write') && owner === 'legacy' && LEGACY_EDIT_COMMANDS.has(command)))
+      const raw = String(parsed[0]);
+      /* Prefer the extension's own namespaced command (authors call it by the bare
+         name); otherwise only approved legacy editing commands may run, by bare id. */
+      const qualified = qualifyId(record.id, raw);
+      if (reg.commands.topEntry(qualified)?.ownerId === record.id) parsed[0] = qualified;
+      else if (!(permissions.includes('project:write') && reg.commands.topEntry(raw)?.ownerId === 'legacy' && LEGACY_EDIT_COMMANDS.has(raw)))
         denied('commands.run may call only your own commands or approved editing commands with project:write', permissions.includes('project:write') ? 'permission_denied' : 'project:write');
     }
     if (namespace === 'extensions' && parsed[0] !== record.id) denied('extensions.setUp accepts only the calling extension id');
@@ -266,8 +273,8 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
     if (namespace === 'keybindings') { reg.unbind(record.id, String(parsed[0]), false); return; }
     if (namespace === 'ui' && method === 'openExternal') return openExternal(parsed[0], gesture(view));
     if (namespace === 'assets' && method === 'importUrl') return importUrl(parsed[0]);
-    if (namespace === 'panels' && !ownId(record.id, String(parsed[0]))) denied('panels may act only on your own ids');
-    if (namespace === 'theme' && method === 'activate' && !ownId(record.id, String(parsed[0]))) denied('theme.activate accepts only your themes');
+    if (namespace === 'panels') { parsed[0] = qualifyId(record.id, String(parsed[0])); if (!ownId(record.id, String(parsed[0]))) denied('panels may act only on your own ids'); }
+    if (namespace === 'theme' && method === 'activate') { parsed[0] = qualifyId(record.id, String(parsed[0])); if (!ownId(record.id, String(parsed[0]))) denied('theme.activate accepts only your themes'); }
     if (namespace === 'assets' && method !== 'get' && !permissions.includes('assets')) {
       const error = new Error(`assets.${method} requires assets permission`); error.name = 'PermissionError'; throw error;
     }
@@ -337,8 +344,19 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
       const handles = ['run', 'when', 'text', 'onClick', 'provider', 'items']
         .map(key => value[key]).filter((handle): handle is number => typeof handle === 'number');
       if (new Set([...remoteHandles, ...handles]).size > 2000) denied('Sandbox handle limit is 2000', 'resource_limit');
+      /* System-owned namespacing: a store extension's registration ids — and the
+         command a keybinding targets, and palette entry ids below — are placed
+         under its own `<id>.` namespace automatically. Authors use any bare id;
+         the kernel, editor and projects only ever see globally-unique ids, so
+         nothing can shadow a built-in or another extension and no author has to
+         prefix anything. The qualified id is still just a string, so the project
+         format is unchanged. Built-ins never reach this path. */
+      const qualify = (raw: string): string => qualifyId(record.id, raw);
+      if (typeof value.id === 'string') value.id = qualify(value.id);
+      if (kind === 'keybindings' && typeof value.command === 'string') value.command = qualify(value.command);
       const id = value.id;
       if (typeof id === 'string') {
+        /* Always true after qualify(); kept as defense if that ever changes. */
         if (!ownId(record.id, id)) denied(`Registration id must be "${record.id}" or start with "${record.id}."`, 'id_collision');
         const registry = ({ commands: reg.commands, effects: reg.effects, transitions: reg.transitions,
           layers: reg.layerTypes, theme: reg.themes, status: reg.status, panels: reg.panels } as Record<string, { topEntry(id: string): { ownerId: string } | undefined }>)[kind];
@@ -367,8 +385,9 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
         case 'palette': item = host.api.palette.registerProvider(query => rpc.invokeHandle(Number(value.provider), query)
           .then(result => paletteEntriesSchema.parse(result).map(entry => {
             claimHandles([entry.run]);
-            if (!ownId(record.id, entry.id) || reg.commands.topEntry(entry.id)?.ownerId && reg.commands.topEntry(entry.id)?.ownerId !== record.id) denied('Palette entry id collides with another owner', 'id_collision');
-            return { ...entry, run: () => forPerson(() => rpc.invokeHandle(entry.run)) };
+            const entryId = qualify(entry.id);
+            if (reg.commands.topEntry(entryId)?.ownerId && reg.commands.topEntry(entryId)?.ownerId !== record.id) denied('Palette entry id collides with another owner', 'id_collision');
+            return { ...entry, id: entryId, run: () => forPerson(() => rpc.invokeHandle(entry.run)) };
           }))); break;
         /* Asked afresh on every open, with that open's ctx: the reply to this
            call is the only one these items can come from, so a menu never
