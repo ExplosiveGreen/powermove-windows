@@ -5,7 +5,11 @@ import path from 'node:path';
 import { updatedRuntimeCandidates } from '../runtime-updates';
 
 export const PACKAGED_CODEX_RELATIVE_PATH = path.join('codex', 'bin', 'codex');
-export const DEVELOPMENT_CODEX_RELATIVE_PATH = path.join(
+export const PACKAGED_CODEX_WINDOWS_RELATIVE_PATHS = [
+  path.join('codex', 'bin', 'codex.exe'),
+  path.join('codex', 'codex.exe'),
+] as const;
+export const DEVELOPMENT_CODEX_DARWIN_RELATIVE_PATH = path.join(
   'node_modules',
   '@openai',
   'codex-darwin-arm64',
@@ -14,10 +18,28 @@ export const DEVELOPMENT_CODEX_RELATIVE_PATH = path.join(
   'bin',
   'codex'
 );
+// Windows vendor triple for @openai/codex-win32-x64.
+export const DEVELOPMENT_CODEX_WINDOWS_RELATIVE_PATH = path.join(
+  'node_modules',
+  '@openai',
+  'codex-win32-x64',
+  'vendor',
+  'x86_64-pc-windows-msvc',
+  'bin',
+  'codex.exe'
+);
+export const DEVELOPMENT_CODEX_RELATIVE_PATH = process.platform === 'win32'
+  ? DEVELOPMENT_CODEX_WINDOWS_RELATIVE_PATH
+  : DEVELOPMENT_CODEX_DARWIN_RELATIVE_PATH;
 
 export const KNOWN_CODEX_PATHS = [
   '/opt/homebrew/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex',
   '/usr/local/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex'
+] as const;
+
+export const KNOWN_CODEX_WINDOWS_PATHS = [
+  path.join(process.env.ProgramFiles ?? 'C:\\Program Files', 'nodejs', 'node_modules', '@openai', 'codex',
+    'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe'),
 ] as const;
 
 export const CODEX_NOT_FOUND_MESSAGE =
@@ -61,8 +83,15 @@ async function executable(candidate: string | null | undefined): Promise<string 
 async function executableRuntime(candidate: string | null | undefined): Promise<string | null> {
   const binary = await executable(candidate);
   if (binary === null) return null;
-  const host = path.join(path.dirname(binary), 'codex-code-mode-host');
-  const companion = await executable(host);
+  // The Windows companion carries an .exe suffix; macOS has none.
+  const hosts = process.platform === 'win32'
+    ? [path.join(path.dirname(binary), 'codex-code-mode-host.exe'), path.join(path.dirname(binary), 'codex-code-mode-host')]
+    : [path.join(path.dirname(binary), 'codex-code-mode-host')];
+  let companion: string | null = null;
+  for (const host of hosts) {
+    companion = await executable(host);
+    if (companion !== null) break;
+  }
   if (companion === null) return null;
   let file;
   try {
@@ -78,6 +107,9 @@ async function executableRuntime(candidate: string | null | undefined): Promise<
 }
 
 async function probeLoginShell(): Promise<string | null> {
+  // Windows has no zsh login shell; discovery falls through to the known
+  // Windows install locations below.
+  if (process.platform === 'win32') return null;
   if (loginShellProbe === null) {
     loginShellProbe = (async () => {
       try {
@@ -99,8 +131,15 @@ export function bundledCodexCandidates(
   appRoot = process.cwd(),
   resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
 ): string[] {
-  const candidates = [path.join(appRoot, DEVELOPMENT_CODEX_RELATIVE_PATH)];
-  if (resourcesPath) candidates.unshift(path.join(resourcesPath, PACKAGED_CODEX_RELATIVE_PATH));
+  const candidates: string[] = [];
+  if (resourcesPath) {
+    candidates.push(path.join(resourcesPath, PACKAGED_CODEX_RELATIVE_PATH));
+    for (const relative of PACKAGED_CODEX_WINDOWS_RELATIVE_PATHS) {
+      const candidate = path.join(resourcesPath, relative);
+      if (!candidates.includes(candidate)) candidates.push(candidate);
+    }
+  }
+  candidates.push(path.join(appRoot, DEVELOPMENT_CODEX_RELATIVE_PATH));
   return [...updatedRuntimeCandidates('codex'), ...candidates];
 }
 
@@ -124,7 +163,10 @@ export async function discoverCodex(
   const shellBinary = await probeLoginShell();
   if (shellBinary !== null) return shellBinary;
 
-  for (const candidate of KNOWN_CODEX_PATHS) {
+  const knownPaths = process.platform === 'win32'
+    ? [...KNOWN_CODEX_WINDOWS_PATHS, ...KNOWN_CODEX_PATHS]
+    : KNOWN_CODEX_PATHS;
+  for (const candidate of knownPaths) {
     const found = await executableRuntime(candidate);
     if (found !== null) return found;
   }

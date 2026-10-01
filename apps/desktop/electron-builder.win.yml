@@ -1,0 +1,111 @@
+appId: com.zellzoi.powermove
+productName: Powermove
+
+directories:
+  output: dist
+
+asar: true
+electronLanguages:
+  - en
+files:
+  - out/**
+  - "!**/* [2-9].*"
+  - "!**/* [2-9]"
+  - '!node_modules/ffmpeg-static/ffmpeg'
+  # The native agent runtimes are copied once below, at the paths used by the
+  # packaged binary resolvers. Keep their npm wrappers/metadata, but do not let
+  # electron-builder auto-pack a second copy of any platform executable.
+  - '!node_modules/@openai/codex-darwin-arm64/**'
+  - '!node_modules/@openai/codex-win32-x64/**'
+  - '!node_modules/@anthropic-ai/claude-code-darwin-arm64/**'
+  - '!node_modules/@anthropic-ai/claude-code-win32-x64/**'
+  - '!node_modules/@anthropic-ai/claude-code/bin/claude'
+  # esbuild/lib/main.js resolves the @esbuild platform package at runtime. The
+  # install-time bin copy is the same executable and is not used by Powermove.
+  - '!node_modules/esbuild/bin/esbuild'
+extraResources:
+  - from: resources/sounds
+    to: sounds
+  - from: node_modules/ffmpeg-static/ffmpeg.exe
+    to: encoder/ffmpeg.exe
+  - from: node_modules/ffmpeg-static/LICENSE
+    to: encoder/LICENSE
+  - from: node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc
+    to: codex
+    filter:
+      - "**/*"
+      - "!**/* [2-9]"
+      - "!**/* [2-9].*"
+  - from: node_modules/@anthropic-ai/claude-code-win32-x64/claude.exe
+    to: claude/bin/claude.exe
+  - from: src/extensions
+    to: builtin-extensions
+    filter:
+      - "**/*"
+  - from: docs/EXTENSIONS.md
+    to: api-pack/EXTENSIONS.md
+  - from: docs/background-testing.md
+    to: api-pack/BACKGROUND_TESTING.md
+  - from: src/renderer/src/kernel/api.ts
+    to: api-pack/api.ts
+  - from: ../../packages/registry/src/manifest.ts
+    to: api-pack/extensions.ts
+  - from: src/renderer/src/core/types/project.ts
+    to: api-pack/project.ts
+  - from: src/renderer/src/core/types/commands.ts
+    to: api-pack/commands.ts
+  - from: docs/samples/media-browser
+    to: api-pack/samples/media-browser
+    filter:
+      - "**/*"
+  - from: docs/samples/gradient-tint
+    to: api-pack/samples/gradient-tint
+    filter:
+      - "**/*"
+  - from: src/main/agent-tools/mcp-server.mjs
+    to: agent-tools/mcp-server.mjs
+extraMetadata:
+  main: out/main/index.js
+
+afterPack: ./scripts/after-pack.mjs
+# Windows releases live in this repository. electron-updater reads the GitHub
+# release feed (latest.yml), so the repo must be public for updates to work on
+# user machines.
+publish:
+  provider: github
+  owner: iterative-computer
+  repo: powermove
+  releaseType: draft
+
+artifactName: ${productName}-${version}-win-${arch}.${ext}
+
+# `powermove://auth?state&token` finishes a browser sign-in to Powermove Cloud
+# (src/main/cloud/auth.ts). Dev builds do not claim it unless
+# POWERMOVE_DEV_PROTOCOL=1 (src/main/index.ts).
+protocols:
+  - name: Powermove
+    schemes:
+      - powermove
+
+fileAssociations:
+  - ext: pmv
+    name: Powermove Project
+    description: Powermove Project
+    role: Editor
+    mimeType: application/vnd.powermove.project
+
+win:
+  icon: resources/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Powermove
+  artifactName: ${productName}-${version}-win-${arch}-setup.${ext}
+  deleteAppDataOnUninstall: false

@@ -16,6 +16,7 @@ export function parseProcessTable(stdout: string): ProcessRow[] {
 }
 
 function processTable(): Promise<ProcessRow[]> {
+  if (process.platform === 'win32') return Promise.resolve([]);
   return new Promise((resolve, reject) => {
     execFile('/bin/ps', ['-A', '-o', 'pid=,ppid=,pgid=,uid=,lstart='],
       { encoding: 'utf8', timeout: 5_000, maxBuffer: 16 * 1024 * 1024, env: { LC_ALL: 'C', ...(process.env.TZ ? { TZ: process.env.TZ } : {}) } },
@@ -25,6 +26,7 @@ function processTable(): Promise<ProcessRow[]> {
 
 /** Working directories by pid; processes lsof cannot inspect are left out. */
 function workingDirectories(pids: readonly number[]): Promise<Map<number, string>> {
+  if (process.platform === 'win32') return Promise.resolve(new Map());
   return new Promise(resolve => {
     // lsof exits 1 when any pid is gone; what it printed still holds.
     execFile('/usr/sbin/lsof', ['-a', '-d', 'cwd', '-Fn', '-w', '-p', pids.join(',')],
@@ -66,6 +68,15 @@ async function sandboxMarked(pids: readonly number[], marks: readonly string[]):
 }
 
 function signal(pid: number, name: NodeJS.Signals): boolean {
+  // Negative pids address a POSIX process group; Windows has no equivalent.
+  // Fall back to taskkill for group kills, preserving best-effort cleanup.
+  if (process.platform === 'win32' && pid < 0) {
+    try {
+      const { execFileSync } = require('node:child_process') as typeof import('node:child_process');
+      execFileSync('taskkill.exe', ['/PID', String(-pid), '/T', '/F'], { stdio: 'ignore' });
+      return true;
+    } catch { return false; }
+  }
   try { process.kill(pid, name); return true; } catch { return false; }
 }
 

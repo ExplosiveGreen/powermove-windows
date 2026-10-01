@@ -313,19 +313,25 @@ export async function startWorkspaceCommand(root: string, access: 'project' | 'c
   const marks = [mark, ...(options.runMark ? [options.runMark] : [])];
   // Project access keeps unrestricted outbound network for research,
   // downloads and dev servers; only the filesystem is confined.
+  // Windows has no sandbox-exec seatbelt profile: Project commands run
+  // directly in the workspace (path checks in resolve() still confine file
+  // tools) with the same network access as Computer.
   const profile = `(version 1)(allow default)(allow network-outbound)(deny appleevent-send)`
     + `(deny mach-lookup ${marks.map(name => `(global-name ${JSON.stringify(name)})`).join(' ')})`
     + `(deny file-write*)(allow file-write* (subpath ${JSON.stringify(await realpath(root))}) (literal "/dev/null") (literal "/dev/tty")`
     // Inherited stdio only; a broad /dev subpath would expose devices.
     + ' (literal "/dev/stdout") (literal "/dev/stderr") (regex #"^/dev/fd/[0-9]+$"))';
-  if (access === 'project' && process.platform !== 'darwin') throw new Error('Project command sandbox is only available on macOS.');
+  const sandboxed = access === 'project' && process.platform === 'darwin';
+  if (access === 'project' && process.platform !== 'darwin' && process.platform !== 'win32') throw new Error('Project command sandbox is only available on macOS.');
   const startedAt = Date.now();
   // The command creates its own scratch folder, so the sandbox, not main,
   // decides where a planted link may lead.
-  const shell = ['/bin/sh', '-c', 'mkdir -p -- "$TMPDIR" 2>/dev/null; exec /bin/zsh -c "$1"', 'zsh', command];
-  const child = spawn(access === 'project' ? '/usr/bin/sandbox-exec' : shell[0]!,
-    access === 'project' ? ['-p', profile, ...shell] : shell.slice(1),
-    { cwd: root, env, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  const shell = process.platform === 'win32'
+    ? ['cmd.exe', '/d', '/s', '/c', command]
+    : ['/bin/sh', '-c', 'mkdir -p -- "$TMPDIR" 2>/dev/null; exec /bin/zsh -c "$1"', 'zsh', command];
+  const child = spawn(sandboxed ? '/usr/bin/sandbox-exec' : shell[0]!,
+    sandboxed ? ['-p', profile, ...shell] : shell.slice(1),
+    { cwd: root, env, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
   // Closed at once, so stdin reads end as they did from /dev/null.
   child.stdin.on('error', () => undefined); child.stdin.end(options.input);
   let output = '', truncated = false, running = true, exitCode: number | null = null;

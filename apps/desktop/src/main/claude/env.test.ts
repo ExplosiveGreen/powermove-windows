@@ -3,7 +3,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { bundledClaudeCandidates, discoverClaudeBinary, resetClaudeEnvironmentCacheForTests, DEVELOPMENT_CLAUDE_RELATIVE_PATH, PACKAGED_CLAUDE_RELATIVE_PATH } from './env';
+import { bundledClaudeCandidates, discoverClaudeBinary, resetClaudeEnvironmentCacheForTests, DEVELOPMENT_CLAUDE_RELATIVE_PATH, PACKAGED_CLAUDE_RELATIVE_PATH, PACKAGED_CLAUDE_WINDOWS_RELATIVE_PATHS } from './env';
 
 vi.mock('node:child_process', () => ({ execFile: vi.fn() }));
 
@@ -38,6 +38,7 @@ describe('Claude runtime discovery', () => {
   it('prefers the packaged binary and retains the official dependency in development', () => {
     expect(bundledClaudeCandidates('/app', '/resources')).toEqual([
       path.join('/resources', PACKAGED_CLAUDE_RELATIVE_PATH),
+      ...PACKAGED_CLAUDE_WINDOWS_RELATIVE_PATHS.map((relative) => path.join('/resources', relative)),
       path.join('/app', DEVELOPMENT_CLAUDE_RELATIVE_PATH)
     ]);
   });

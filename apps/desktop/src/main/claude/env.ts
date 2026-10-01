@@ -5,12 +5,27 @@ import path from 'node:path';
 import { updatedRuntimeCandidates } from '../runtime-updates';
 
 export const PACKAGED_CLAUDE_RELATIVE_PATH = path.join('claude', 'bin', 'claude');
-export const DEVELOPMENT_CLAUDE_RELATIVE_PATH = path.join(
+export const PACKAGED_CLAUDE_WINDOWS_RELATIVE_PATHS = [
+  path.join('claude', 'bin', 'claude.exe'),
+  path.join('claude.exe'),
+] as const;
+// Development (node_modules) layout differs per OS. The darwin package carries
+// a `claude` file; the win32 package carries `claude.exe`.
+export const DEVELOPMENT_CLAUDE_DARWIN_RELATIVE_PATH = path.join(
   'node_modules',
   '@anthropic-ai',
   'claude-code-darwin-arm64',
   'claude'
 );
+export const DEVELOPMENT_CLAUDE_WINDOWS_RELATIVE_PATH = path.join(
+  'node_modules',
+  '@anthropic-ai',
+  'claude-code-win32-x64',
+  'claude.exe'
+);
+export const DEVELOPMENT_CLAUDE_RELATIVE_PATH = process.platform === 'win32'
+  ? DEVELOPMENT_CLAUDE_WINDOWS_RELATIVE_PATH
+  : DEVELOPMENT_CLAUDE_DARWIN_RELATIVE_PATH;
 
 export const CLAUDE_NOT_FOUND_MESSAGE =
   "Powermove's built-in Claude runtime is missing or unavailable. Reinstall Powermove or set CLAUDE_BINARY.";
@@ -39,6 +54,9 @@ function execFileText(file: string, args: readonly string[]): Promise<string> {
 }
 
 async function probeLoginShell(): Promise<string | null> {
+  // Windows has no zsh login shell; PATH discovery happens in
+  // login-shell-path.ts, so skip the POSIX probe here.
+  if (process.platform === 'win32') return null;
   if (loginShellProbe === null) {
     loginShellProbe = (async () => {
       try {
@@ -56,8 +74,15 @@ export function bundledClaudeCandidates(
   appRoot = process.cwd(),
   resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
 ): string[] {
-  const candidates = [path.join(appRoot, DEVELOPMENT_CLAUDE_RELATIVE_PATH)];
-  if (resourcesPath) candidates.unshift(path.join(resourcesPath, PACKAGED_CLAUDE_RELATIVE_PATH));
+  const candidates: string[] = [];
+  if (resourcesPath) {
+    candidates.push(path.join(resourcesPath, PACKAGED_CLAUDE_RELATIVE_PATH));
+    for (const relative of PACKAGED_CLAUDE_WINDOWS_RELATIVE_PATHS) {
+      const candidate = path.join(resourcesPath, relative);
+      if (!candidates.includes(candidate)) candidates.push(candidate);
+    }
+  }
+  candidates.push(path.join(appRoot, DEVELOPMENT_CLAUDE_RELATIVE_PATH));
   return [...updatedRuntimeCandidates('claude'), ...candidates];
 }
 

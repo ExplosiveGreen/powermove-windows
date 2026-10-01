@@ -4,6 +4,9 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   CODEX_NOT_FOUND_MESSAGE,
+  PACKAGED_CODEX_RELATIVE_PATH,
+  DEVELOPMENT_CODEX_RELATIVE_PATH,
+  PACKAGED_CODEX_WINDOWS_RELATIVE_PATHS,
   bundledCodexCandidates,
   describeCodex,
   discoverCodex,
@@ -76,8 +79,9 @@ describe('Codex binary discovery', () => {
 
     await expect(discoverCodex(null, { bundledCandidates: [bundledBinary] })).resolves.toBe(bundledBinary);
     expect(bundledCodexCandidates('/Powermove', '/Powermove.app/Contents/Resources')).toEqual([
-      '/Powermove.app/Contents/Resources/codex/bin/codex',
-      '/Powermove/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex'
+      path.join('/Powermove.app/Contents/Resources', PACKAGED_CODEX_RELATIVE_PATH),
+      ...PACKAGED_CODEX_WINDOWS_RELATIVE_PATHS.map((relative) => path.join('/Powermove.app/Contents/Resources', relative)),
+      path.join('/Powermove', DEVELOPMENT_CODEX_RELATIVE_PATH)
     ]);
   });
 

@@ -32,6 +32,12 @@ interface Release {
 }
 
 const REGISTRY = 'https://registry.npmjs.org';
+function packagedBinaryRelative(provider: RuntimeProvider): string {
+  if (process.platform === 'win32') {
+    return provider === 'claude' ? path.join('claude', 'bin', 'claude.exe') : path.join('codex', 'bin', 'codex.exe');
+  }
+  return RELATIVE_BINARY[provider];
+}
 const RELATIVE_BINARY: Record<RuntimeProvider, string> = {
   claude: path.join('claude', 'bin', 'claude'),
   codex: path.join('codex', 'bin', 'codex')
@@ -58,11 +64,17 @@ function installed(provider: RuntimeProvider): InstalledRuntime | null {
 /** The downloaded runtime, when one exists for this app version. Synchronous so
     the bundled-candidate lists can include it without changing their shape. */
 export function updatedRuntimeCandidates(provider: RuntimeProvider): string[] {
-  return root !== null && installed(provider) ? [path.join(root, RELATIVE_BINARY[provider])] : [];
+  return root !== null && installed(provider) ? [path.join(root, packagedBinaryRelative(provider))] : [];
 }
 
-function darwinArch(): 'arm64' | 'x64' {
+function platformArch(): 'arm64' | 'x64' {
   return process.arch === 'x64' ? 'x64' : 'arm64';
+}
+
+function platformTag(): 'darwin' | 'win32' | 'linux' {
+  if (process.platform === 'win32') return 'win32';
+  if (process.platform === 'linux') return 'linux';
+  return 'darwin';
 }
 
 async function registry(name: string, tag: string): Promise<Release> {
@@ -78,11 +90,20 @@ async function registry(name: string, tag: string): Promise<Release> {
 }
 
 async function latestRelease(provider: RuntimeProvider): Promise<Release> {
-  const arch = darwinArch();
-  if (provider === 'claude') return registry(`@anthropic-ai/claude-code-darwin-${arch}`, 'latest');
-  // Codex publishes each platform build as a prerelease tag of the main package.
+  const tag = platformTag();
+  const arch = platformArch();
+  // Claude publishes one package per OS/arch; Codex publishes each platform
+  // build as a prerelease tag of the main package.
+  if (provider === 'claude') {
+    const names: Record<string, string> = {
+      'darwin': `@anthropic-ai/claude-code-darwin-${arch}`,
+      'win32': `@anthropic-ai/claude-code-win32-${arch}`,
+      'linux': `@anthropic-ai/claude-code-linux-${arch}`,
+    };
+    return registry(names[tag] ?? names['darwin']!, 'latest');
+  }
   const { version } = await registry('@openai/codex', 'latest');
-  const release = await registry('@openai/codex', `${version}-darwin-${arch}`);
+  const release = await registry('@openai/codex', `${version}-${tag}-${arch}`);
   return { ...release, version };
 }
 
@@ -136,7 +157,7 @@ export async function installRuntimeIfNewer(
   provider: RuntimeProvider,
   currentBinary: string
 ): Promise<RuntimeUpdateResult | null> {
-  if (root === null || process.platform !== 'darwin') return null;
+  if (root === null || (process.platform !== 'darwin' && process.platform !== 'win32')) return null;
   const current = installed(provider)?.version
     ?? (await run(currentBinary, ['--version'], 15_000)).match(/\d+\.\d+\.\d+\S*/)?.[0];
   const release = await latestRelease(provider);
@@ -147,7 +168,7 @@ export async function installRuntimeIfNewer(
 /** Download, verify, and activate the newest runtime for a provider. */
 export async function installLatestRuntime(provider: RuntimeProvider): Promise<RuntimeUpdateResult> {
   if (root === null) throw new Error('Runtime updates aren’t available in this build.');
-  if (process.platform !== 'darwin') throw new Error('Runtime updates are only available on macOS.');
+  if (process.platform !== 'darwin' && process.platform !== 'win32') throw new Error('Runtime updates are only available on macOS and Windows.');
   return installRelease(provider, await latestRelease(provider));
 }
 
@@ -157,30 +178,45 @@ async function installRelease(provider: RuntimeProvider, release: Release): Prom
   try {
     const archive = path.join(scratch, 'package.tgz');
     await download(release, archive);
-    await run('/usr/bin/tar', ['-xzf', archive, '-C', scratch]);
+    // Windows 10+ ships tar.exe; macOS/Linux have tar on PATH. Avoid the
+    // hardcoded /usr/bin/tar so the same code runs on every desktop OS.
+    await run(process.platform === 'win32' ? 'tar.exe' : 'tar', ['-xzf', archive, '-C', scratch]);
 
     const versions = path.join(root, '.versions');
     const target = path.join(versions, `${provider}-${release.version}`);
     await rm(target, { recursive: true, force: true });
     await mkdir(target, { recursive: true });
     if (provider === 'claude') {
-      await mkdir(path.join(target, 'bin'));
-      await cp(path.join(scratch, 'package', 'claude'), path.join(target, 'bin', 'claude'));
+      await mkdir(path.join(target, 'bin'), { recursive: true });
+      const sourceName = process.platform === 'win32' ? 'claude.exe' : 'claude';
+      const binaryName = process.platform === 'win32' ? 'claude.exe' : 'claude';
+      await cp(path.join(scratch, 'package', sourceName), path.join(target, 'bin', binaryName));
     } else {
-      const triple = darwinArch() === 'arm64' ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin';
+      const tag = platformTag();
+      const arch = platformArch();
+      const triple = tag === 'win32'
+        ? (arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc')
+        : (arch === 'arm64' ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin');
       await cp(path.join(scratch, 'package', 'vendor', triple), target, { recursive: true });
     }
-    const binary = path.join(target, 'bin', provider);
-    await chmod(binary, 0o755);
+    const binaryName = process.platform === 'win32' ? `${provider}.exe` : provider;
+    const binary = path.join(target, 'bin', binaryName);
+    if (process.platform !== 'win32') await chmod(binary, 0o755);
     await run(binary, ['--version'], 15_000);
 
     // Swap the provider link atomically so a run starting now sees either
     // the old runtime or the new one, never a half-written directory.
+    // Windows symlinks need elevated rights, so copy there instead.
     const link = path.join(root, provider);
-    const staged = `${link}.${process.pid}.tmp`;
-    await rm(staged, { force: true });
-    await symlink(target, staged);
-    await rename(staged, link);
+    if (process.platform === 'win32') {
+      await rm(link, { recursive: true, force: true });
+      await cp(target, link, { recursive: true });
+    } else {
+      const staged = `${link}.${process.pid}.tmp`;
+      await rm(staged, { force: true });
+      await symlink(target, staged);
+      await rename(staged, link);
+    }
     await writeFile(path.join(root, `${provider}.json`),
       JSON.stringify({ version: release.version, appVersion } satisfies InstalledRuntime));
 

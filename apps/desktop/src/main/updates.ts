@@ -3,11 +3,12 @@ import { autoUpdater } from 'electron-updater';
 
 import { IPC, type AppUpdateState } from '../shared/ipc';
 
-/** macOS stages updates with Squirrel and applies them on normal quit. Never
- * bypass the editor's before-quit save barrier with quitAndInstall(): the
- * renderer's Update button quits normally with autoRunAppAfterInstall on. */
+/** macOS stages updates with Squirrel and applies them on normal quit. Windows
+ * installs via NSIS on quit. Never bypass the editor's before-quit save
+ * barrier with quitAndInstall(): the renderer's Update button quits normally
+ * with autoRunAppAfterInstall on (macOS) or installs on next launch. */
 export function installUpdates(menu: Menu): void {
-  if (!app.isPackaged || process.platform !== 'darwin') return;
+  if (!app.isPackaged || (process.platform !== 'darwin' && process.platform !== 'win32')) return;
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.autoRunAppAfterInstall = false;
@@ -64,9 +65,10 @@ export function installUpdates(menu: Menu): void {
     if (manual) show('Could not check for updates', 'Please try again later. You can continue using Powermove.');
     manual = false;
   });
-  // The electron-updater event precedes Squirrel staging. Only announce the
-  // update after the native updater confirms it can install on exit.
-  nativeUpdater.on('update-downloaded', () => {
+  // The electron-updater event precedes Squirrel staging on macOS. Only
+  // announce the update after the native updater confirms it can install on
+  // exit. On Windows, electron-updater's update-downloaded is the signal.
+  const markReady = (): void => {
     manual = false;
     item.label = 'Update Ready — Quit to Install';
     set({ status: 'ready' });
@@ -74,12 +76,23 @@ export function installUpdates(menu: Menu): void {
     if (windows().length === 0) {
       show('A Powermove update is ready', 'It will install when you quit Powermove. Keep working and quit whenever you’re ready.');
     }
+  };
+  nativeUpdater.on('update-downloaded', () => {
+    markReady();
+  });
+  autoUpdater.on('update-downloaded', () => {
+    if (process.platform === 'win32') markReady();
   });
 
   ipcMain.handle(IPC.updateStatus, () => ({ ...state }));
   ipcMain.handle(IPC.updateCheck, () => check(false));
   ipcMain.handle(IPC.updateInstall, () => {
     if (state.status !== 'ready') return;
+    if (process.platform === 'win32') {
+      // NSIS installs on quit; a normal quit runs the save barrier first.
+      autoUpdater.quitAndInstall(false, true);
+      return;
+    }
     // A normal quit runs the save barrier; Squirrel installs on exit and
     // relaunches into the new version.
     autoUpdater.autoRunAppAfterInstall = true;

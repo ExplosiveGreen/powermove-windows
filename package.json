@@ -16,7 +16,9 @@
     "check": "bun run --cwd apps/desktop check:builtins",
     "test:e2e": "bun run --cwd apps/desktop test:e2e",
     "dist:mac": "bun run --cwd apps/desktop dist:mac",
+    "dist:win": "bun run --cwd apps/desktop dist:win",
     "dist:release": "bun run --cwd apps/desktop dist:release",
+    "dist:release-win": "bun run --cwd apps/desktop dist:release-win",
     "build:cli": "bun run --cwd packages/cli build",
     "serve": "bun run --cwd packages/cli build && node packages/cli/bin/powermove.mjs serve"
   },

@@ -77,6 +77,23 @@ function readLoginShellPath(): Promise<string[] | null> {
  * folders for a minute, so a slow profile does not delay each of them.
  */
 export async function loginShellPath(home = process.env.HOME): Promise<string> {
+  if (process.platform === 'win32') {
+    // No POSIX login shell on Windows. Honor PATH plus the usual per-user
+    // tool locations (bun, nodejs, git).
+    const delimiter = path.delimiter;
+    const userProfile = process.env.USERPROFILE ?? process.env.HOME;
+    const windowsFallback = [
+      ...(userProfile && path.isAbsolute(userProfile) ? [path.join(userProfile, '.bun', 'bin')] : []),
+      'C:\\Program Files\\nodejs',
+      'C:\\Program Files\\Git\\cmd',
+    ];
+    const entries: string[] = [];
+    for (const entry of [...windowsFallback, ...(process.env.PATH ?? '').split(delimiter)]) {
+      const trimmed = entry.trim();
+      if (trimmed && !/[\0\r\n]/u.test(trimmed) && !entries.includes(trimmed)) entries.push(trimmed);
+    }
+    return entries.join(delimiter);
+  }
   let login: string[] = [];
   if (process.platform === 'darwin' && (probe || Date.now() >= retryAt)) {
     const current = probe ??= readLoginShellPath().then(entries => {
