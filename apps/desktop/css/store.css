@@ -74,20 +74,43 @@
 
 
 /* ── carousel ── */
-/* One collection at a time on a card that deepens into the tint of its first
-   extension: label, title and line centred over a staggered row of icons,
-   Explore under them. Arrows ride the sides; dots sit under the card. */
-.st-carousel{display:flex;flex-direction:column;align-items:center;gap:14px}
+/* Collections on a row of cards that scrolls sideways and snaps: the one in
+   front fills most of the column and the next peeks in beside it. Each card
+   deepens into the tint of its first extension and keeps everything on its
+   left edge: label and title up top, a staggered row of named icons,
+   Explore at the foot. Dots and arrows sit under the row. */
+.st-carousel{display:flex;flex-direction:column;gap:14px}
+.st-track{
+  position:relative;display:flex;gap:16px;overflow-x:auto;overflow-y:hidden;
+  scroll-snap-type:x mandatory;overscroll-behavior-x:contain;scrollbar-width:none}
+.st-track::-webkit-scrollbar{display:none}
+/* A card running on past either edge fades out there, the way the docks do
+   (app.css); the length animates through @property. */
+@property --st-fade-start{syntax:'<length>';inherits:false;initial-value:0px}
+@property --st-fade-end{syntax:'<length>';inherits:false;initial-value:0px}
+.st-track{
+  --st-fade:44px;
+  /* The very edge keeps a trace of the card, so the fade reads as a hint. */
+  mask-image:linear-gradient(to right,
+    rgb(0 0 0 / .3) 0,
+    #000 var(--st-fade-start),
+    #000 calc(100% - var(--st-fade-end)),
+    rgb(0 0 0 / .3) 100%);
+  transition:--st-fade-start var(--dur-2) var(--ease),--st-fade-end var(--dur-2) var(--ease)}
+.st-track[data-overflow-start="1"]{--st-fade-start:var(--st-fade)}
+.st-track[data-overflow-end="1"]{--st-fade-end:var(--st-fade)}
+@media (prefers-reduced-motion:reduce){.st-track{transition:none}}
 /* Light: a white card that warms into a pale wash of the collection's
    lighter hue, glowing up from under the icons; controls are white chips on
    soft shadows. Dark: the card deepens into the collection's darker hue and
    the controls sink into it. */
 .st-slide{
+  --slide-pad:28px;
   --slide-chip:var(--bg-float);
   --slide-chip-hover:color-mix(in srgb, var(--bg-float) 90%, black);
   --slide-chip-shadow:0 1px 2px rgb(0 0 0 / .07), 0 6px 16px -6px rgb(0 0 0 / .16);
   --slide-icon-shadow:drop-shadow(0 10px 14px rgb(40 30 60 / .16)) drop-shadow(0 1px 2px rgb(0 0 0 / .1));
-  position:relative;isolation:isolate;width:100%;min-height:312px;display:grid;place-items:center;padding:40px 80px 32px;border-radius:var(--r-xl);background:var(--bg-panel);overflow:hidden}
+  position:relative;isolation:isolate;flex:0 0 min(64%,620px);display:flex;padding:var(--slide-pad);border-radius:var(--r-xl);background:var(--bg-panel);overflow:hidden;scroll-snap-align:start}
 :root[data-theme="dark"] .st-slide{
   --slide-chip:color-mix(in oklch, var(--bg-content) 82%, transparent);
   --slide-chip-hover:var(--bg-content);
@@ -96,40 +119,45 @@
 .st-slide-bg{
   position:absolute;inset:0;z-index:-1;
   background:
-    radial-gradient(70% 85% at 50% 118%, color-mix(in oklch, var(--art-b) 48%, white) 0%, transparent 72%),
+    radial-gradient(80% 70% at 24% 100%, color-mix(in oklch, var(--art-b) 48%, white) 0%, transparent 72%),
     linear-gradient(180deg, var(--bg-panel) 18%, color-mix(in oklch, var(--art-a) 22%, var(--bg-panel)) 100%)}
 :root[data-theme="dark"] .st-slide-bg{background:linear-gradient(180deg, var(--bg-panel) 8%, color-mix(in oklch, var(--art-a) 34%, var(--bg-panel)) 100%)}
-/* Outgoing and incoming collections share one cell while they crossfade. */
-.st-slide-body{grid-area:1/1;display:flex;flex-direction:column;align-items:center;gap:4px;text-align:center}
+.st-slide-body{flex:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:4px;text-align:left}
 .st-eyebrow{font-size:var(--fs-xs);line-height:14px;font-weight:var(--fw-medium);letter-spacing:.06em;text-transform:uppercase;color:var(--tx-3)}
-.st-slide-title{margin-top:4px;font-size:22px;line-height:28px;font-weight:var(--fw-medium);letter-spacing:-.015em;color:var(--tx);text-wrap:balance}
-.st-slide-blurb{max-width:48ch;font-size:var(--fs-md);line-height:18px;color:var(--tx-2);text-wrap:balance}
-.st-slide-icons{display:flex;align-items:center;justify-content:center;gap:clamp(14px,3cqi,28px);height:112px;margin:20px 0 16px}
-.st-slide-icon{flex:none;padding:0;border:0;border-radius:calc(var(--size) * .26);background:transparent;transform:translateY(var(--lift));filter:var(--slide-icon-shadow);transition:transform var(--dur-2) var(--ease)}
-.st-slide-icon .st-thumb{width:var(--size);height:var(--size);border-radius:calc(var(--size) * .26)}
-.st-slide-icon:focus-visible{outline:0;box-shadow:0 0 0 3px var(--ink-3)}
-.st-explore{height:32px;padding:0 16px;border:0;border-radius:var(--r-md);background:var(--slide-chip);box-shadow:var(--slide-chip-shadow);color:var(--tx);font-size:var(--fs-md);font-weight:var(--fw-medium);transition:background var(--dur-1)}
+.st-slide-title{margin-top:4px;font-size:26px;line-height:32px;font-weight:var(--fw-medium);letter-spacing:-.018em;color:var(--tx);text-wrap:balance}
+.st-slide-icons{flex:1;display:flex;align-items:center;gap:20px;width:100%;margin:20px 0}
+/* Each icon carries its name beneath it, and the two ride the stagger together. */
+.st-slide-icon{flex:none;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:10px;padding:0;border:0;background:transparent;text-align:left;transform:translateY(var(--lift));transition:transform var(--dur-2) var(--ease)}
+.st-slide-icon .st-thumb{width:var(--size);height:var(--size);border-radius:calc(var(--size) * .24);filter:var(--slide-icon-shadow)}
+/* Names wrap to two lines before they clip. */
+.st-slide-name{display:-webkit-box;max-width:136px;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;font-size:var(--fs-lg);line-height:20px;font-weight:var(--fw-medium);color:var(--tx);text-wrap:balance;transition:opacity var(--dur-1)}
+.st-slide-icon:hover .st-slide-name{opacity:.78}
+.st-slide-icon:focus-visible{outline:0}
+.st-slide-icon:focus-visible .st-thumb{box-shadow:0 0 0 3px var(--ink-3)}
+.st-explore{flex:none;height:32px;padding:0 16px;border:0;border-radius:var(--r-md);background:var(--slide-chip);box-shadow:var(--slide-chip-shadow);color:var(--tx);font-size:var(--fs-md);font-weight:var(--fw-medium);transition:background var(--dur-1)}
 .st-explore:hover{background:var(--slide-chip-hover)}
 .st-explore:focus-visible{outline:0;box-shadow:0 0 0 3px var(--ink-3)}
-.st-arrow{position:absolute;top:50%;z-index:1;display:grid;place-items:center;width:32px;height:32px;margin-top:-16px;padding:0;border:0;border-radius:50%;background:var(--slide-chip);box-shadow:var(--slide-chip-shadow);color:var(--tx-2);transition:background var(--dur-1),color var(--dur-1)}
-.st-arrow svg{width:13px;height:13px}
-.st-arrow.is-prev{left:16px}
-.st-arrow.is-prev svg{transform:rotate(180deg)}
-.st-arrow.is-next{right:16px}
-.st-arrow:hover{background:var(--slide-chip-hover);color:var(--tx)}
+/* Dots on the text edge, arrows on the far one. */
+.st-carousel-bar{display:flex;align-items:center;gap:8px;padding-left:var(--st-inset)}
+.st-arrow{display:grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:50%;background:var(--bg-panel);color:var(--tx-2);transition:background var(--dur-1),color var(--dur-1),opacity var(--dur-1)}
+.st-arrow svg{width:12px;height:12px;transform:rotate(180deg)}
+.st-arrow.is-next svg{transform:none}
+.st-arrow:hover:not(:disabled){background:var(--ink-2);color:var(--tx)}
+.st-arrow:disabled{opacity:.4;cursor:default}
 .st-arrow:focus-visible{outline:0;box-shadow:0 0 0 3px var(--ink-3)}
-.st-dots{display:flex;align-items:center;gap:6px}
+.st-dots{flex:1;display:flex;align-items:center;gap:6px}
 .st-dots button{width:6px;height:6px;padding:0;border:0;border-radius:var(--r-pill);background:var(--tx-4);transition:width var(--dur-2) var(--ease),background var(--dur-2)}
 .st-dots button[aria-selected="true"]{width:22px;background:var(--tx-2)}
 .st-dots button:hover:not([aria-selected="true"]){background:var(--tx-3)}
 .st-dots button:focus-visible{outline:0;box-shadow:0 0 0 3px var(--ink-3)}
-.st-slide.is-skeleton{pointer-events:none}
-.st-slide.is-skeleton .st-skel-lines{align-items:center;width:40%;flex:none}
+.st-slide.is-skeleton{width:min(64%,620px);height:320px;pointer-events:none}
+.st-slide.is-skeleton .st-skel-lines{align-self:start;width:60%;flex:none}
 @container (max-width:40rem){
-  .st-slide{padding:32px 20px 28px;min-height:0}
+  .st-slide{--slide-pad:24px;flex-basis:86%}
+  .st-slide.is-skeleton{width:86%}
   .st-arrow{display:none}
-  .st-slide-icons{height:96px;gap:12px}
-  .st-slide-icon:nth-child(n+5){display:none}
+  .st-slide-icons{gap:16px}
+  .st-slide-icon:nth-child(n+3){display:none}
 }
 
 /* ── sections ── */

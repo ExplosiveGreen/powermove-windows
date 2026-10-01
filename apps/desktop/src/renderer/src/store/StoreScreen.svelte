@@ -57,6 +57,9 @@
   let page = $state<StorePage>('browse');
   let searchText = $state('');
   let featuredIndex = $state(0);
+  let trackEl = $state<HTMLElement | null>(null);
+  /* Whether the row runs on past either edge, which then fades out. */
+  let trackOverflow = $state({ start: false, end: false });
   let direction = $state(0);
   let rootEl = $state<HTMLElement | null>(null);
   let scrollEl = $state<HTMLElement | null>(null);
@@ -128,25 +131,14 @@
         id: section.id,
         eyebrow: kind ? 'Collection' : 'Curated by Powermove',
         title: kind ? KIND_PLURAL[kind] : 'Featured this week',
-        blurb: kind ? KIND_BLURB[kind] : 'Extensions the Powermove team keeps coming back to.',
         listings: section.listings,
         explore: () => (kind ? show(`kind:${kind}`) : revealShelf(section.id))
       };
     }));
-  const slideAt = $derived(slides[Math.min(featuredIndex, slides.length - 1)] ?? null);
-  /* Icons in a collection sit at staggered sizes and heights, like a shelf of
-     app icons rather than a grid. */
-  const ICON_SIZES = [60, 46, 68, 42, 58, 48, 64];
-  const ICON_LIFTS = [-10, 14, -2, 22, -12, 10, -4];
-  const KIND_BLURB: Record<StoreKind, string> = {
-    effects: 'Blur, grain, light and colour you can key to layer motion.',
-    transitions: 'Cuts, wipes and morphs between layers.',
-    panels: 'New places to work, docked beside the timeline.',
-    themes: 'Powermove in someone else’s colours.',
-    commands: 'One-step actions for the command palette.',
-    layers: 'New kinds of layer: type, shapes, 3D and more.',
-    tools: 'Canvas tools for drawing, measuring and arranging.'
-  };
+  /* A collection shows its first three icons, named, at staggered sizes and
+     heights, like a shelf of app icons rather than a grid. */
+  const ICON_SIZES = [96, 76, 88];
+  const ICON_LIFTS = [0, 12, 4];
 
   const detailData = $derived(remote?.status === 'ready' ? remote.value : null);
   const detailItem = $derived.by(() => {
@@ -392,9 +384,39 @@
     searchText = text;
   }
 
-  function stepSlide(delta: number): void {
-    if (slides.length) featuredIndex = (featuredIndex + delta + slides.length) % slides.length;
+  /* The carousel is a scroll-snapped row: a trackpad swipe, an arrow or a
+     dot all move it, and the dot follows whichever collection it rests on.
+     The last card can't reach the left edge, so the end of the row is its stop. */
+  function slideStops(track: HTMLElement): number[] {
+    const end = track.scrollWidth - track.clientWidth;
+    return Array.from(track.children, (child) => Math.min((child as HTMLElement).offsetLeft, end));
   }
+
+  function slideTo(index: number): void {
+    if (!trackEl) return;
+    const stop = slideStops(trackEl)[Math.max(0, Math.min(index, slides.length - 1))];
+    if (stop !== undefined) trackEl.scrollTo({ left: stop, behavior: reduced() ? 'instant' : 'smooth' });
+  }
+
+  function trackScrolled(): void {
+    if (!trackEl) return;
+    const x = trackEl.scrollLeft;
+    const stops = slideStops(trackEl);
+    let nearest = 0;
+    stops.forEach((stop, i) => { if (Math.abs(stop - x) < Math.abs(stops[nearest]! - x)) nearest = i; });
+    featuredIndex = nearest;
+    const end = trackEl.scrollWidth - trackEl.clientWidth;
+    trackOverflow = { start: x > 1, end: x < end - 1 };
+  }
+
+  $effect(() => {
+    const track = trackEl;
+    if (!track) return;
+    trackScrolled();
+    const resized = new ResizeObserver(() => trackScrolled());
+    resized.observe(track);
+    return () => resized.disconnect();
+  });
 
   function revealShelf(id: string): void {
     scrollEl?.querySelector(`#st-shelf-${CSS.escape(id)}`)?.scrollIntoView({ behavior: reduced() ? 'instant' : 'smooth', block: 'start' });
@@ -988,36 +1010,37 @@
               </div>
             {:else}
               <div class="st-stack" in:fade={settle}>
-                {#if slideAt}
-                  {@const at = slideAt}
+                {#if slides.length}
                   <section class="st-carousel" aria-roledescription="carousel" aria-label="Collections">
-                    <div class="st-slide">
-                      {#key at.id}
-                        <span class="st-slide-bg" style={art(at.listings[0]?.art ?? artFor(at.id))} aria-hidden="true" in:fade={settle} out:fade={settle}></span>
-                        <div class="st-slide-body" in:fade={settle} out:fade={settle}>
-                          <span class="st-eyebrow">{at.eyebrow}</span>
-                          <h2 class="st-slide-title">{at.title}</h2>
-                          <p class="st-slide-blurb">{at.blurb}</p>
-                          <div class="st-slide-icons">
-                            {#each at.listings.slice(0, ICON_SIZES.length) as l, i (l.repoId)}
-                              <button class="st-slide-icon" type="button" style={`--size:${ICON_SIZES[i]}px;--lift:${ICON_LIFTS[i]}px`} aria-label={`Open ${l.name}`} title={l.name} onclick={() => openListing(l)}>
-                                <StoreIcon url={l.iconUrl} art={l.art} />
-                              </button>
-                            {/each}
+                    <div class="st-track" bind:this={trackEl} onscroll={trackScrolled} data-overflow-start={trackOverflow.start ? 1 : 0} data-overflow-end={trackOverflow.end ? 1 : 0}>
+                      {#each slides as at, n (at.id)}
+                        <div class="st-slide" role="group" aria-roledescription="slide" aria-label={`${n + 1} of ${slides.length}: ${at.title}`}>
+                          <span class="st-slide-bg" style={art(at.listings[0]?.art ?? artFor(at.id))} aria-hidden="true"></span>
+                          <div class="st-slide-body">
+                            <span class="st-eyebrow">{at.eyebrow}</span>
+                            <h2 class="st-slide-title">{at.title}</h2>
+                            <div class="st-slide-icons">
+                              {#each at.listings.slice(0, ICON_SIZES.length) as l, i (l.repoId)}
+                                <button class="st-slide-icon" type="button" style={`--size:${ICON_SIZES[i]}px;--lift:${ICON_LIFTS[i]}px`} aria-label={`Open ${l.name}`} title={l.name} onclick={() => openListing(l)}>
+                                  <StoreIcon url={l.iconUrl} art={l.art} />
+                                  <span class="st-slide-name" aria-hidden="true">{l.name}</span>
+                                </button>
+                              {/each}
+                            </div>
+                            <button class="st-explore" type="button" onclick={at.explore}>Explore</button>
                           </div>
-                          <button class="st-explore" type="button" onclick={at.explore}>Explore</button>
                         </div>
-                      {/key}
-                      {#if slides.length > 1}
-                        <button class="st-arrow is-prev" type="button" aria-label="Previous collection" onclick={() => stepSlide(-1)}><Icon {PM} name="chev" /></button>
-                        <button class="st-arrow is-next" type="button" aria-label="Next collection" onclick={() => stepSlide(1)}><Icon {PM} name="chev" /></button>
-                      {/if}
+                      {/each}
                     </div>
                     {#if slides.length > 1}
-                      <div class="st-dots" role="tablist" aria-label="Collections">
-                        {#each slides as s, i (s.id)}
-                          <button role="tab" type="button" aria-selected={i === featuredIndex} aria-label={s.title} onclick={() => (featuredIndex = i)}></button>
-                        {/each}
+                      <div class="st-carousel-bar">
+                        <div class="st-dots" role="tablist" aria-label="Collections">
+                          {#each slides as s, i (s.id)}
+                            <button role="tab" type="button" aria-selected={i === featuredIndex} aria-label={s.title} onclick={() => slideTo(i)}></button>
+                          {/each}
+                        </div>
+                        <button class="st-arrow" type="button" aria-label="Previous collection" disabled={featuredIndex === 0} onclick={() => slideTo(featuredIndex - 1)}><Icon {PM} name="chev" /></button>
+                        <button class="st-arrow is-next" type="button" aria-label="Next collection" disabled={featuredIndex === slides.length - 1} onclick={() => slideTo(featuredIndex + 1)}><Icon {PM} name="chev" /></button>
                       </div>
                     {/if}
                   </section>
