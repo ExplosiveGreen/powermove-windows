@@ -34,8 +34,9 @@ it('shows uploaded icons in Discover, the Library, and extension details', async
   const screen = mount(StoreScreen, { target, props: { PM: { bus: { emit() {} } } as unknown as StorePM } });
   try {
     flushSync(() => screen.open());
-    await vi.waitFor(() => expect(target.querySelector('.st-slide-icon img')?.getAttribute('src')).toBe(iconUrl));
-    expect(target.querySelector('.st-item-icon img')?.getAttribute('src')).toBe(iconUrl);
+    await vi.waitFor(() => expect(target.querySelector('.st-item-icon img')?.getAttribute('src')).toBe(iconUrl));
+    // The collections carousel stays hidden while STORE_FLAGS.collections is off.
+    expect(target.querySelector('.st-carousel')).toBeNull();
     flushSync(() => screen.open('library'));
     await vi.waitFor(() => expect(target.querySelector('.st-item.is-library img')?.getAttribute('src')).toBe(iconUrl));
     (target.querySelector('.st-item-open') as HTMLButtonElement).click();
