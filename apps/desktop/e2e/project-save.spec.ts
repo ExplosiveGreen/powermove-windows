@@ -248,3 +248,22 @@ test('native Quit honors Cancel without closing the editing session', async ({ s
   expect(await session.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
   await session.app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 2, checkboxChecked: false }); });
 });
+
+test('a project opened from Finder while the editor is still loading is not dropped', async ({ session }) => {
+  await session.openEditor();
+  const destination = path.join(session.userData, 'Cold start.pmv');
+  await saveTo(session, destination);
+  expect(await session.page.evaluate(() => (window as any).PM.saveProject())).toBe(true);
+  const before = await session.page.evaluate(() => (window as any).PM.proj.id);
+  // A cold start: macOS delivers `open-file` before the renderer subscribes.
+  await session.app.evaluate(({ app, BrowserWindow }, [filePath, url]) => {
+    const window = BrowserWindow.getAllWindows().find(item => !item.isDestroyed() && item.webContents.getURL() === url)!;
+    window.webContents.reload();
+    app.emit('open-file', { preventDefault() {} }, filePath);
+  }, [destination, session.page.url()] as const);
+  // File opens get a fresh id; the reloaded session alone would keep `before`.
+  await expect.poll(() => session.page.evaluate(previous => {
+    const PM = (window as any).PM;
+    return PM?.proj && PM.proj.id !== previous ? PM.Projects.getState(PM.proj.id)?.file?.path ?? null : null;
+  }, before).catch(() => null), { timeout: 20_000 }).toBe(destination);
+});

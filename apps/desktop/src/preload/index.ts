@@ -115,6 +115,8 @@ const bridge: PowermoveBridge = {
   onProjectOpenExternal: (cb) => {
     const listener = (_event: IpcRendererEvent, result: Parameters<typeof cb>[0]): void => cb(result);
     ipcRenderer.on(IPC.projectOpenExternal, listener);
+    // Files opened from Finder while this page loaded are held until now.
+    ipcRenderer.send(IPC.projectOpenReady);
     return () => ipcRenderer.removeListener(IPC.projectOpenExternal, listener);
   },
   projectRead: {

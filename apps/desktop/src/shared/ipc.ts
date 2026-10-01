@@ -33,6 +33,7 @@ export const IPC = {
   projectOpen: 'project:open',
   projectOpenPath: 'project:open-path',
   projectOpenExternal: 'project:open-external', // main → renderer
+  projectOpenReady: 'project:open-ready', // renderer → main, once it listens for projectOpenExternal
   projectRead: 'project:read',
   projectReadClose: 'project:read-close',
   projectConfirmClose: 'project:confirm-close',

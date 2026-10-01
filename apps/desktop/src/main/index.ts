@@ -123,6 +123,9 @@ let onboardingFlow: OnboardingFlow | null = null;
 let startupInitialized = false;
 let projects: ProjectFiles | null = null;
 const pendingOpenFiles: string[] = [];
+/* Editors whose current page has subscribed to projectOpenExternal. A message
+   sent before that (on a cold start, `did-finish-load` comes first) is lost. */
+const openReadyEditors = new WeakSet<WebContents>();
 const recentOpenFiles = new Map<string, number>();
 let quitPrepared = () => false;
 /* `powermove://auth?state&token` finishes a browser sign-in (store plan §2.3).
@@ -141,7 +144,7 @@ function queueOrOpen(filePath: string): void {
     if (now - timestamp >= 1_000) recentOpenFiles.delete(candidate);
   }
   if (!startupInitialized || !mainWindow || mainWindow.isDestroyed()
-    || mainWindow.webContents.isDestroyed() || mainWindow.webContents.isLoading() || !projects) {
+    || mainWindow.webContents.isDestroyed() || !openReadyEditors.has(mainWindow.webContents) || mainWindow.webContents.isLoading() || !projects) {
     if (!pendingOpenFiles.includes(normalized)) pendingOpenFiles.push(normalized);
     return;
   }
@@ -154,7 +157,7 @@ function queueOrOpen(filePath: string): void {
 function drainPendingOpenFiles(): void {
   const mainWindow = currentEditor();
   if (!startupInitialized || !mainWindow || mainWindow.isDestroyed()
-    || mainWindow.webContents.isDestroyed() || mainWindow.webContents.isLoading() || !projects) return;
+    || mainWindow.webContents.isDestroyed() || !openReadyEditors.has(mainWindow.webContents) || mainWindow.webContents.isLoading() || !projects) return;
   const queued = pendingOpenFiles.splice(0);
   for (const filePath of queued) {
     // The queue has already passed through the duplicate guard.
@@ -486,7 +489,12 @@ function createWindow(options: EditorWindowOptions = {}): BrowserWindow {
   editors.add(window, projectId, tabs);
   persistOpenWindows();
   window.on('focus', () => editors.touch(window));
-  window.webContents.once('did-finish-load', drainPendingOpenFiles);
+  // Drained once the page has both loaded and subscribed, in either order.
+  window.webContents.on('did-finish-load', drainPendingOpenFiles);
+  // A reload or navigation replaces the page that was listening.
+  window.webContents.on('did-start-navigation', details => {
+    if (details.isMainFrame && !details.isSameDocument) openReadyEditors.delete(window.webContents);
+  });
   installRendererMenuShortcutRouting(window.webContents);
   userInput.track(window.webContents, forget => window.on('blur', forget));
   let sandboxFocus = { focused: false, field: false, extensionId: '' };
@@ -596,6 +604,12 @@ function registerWindowIpc(): void {
 
   // Read during the renderer's synchronous boot, before it decides which
   // project to load, so it must answer without a round trip of its own.
+  ipcMain.on(IPC.projectOpenReady, (event) => {
+    if (!isTrustedSender(event)) return;
+    openReadyEditors.add(event.sender);
+    drainPendingOpenFiles();
+  });
+
   ipcMain.on(IPC.windowInitialProject, (event) => {
     const window = isTrustedSender(event) ? senderWindow(event) : null;
     if (!window) {
