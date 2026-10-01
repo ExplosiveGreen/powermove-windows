@@ -1,5 +1,5 @@
 type SeekFrame = { canvas: HTMLCanvasElement; time: number; version: number };
-type SeekState = { target: number; tolerance: number; active: boolean; frames: SeekFrame[]; version: number };
+type SeekState = { target: number; tolerance: number; active: boolean; prepareLive: boolean; frames: SeekFrame[]; version: number };
 const pending = new WeakMap<HTMLVideoElement, SeekState>();
 
 function matchingFrame(state: SeekState | undefined, target: number, tolerance: number): SeekFrame | undefined {
@@ -7,14 +7,14 @@ function matchingFrame(state: SeekState | undefined, target: number, tolerance: 
 }
 
 /** Keep the newest scrub request without repeatedly flushing an in-flight decode. */
-export function seekPreviewVideo(video: HTMLVideoElement, target: number, tolerance: number): void {
+export function seekPreviewVideo(video: HTMLVideoElement, target: number, tolerance: number, prepareLive = false): void {
   let state = pending.get(video);
   if (!state) {
-    state = { target, tolerance, active: true, frames: [], version: 0 };
+    state = { target, tolerance, active: true, prepareLive, frames: [], version: 0 };
     pending.set(video, state);
     const resume = () => {
       if (state!.active && video.paused && !video.seeking
-          && !matchingFrame(state, state!.target, state!.tolerance)
+          && (state!.prepareLive || !matchingFrame(state, state!.target, state!.tolerance))
           && Math.abs(video.currentTime - state!.target) > state!.tolerance) {
         try { video.currentTime = state!.target; } catch { /* Detached media. */ }
       }
@@ -45,8 +45,10 @@ export function seekPreviewVideo(video: HTMLVideoElement, target: number, tolera
     });
     video.addEventListener?.('loadedmetadata', resume);
   }
-  state.target = target; state.tolerance = tolerance; state.active = true;
-  if (!video.seeking && !matchingFrame(state, target, tolerance)
+  state.target = target; state.tolerance = tolerance; state.active = true; state.prepareLive = prepareLive;
+  // Cached pixels can draw immediately, but the live decoder must also join
+  // that position so pressing Play does not start a cold seek from elsewhere.
+  if (!video.seeking && (prepareLive || !matchingFrame(state, target, tolerance))
       && Math.abs(video.currentTime - target) > tolerance) {
     try { video.currentTime = target; } catch { /* Detached media. */ }
   }

@@ -83,7 +83,7 @@ it('keeps completed pixels while a slow decoder starts the newest queued seek', 
   } finally { vi.unstubAllGlobals(); }
 });
 
-it('uses only a matching decoded frame during rapid forward and reverse scrubs', () => {
+it.each([false, true])('uses matching cached pixels during reverse scrubs with prepareLive=%s', prepareLive => {
   const video = new EventTarget() as any;
   let time = 0;
   const seeks: number[] = [];
@@ -102,10 +102,12 @@ it('uses only a matching decoded frame during rapid forward and reverse scrubs',
     expect(seeks).toEqual([1, 2]);
 
     // The first frame remains available even though the second decode is in flight.
-    seekPreviewVideo(video, 1, .0005);
+    seekPreviewVideo(video, 1, .0005, prepareLive);
     expect(previewSeekFrame(video, 1)?.time).toBe(1);
     video.seeking = false; video.readyState = 2; video.dispatchEvent(new Event('seeked'));
-    expect(seeks).toEqual([1, 2]);
+    // Reuse the cached pixels immediately, while preparing the live decoder
+    // at that same position for a possible Play after the reverse scrub.
+    expect(seeks).toEqual(prepareLive ? [1, 2, 1] : [1, 2]);
     expect(previewSeekFrame(video, 1)?.time).toBe(1);
     expect(previewSeekFrame(video, 2)?.time).toBe(2);
     expect(previewSeekFrame(video, 3)).toBeUndefined();

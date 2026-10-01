@@ -242,6 +242,56 @@ describe('legacy engine install', () => {
     expect(audioCalls.filter((call: any[]) => call[0] === 'seek')).toEqual([]);
   });
 
+  it('starts the visible decoder at Play without waiting for a display tick', () => {
+    const media = delayedVideo();
+    const layer = { id: 'video', type: 'video', from: 0, dur: 10, d: { asset: 'asset-1', speed: 1, trim: 0 } };
+    const { PM } = engine({ layer, media });
+    PM.setTime(2, { raw: true });
+    PM.play();
+    expect(media.el.playCalls).toBe(1);
+    expect(media.el.currentTime).toBe(2);
+  });
+
+  it('prepares the live decoder even when a paused composition uses saved pixels', () => {
+    const media = delayedVideo();
+    const layer = { id: 'video', type: 'video', from: 0, dur: 10, d: { asset: 'asset-1', speed: 1, trim: 0 } };
+    const { PM, runFrame } = engine({ layer, media });
+    PM.GL.gl = {}; PM.GL.render = vi.fn(() => true);
+    PM.setTime(2, { raw: true }); runFrame(16);
+    expect(media.el.currentTime).toBe(2);
+    expect(media.el.playCalls).toBe(0);
+  });
+
+  it('presents completed scrub frames while the pointer keeps moving and settles at the latest time', () => {
+    const { PM, runFrame } = engine();
+    let decoded = -1;
+    const shown: number[] = [];
+    PM.GL.gl = {};
+    PM.GL.render = vi.fn((time: number) => {
+      if (time !== decoded) return false;
+      shown.push(time); return true;
+    });
+    PM.setTime(1, { raw: true }); runFrame(16);
+    PM.setTime(2, { raw: true }); runFrame(32);
+    decoded = 1;
+    PM.setTime(3, { raw: true }); runFrame(48);
+    expect(shown).toEqual([1]);
+    runFrame(64);
+    expect(PM.GL.render.mock.calls.at(-1)[0]).toBe(3);
+    decoded = 3; runFrame(80);
+    expect(shown).toEqual([1, 3]);
+    expect(PM.time).toBe(3);
+  });
+
+  it('abandons an unfinished scrub frame when the composition changes', () => {
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    const { PM, runFrame } = engine();
+    PM.GL.gl = {}; PM.GL.render = vi.fn(() => false);
+    PM.setTime(1, { raw: true }); runFrame(16);
+    PM.setTime(3, { raw: true }); PM.bus.emit('layers'); runFrame(32);
+    expect(PM.GL.render.mock.calls.at(-1)[0]).toBe(3);
+  });
+
   it('does not render the same project frame twice on a high refresh display', () => {
     const { PM, runFrame } = engine();
     PM.GL.gl = {}; PM.GL.render = vi.fn(); PM.animVersion = () => 1;
@@ -314,7 +364,7 @@ describe('legacy engine install', () => {
     }
     PM.GL.gl = {}; PM.GL.render = vi.fn();
     const active = vi.spyOn(PM, 'active');
-    PM.play(); runFrame(1);
+    PM.play(); active.mockClear(); runFrame(1);
     // One scan at the current frame, one at the shared cut, and one active
     // check per upcoming layer. Repeated planning would grow quadratically.
     expect(active.mock.calls.length).toBeLessThanOrEqual(18);

@@ -126,7 +126,7 @@ function flushFrameVideoSeeks() {
   for (const [el, target] of frameVideoSeeks) seekPreviewVideo(el, target, .0005);
   frameVideoSeeks.clear();
 }
-function scrubVideos(T: any) {
+function scrubVideos(T: any, lookahead = true) {
   frameVideoSeeks.clear();
   const buffers = new Set<HTMLVideoElement>();
   const buffer = (el: HTMLVideoElement) => {
@@ -161,7 +161,7 @@ function scrubVideos(T: any) {
   if (streamTogether) for (const el of owners.keys()) buffer(el);
   // Decode the next cut while it is still offscreen. Limit lookahead so a
   // long timeline does not eagerly allocate every clip's decoder.
-  if (PM.playing) for (const layer of videos) {
+  if (PM.playing && lookahead) for (const layer of videos) {
     if (layer.from <= drawn || layer.from > drawn + .5 || !PM.active(layer, layer.from)) continue;
     const asset = PM.assets.get(layer.d.asset);
     if (!asset?.el) continue;
@@ -176,7 +176,7 @@ function scrubVideos(T: any) {
   // Prepare the loop entrance only if it owns a different decoder. Seeking an
   // active clip early would interrupt the tail of the current loop.
   const [start, end] = PM.proj.work?.[1] > PM.proj.work?.[0] ? PM.proj.work : [0, PM.proj.dur];
-  if (PM.playing && PM.loop && end - drawn <= .5) for (const clip of plannedVideoClips(start)) {
+  if (PM.playing && lookahead && PM.loop && end - drawn <= .5) for (const clip of plannedVideoClips(start)) {
     const el = layerVideoElement(PM, clip.asset, clip.id);
     retain(clip.asset, clip.id);
     if (owners.has(el)) continue;
@@ -212,7 +212,7 @@ function scrubVideos(T: any) {
     else ensureMediaPaused(el);
     const state = mediaState.get(el); if (state) state.layer = clip.id;
     if (streamTogether) capturePlaybackVideoFrame(el);
-    if (!PM.playing || PM.videoFrameSync) seekPreviewVideo(el, vt, .0005);
+    if (!PM.playing || PM.videoFrameSync) seekPreviewVideo(el, vt, .0005, !PM.playing);
     else if (clip.rate == null) {
       // Present the completed decode before starting another seek. Starting it
       // before render drops readyState and starves the texture of every frame.
@@ -291,6 +291,12 @@ PM.play = () => {
   // AudioContext construction can block the first Play on some devices. Do
   // that setup before starting the transport clock so it cannot skip frames.
   PM.Audio.start(PM.time);
+  // Start decoders on the same turn as audio, before the transport clock.
+  // Waiting for the next display tick repeats the paused frame at Play.
+  videoClipPlans.clear();
+  const clips = plannedVideoClips(PM.time);
+  PM.videoFrameSync = clips.length > 1 && clips.some(clip => clip.rate == null);
+  scrubVideos(PM.time, false);
   clock.last = window.performance.now();
   previewQuality.reset(clock.last);
   E.ms = 0;
@@ -328,6 +334,7 @@ let contentGeneration = 0, renderedGeneration = -1;
 let lastRenderTime = NaN, lastProject: any = null;
 let lastPresentedSeekGeneration = -1;
 let lastPresentedFps = 0;
+let pausedFrame: { time: number; project: any; generation: number } | null = null;
 let lastRenderFailure = -Infinity;
 let interactionUntil = 0, refinePending = false, lastQualityChange = -Infinity;
 let inputUntil = 0;
@@ -404,7 +411,15 @@ function frame(now: any) {
   // pixels immediately. Keep the redraw pending until refinement is needed;
   // playback and content/time changes always bypass this navigation-only path.
   if (!PM.playing && viewerService(PM)?.deferNavigationRender(now)) return;
-  let renderTime=PM.playing ? (synchronizedFrame?.time ?? Math.floor(PM.time * drawnFps() + 1e-7) / drawnFps()) : PM.time;
+  // Finish and present one complete scrub frame before decoding the newest
+  // pointer position. Chasing a changing target in the compositor's readiness
+  // gate otherwise hides every completed seek until the user stops dragging.
+  if (PM.playing || pausedFrame?.project !== p || pausedFrame?.generation !== contentGeneration) pausedFrame = null;
+  if (!PM.playing) pausedFrame ??= { time: PM.time, project: p, generation: contentGeneration };
+  let renderTime=PM.playing ? (synchronizedFrame?.time ?? Math.floor(PM.time * drawnFps() + 1e-7) / drawnFps()) : pausedFrame!.time;
+  // A saved composition frame may bypass compositor readiness entirely.
+  // Keep its live decoder ready for Play even when its pixels are cached.
+  if (!PM.playing) scrubVideos(renderTime);
   const renderOptions = {
     mblur: !interactive, mbSamples: PM.playing ? 6 : 12,
     shutter: p.shutter || .5, hideShy: false,
@@ -448,6 +463,7 @@ function frame(now: any) {
   flushFrameVideoSeeks();
   if (presented) { lastRenderTime = renderTime; lastProject = p; renderedGeneration = contentGeneration; lastPresentedSeekGeneration = videoSeekGeneration; lastPresentedFps = drawnFps(); synchronizedFrame = null; }
   else needsDraw = true;
+  if (!PM.playing && presented) { pausedFrame = null; if (renderTime !== PM.time) needsDraw = true; }
   PM.bus.emit('overlay');
   const ms = window.performance.now() - t0;
   // Replaying a stored image says nothing about the cost of drawing a new

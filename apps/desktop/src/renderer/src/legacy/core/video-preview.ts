@@ -3,6 +3,12 @@ import { bridge as hostBridge } from '../../kernel/bridge';
 
 /** Full preview resolution and offline rendering always use the source. */
 export function previewVideoElement(PM: any, asset: any): HTMLVideoElement {
+  // A derivative that finishes during playback joins on the next pause.
+  // Replacing a running decoder would interrupt an otherwise smooth clip.
+  if (asset.preview?.deferred) {
+    if (PM.playing) return asset.el;
+    asset.preview.deferred = false;
+  }
   return asset.preview?.el && (PM.perf?.auto || PM.quality < 1)
     && !PM.Export?.busy && !PM.agentFrameCapture && !PM.Preview?.preparing
     ? asset.preview.el : asset.el;
@@ -14,7 +20,9 @@ let work: Promise<unknown> = Promise.resolve();
 export function prepareVideoPreview(PM: any, asset: any, source: Blob, disposed: () => boolean): Promise<void> {
   const media = hostBridge()?.media;
   const legacyCutout = asset.playbackProxy && Number(asset.playbackProxyVersion || 0) < 3;
-  if (!media?.beginPreview || (!legacyCutout && Math.max(asset.w, asset.h) <= 1920)) return Promise.resolve();
+  // Long GOPs make HD footage expensive to seek too. Build editing media for
+  // ordinary videos regardless of size; sequences already have a frame grid.
+  if (!media?.beginPreview || (!legacyCutout && asset.imageSequence)) return Promise.resolve();
   // Derivatives have their own versioned key; never replace the portable source.
   const cacheKey = asset.storageKey
     ? `${asset.storageKey}:preview:intra-1280-v1:${asset.playbackProxyVersion || 0}:${source.size}` : null;
@@ -41,8 +49,10 @@ export function prepareVideoPreview(PM: any, asset: any, source: Blob, disposed:
         void el.play().catch(error => { clearTimeout(timer); reject(error); });
       });
       if (disposed()) { el.removeAttribute('src'); el.load(); URL.revokeObjectURL(url); return; }
-      asset.preview = { el, url };
-      cancelPreviewVideoSeek(asset.el); asset.el.pause();
+      asset.preview = { el, url, deferred: !!PM.playing };
+      if (previewVideoElement(PM, asset) === el) {
+        cancelPreviewVideoSeek(asset.el); asset.el.pause();
+      }
       PM.bus.emit('assets'); PM.invalidate('render');
     } catch (error) { el.removeAttribute('src'); el.load(); URL.revokeObjectURL(url); throw error; }
   };

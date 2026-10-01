@@ -16,6 +16,16 @@ it('uses editing media for Auto and reduced previews, and the original for Full 
   expect(previewVideoElement(PM, { el: original })).toBe(original);
 });
 
+it('keeps a running decoder until pause when editing media arrives during playback', () => {
+  const original = {}, preview = {}, asset = { el: original, preview: { el: preview, deferred: true } };
+  const PM: any = { playing: true, quality: 1, perf: { auto: true } };
+  expect(previewVideoElement(PM, asset)).toBe(original);
+  PM.playing = false;
+  expect(previewVideoElement(PM, asset)).toBe(preview);
+  PM.playing = true;
+  expect(previewVideoElement(PM, asset)).toBe(preview);
+});
+
 
 it('starts previews above 1 GB and releases the upload when the asset is disposed', async () => {
   let disposed = false;
@@ -98,7 +108,7 @@ it('persists editing media separately and reuses it after reload without convers
     bus: { emit: vi.fn() }, invalidate: vi.fn(),
   };
   const makeAsset = () => ({
-    w: 1920, h: 1080, playbackProxy: true, playbackProxyVersion: 2,
+    w: 1920, h: 1080,
     storageKey: 'media:original', el: { pause: vi.fn() },
   } as any);
   const source = new Blob(['original bytes']); store.set('media:original', source);
