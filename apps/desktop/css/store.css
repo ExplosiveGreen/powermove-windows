@@ -63,7 +63,7 @@
 .st-column{width:960px;max-width:100%;margin:0 auto;display:flex;flex-direction:column;gap:32px}
 
 /* ── artwork ── */
-/* Stand-ins until the registry ships preview renders: two hues per extension. */
+/* Fallback for extensions without an uploaded icon, or when it cannot load. */
 .st-thumb{
   background:
     radial-gradient(120% 90% at 82% 18%, var(--art-b) 0%, transparent 60%),

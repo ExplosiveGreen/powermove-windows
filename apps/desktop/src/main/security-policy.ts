@@ -6,7 +6,7 @@ import { isSandboxHost, sandboxDocumentId, sandboxHost } from '../shared/sandbox
  * (shared/sandbox-origin.ts); the navigation guard narrows it to their documents.
  */
 export const CONTENT_SECURITY_POLICY =
-  "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self'; connect-src 'self' blob: http: https: ws: wss:; worker-src 'self' blob:; frame-src 'self' about: blob: app:";
+  "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: http: https:; media-src 'self' blob:; font-src 'self'; connect-src 'self' blob: http: https: ws: wss:; worker-src 'self' blob:; frame-src 'self' about: blob: app:";
 
 /** Generated scripts retain eval only inside the opaque, no-network sandbox. */
 export const SANDBOX_CONTENT_SECURITY_POLICY =

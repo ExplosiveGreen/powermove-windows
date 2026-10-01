@@ -80,6 +80,19 @@ function encodePath(path: string): string {
 }
 
 export function createStoreClient(client: () => CloudClient): StoreClient {
+  // Icon paths belong to the registry, not the desktop's app:// origin.
+  function withIcon<T extends { iconUrl: string | null }>(listing: T, origin: string): T {
+    let iconUrl: string | null = null;
+    if (listing.iconUrl) {
+      try {
+        const url = new URL(listing.iconUrl, origin);
+        if (url.origin === origin && /^\/v1\/store\/icons\/[a-f0-9]{64}\.png$/.test(url.pathname)
+          && !url.username && !url.password && !url.search && !url.hash) iconUrl = url.href;
+      } catch { /* An invalid icon uses the renderer's fallback artwork. */ }
+    }
+    return { ...listing, iconUrl };
+  }
+
   async function fileBytes(handle: string, slug: string, version: string, path: string): Promise<Uint8Array> {
     const current = client();
     /* A wildcard route: the typed client cannot address it, so the URL is
@@ -89,9 +102,13 @@ export function createStoreClient(client: () => CloudClient): StoreClient {
     return readCapped(response, REGISTRY_LIMITS.fileBytes);
   }
   return {
-    browse: () => client().request(Store.Browse.Res, (api) => api.v1.store.browse.$get()),
+    async browse() {
+      const current = client();
+      const result = await current.request(Store.Browse.Res, (api) => api.v1.store.browse.$get());
+      return { ...result, sections: result.sections.map((section) => ({ ...section, items: section.items.map((item) => withIcon(item, current.origin)) })) };
+    },
 
-    extensions(query) {
+    async extensions(query) {
       const q: Record<string, string> = {};
       if (query.category) q['category'] = query.category;
       if (query.q) q['q'] = query.q;
@@ -99,11 +116,16 @@ export function createStoreClient(client: () => CloudClient): StoreClient {
       if (query.cursor) q['cursor'] = query.cursor;
       if (query.limit) q['limit'] = String(query.limit);
       const args = { query: q };
-      return client().request(Store.Extensions.Res, (api) => api.v1.store.extensions.$get(args));
+      const current = client();
+      const result = await current.request(Store.Extensions.Res, (api) => api.v1.store.extensions.$get(args));
+      return { ...result, items: result.items.map((item) => withIcon(item, current.origin)) };
     },
 
-    detail: (handle, slug) =>
-      client().request(Store.Detail.Res, (api) => api.v1.store.x[':handle'][':slug'].$get({ param: { handle, slug } })),
+    async detail(handle, slug) {
+      const current = client();
+      const result = await current.request(Store.Detail.Res, (api) => api.v1.store.x[':handle'][':slug'].$get({ param: { handle, slug } }));
+      return withIcon(result, current.origin);
+    },
 
     release: (releaseId) =>
       client().request(Store.ReleaseById.Res, (api) => api.v1.store.releases[':releaseId'].$get({ param: { releaseId } })),

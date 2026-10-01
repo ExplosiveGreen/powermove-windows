@@ -2,10 +2,11 @@
   import { onMount, onDestroy, tick } from 'svelte';
   import '../controls/search-picker.css';
   export interface SearchPickerItem { id: string; title: string; meta?: string; current?: boolean }
-  let { anchor, items, placeholder, label, emptyNone, onchoose, onclose }: {
+  let { anchor, items, placeholder, label, emptyNone, onchoose, onclose, closeOnChoose = false }: {
     anchor: HTMLElement; items: SearchPickerItem[];
     placeholder: string; label: string; emptyNone: string;
     onchoose: (id: string) => Promise<void>; onclose: () => void;
+    closeOnChoose?: boolean;
   } = $props();
   let query = $state(''), pending = $state(false), error = $state('');
   let popup: HTMLDivElement, search: HTMLInputElement, glider: HTMLDivElement;
@@ -27,8 +28,17 @@
   async function choose(id: string) {
     if (pending || closing) return;
     pending = true; error = '';
-    try { await onchoose(id); dismiss(false); }
-    catch (e) { error = e instanceof Error ? e.message : 'Could not open this.'; }
+    try {
+      if (closeOnChoose) {
+        // Hand focus back before the next sheet records its return target.
+        closing = true;
+        anchor.focus({preventScroll:true});
+        finish();
+      }
+      await onchoose(id);
+      if (!closing) dismiss(false);
+    }
+    catch (e) { if (!closing) error = e instanceof Error ? e.message : 'Could not open this.'; }
     finally { pending = false; }
   }
   function rest() { glider?.classList.remove('on'); gliderOn = false; }

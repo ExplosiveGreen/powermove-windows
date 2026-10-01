@@ -135,7 +135,7 @@
   /* A new image opens the cropper; the icon is made only once it is framed.
      The source and its framing are kept so Crop… can reframe it later. */
   let cropping = $state<{ file: Blob; initial: IconCrop | null } | null>(null);
-  let iconSource: { file: Blob; crop: IconCrop } | null = null;
+  let iconSource = $state<{ file: Blob; crop: IconCrop } | null>(null);
 
   async function useIcon(file: File): Promise<void> {
     iconError = null;
@@ -382,7 +382,7 @@
         <section class="pub-section">
           <h3 class="pub-title">Permissions to declare</h3>
           <div class="sg-group pub-group">
-            {#each plan.permissionFindings as finding (`${finding.path}:${finding.line}:${finding.needs}`)}
+            {#each plan.permissionFindings as finding}
               <div class="settings-row pub-row">
                 <span class="settings-copy"><span class="pub-problem">{finding.text}</span></span>
               </div>
@@ -395,7 +395,7 @@
         <section class="pub-section">
           <h3 class="pub-title">Possible secrets</h3>
           <div class="sg-group pub-group">
-            {#each plan.blockedFindings as finding (`${findingKey(finding)}:${finding.kind}`)}
+            {#each plan.blockedFindings as finding}
               <div class="settings-row pub-row">
                 <span class="settings-copy">
                   <b class="pub-path">{finding.path}<i>line {finding.line}</i></b>

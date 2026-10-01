@@ -4,6 +4,11 @@ import { sandboxDocumentUrl, sandboxHost } from '../shared/sandbox-origin';
 import { CONTENT_SECURITY_POLICY, SANDBOX_CONTENT_SECURITY_POLICY, extensionSandboxCsp, sandboxFrameNavigationAllowed, sandboxHostOwner, sandboxProcessesToKill } from './security-policy';
 
 describe('renderer security policy', () => {
+  it('allows registry images in the editor while keeping generated scripts isolated', () => {
+    expect(directive(CONTENT_SECURITY_POLICY, 'img-src')).toEqual(["'self'", 'blob:', 'data:', 'http:', 'https:']);
+    expect(SANDBOX_CONTENT_SECURITY_POLICY).toContain("default-src 'none'");
+    expect(directive(extensionSandboxCsp('test-icon', [], 'app://test'), 'img-src')).toEqual(['data:', 'blob:']);
+  });
   it('allows trusted extensions to make HTTP requests and WebSocket connections', () => {
     const connect = CONTENT_SECURITY_POLICY.split(';').map(value => value.trim())
       .find(value => value.startsWith('connect-src '))?.split(/\s+/).slice(1);

@@ -86,7 +86,7 @@ export function relativeDate(iso: string, now: Date = new Date()): string {
   return then.getFullYear() === now.getFullYear() ? MONTH_DAY.format(then) : MONTH_DAY_YEAR.format(then);
 }
 
-/** Two hues for the preview artwork, fixed per repo until icons ship. */
+/** Two hues for the fallback artwork, fixed per repo. */
 export function artFor(seed: string): [string, string] {
   let hash = 0x811c9dc5;
   for (let index = 0; index < seed.length; index++) {

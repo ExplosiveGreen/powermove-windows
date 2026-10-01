@@ -10,6 +10,8 @@ let closeCurrent: (() => void) | undefined;
  * second activation of the same anchor toggles it shut. */
 export function openSearchPicker(anchor: HTMLElement, opts: {
   items: SearchPickerItem[]; placeholder: string; label: string; emptyNone: string;
+  /** A following sheet owns loading and errors; remove the picker before opening it. */
+  closeOnChoose?: boolean;
   onchoose: (id: string) => Promise<void>;
 }): void {
   if (currentAnchor === anchor && closeCurrent) { closeCurrent(); anchor.focus(); return; }
@@ -19,7 +21,8 @@ export function openSearchPicker(anchor: HTMLElement, opts: {
   let closed = false;
   const close = () => { if (closed) return; closed = true; if (currentAnchor === anchor) { closeCurrent = undefined; currentAnchor = undefined; } void unmount(instance); host.remove(); anchor.setAttribute('aria-expanded', 'false'); };
   const instance = mount(SearchPicker, { target: host, props: {
-    anchor, items: opts.items, placeholder: opts.placeholder, label: opts.label, emptyNone: opts.emptyNone, onchoose: opts.onchoose, onclose: close
+    anchor, items: opts.items, placeholder: opts.placeholder, label: opts.label, emptyNone: opts.emptyNone,
+    closeOnChoose: opts.closeOnChoose, onchoose: opts.onchoose, onclose: close
   } });
   closeCurrent = () => instance.dismiss();
   currentAnchor = anchor;

@@ -9,6 +9,44 @@ import * as account from '../cloud/account';
 
 afterEach(() => { resetBridgeForTests(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
+it('shows uploaded icons in Discover, the Library, and extension details', async () => {
+  vi.stubGlobal('matchMedia', () => ({ matches: true, addListener() {}, removeListener() {} }));
+  HTMLElement.prototype.scrollTo = vi.fn();
+  const iconUrl = `https://cloud.example.test/v1/store/icons/${'a'.repeat(64)}.png`;
+  const listing = {
+    repoId: '11111111-1111-4111-8111-111111111111', owner: { handle: 'mara' }, slug: 'glass-blur',
+    name: 'Glass blur', tagline: 'Blur', category: 'effects', latest: null, iconUrl,
+    installCount: 0, forkCount: 0, visibility: 'public', updatedAt: '2026-09-25T00:00:00Z', permissions: []
+  };
+  const item: LibraryItemDto = {
+    localId: 'glass-blur', name: 'Glass blur', version: '1.0.0', category: 'effects', contributes: ['effects'], vars: [],
+    health: { state: 'ok' }, enabled: true, trust: 'store', permissions: [], description: 'Blur',
+    group: 'store', maker: { handle: 'mara' }, update: null, modified: false,
+    origin: { coordinate: 'mara/glass-blur', version: '1.0.0', repoId: listing.repoId, releaseId: listing.repoId }
+  };
+  installBridgeForTests({ extensionStore: {
+    library: async () => [item], browse: async () => ({ ok: true, value: { sections: [{ id: 'effects', title: 'Effects', items: [listing] }] } }),
+    detail: async () => ({ ok: true, value: { ...listing, releases: [], about: null } }),
+    onUpdatesChanged: () => () => {}, onLibraryChanged: () => () => {}
+  } } as any);
+  const target = document.createElement('div');
+  document.body.append(target);
+  const screen = mount(StoreScreen, { target, props: { PM: { bus: { emit() {} } } as unknown as StorePM } });
+  try {
+    flushSync(() => screen.open());
+    await vi.waitFor(() => expect(target.querySelector('.st-slide-icon img')?.getAttribute('src')).toBe(iconUrl));
+    expect(target.querySelector('.st-item-icon img')?.getAttribute('src')).toBe(iconUrl);
+    flushSync(() => screen.open('library'));
+    await vi.waitFor(() => expect(target.querySelector('.st-item.is-library img')?.getAttribute('src')).toBe(iconUrl));
+    (target.querySelector('.st-item-open') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(target.querySelector('.st-detail-head img')?.getAttribute('src')).toBe(iconUrl));
+    target.querySelector('.st-detail-head img')!.dispatchEvent(new Event('error'));
+    flushSync();
+    expect(target.querySelector('.st-detail-head .st-thumb')).not.toBeNull();
+    expect(target.querySelector('.st-detail-head img')).toBeNull();
+  } finally { await unmount(screen); target.remove(); }
+});
+
 it('renders permission disclosure, trust status, and the Library trust action', async () => {
   vi.stubGlobal('matchMedia', () => ({ matches: true, addListener() {}, removeListener() {} }));
   HTMLElement.prototype.scrollTo = vi.fn();

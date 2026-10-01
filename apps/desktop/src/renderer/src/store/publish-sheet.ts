@@ -48,8 +48,13 @@ export function openPublishSheet(
   const current = { localId: item.localId, close: () => handle.close() };
   open = current;
   const onclose = () => handle.close();
-  component = mount(PublishPreparing, { target: body, props: { name: item.name, onclose } });
-  flushSync();
+  try {
+    component = mount(PublishPreparing, { target: body, props: { name: item.name, onclose } });
+    flushSync();
+  } catch (error) {
+    handle.close();
+    throw error;
+  }
 
   /* The sandbox check needs only the local extension, so it runs while main
      prepares; the sheet's first check picks it up and Check Again runs fresh. */
@@ -67,13 +72,20 @@ export function openPublishSheet(
     ready(plan) {
       if (closed) return;
       if (component) void unmount(component);
-      component = mount(PublishSheet, {
-        target: body,
-        props: { plan, bridge, check, onclose, onpublished,
-          onfix: async (report) => Boolean(await PM.AgentUI?.repairExtension?.({ id: plan.localId, name: plan.manifest.name, diagnostics: sandboxCheckLines(report) }))
-        }
-      });
-      flushSync();
+      component = null;
+      try {
+        component = mount(PublishSheet, {
+          target: body,
+          props: { plan, bridge, check, onclose, onpublished,
+            onfix: async (report) => Boolean(await PM.AgentUI?.repairExtension?.({ id: plan.localId, name: plan.manifest.name, diagnostics: sandboxCheckLines(report) }))
+          }
+        });
+        flushSync();
+      } catch (error) {
+        // A failed mount must not leave an empty modal and its scrim behind.
+        handle.close();
+        throw error;
+      }
     }
   };
 }

@@ -21,6 +21,7 @@
   import { openPublishSheet } from './publish-sheet';
   import { openSandboxCheckSheet } from './sandbox-check-sheet';
   import { bridge } from '../kernel/bridge';
+  import StoreIcon from './StoreIcon.svelte';
 
   /* Two places and seven kinds. Browse is the storefront; a kind is the store
      narrowed to one shelf; Library is everything on this Mac, in one list. */
@@ -62,6 +63,7 @@
   let account = $state<CloudUser | null>(null);
 
   let library = $state<LibraryItemDto[]>([]);
+  let libraryIcons = $state<Record<string, string | null>>({});
   let browse = $state<Loadable<Section[]>>({ status: 'loading' });
   let shelf = $state<Loadable<Shelf>>({ status: 'loading' });
   /* Stale-while-revalidate for the surfaces you move between: a shelf or a
@@ -184,6 +186,24 @@
     } catch {
       // Keep what is shown; the next change reloads it.
     }
+  }
+
+  $effect(() => {
+    if (shown && page === 'library') {
+      const items = library;
+      untrack(() => void loadLibraryIcons(items));
+    }
+  });
+
+  async function loadLibraryIcons(items: LibraryItemDto[]): Promise<void> {
+    await Promise.all(items.map(async (item) => {
+      const source = item.published?.coordinate ? item.published : item.origin;
+      if (!source?.coordinate || source.repoId in libraryIcons) return;
+      const coord = splitCoordinate(source.coordinate);
+      if (!coord) return;
+      const result = await call(() => storeBridge()?.detail(coord));
+      if (result.ok) libraryIcons = { ...libraryIcons, [source.repoId]: result.value.iconUrl };
+    }));
   }
 
   /* A publish or withdrawal changes what Discover lists: refetch it quietly,
@@ -399,6 +419,7 @@
       items: ready.map((item) => ({ id: item.localId, title: item.name, meta: item.publish === 'update' ? 'Update' : 'New' })),
       placeholder: 'Search extensions to publish…',
       label: 'Publish extension',
+      closeOnChoose: true,
       emptyNone: 'Nothing to publish yet. Extensions you or your agent make show up under Yours.',
       onchoose: async (id) => { const item = byId.get(id); if (item) await publish(item); }
     });
@@ -583,8 +604,8 @@
     return `--art-a:${a};--art-b:${b}`;
   }
 
-  function itemArt(item: LibraryItemDto): string {
-    return art(artFor(item.origin?.repoId ?? `local:${item.localId}`));
+  function itemIcon(item: LibraryItemDto): string | null {
+    return libraryIcons[item.published?.repoId ?? item.origin?.repoId ?? ''] ?? null;
   }
 
   /* Classify the whole package, not an individual contribution. */
@@ -775,35 +796,44 @@
     if (!bridge || busy[item.localId]) return;
     actionError = null;
     setBusy(item.localId, 'Preparing…');
-    // The sheet opens now and fills in when main has the plan.
-    const sheet = openPublishSheet(PM, bridge, item, (published) => {
-      void loadLibrary();
-      refreshDiscover();
-      // The page you published from now has a store page of its own.
-      const current = detail;
-      const coord = splitCoordinate(published.coordinate);
-      if (current?.localId === item.localId && coord) {
-        detail = { ...current, coord };
-        void loadDetail(detail);
-      }
-    });
-    const result = await call(() => bridge.publishPrepare({ localId: item.localId }));
-    setBusy(item.localId, null);
-    if (!result.ok) {
-      // Cancelled while preparing: nothing to report.
-      if (sheet?.closed) return;
-      sheet?.close();
-      // Signed out, or no handle yet: the account sheet asks for what is missing.
-      if (result.error.error === 'unauthorized' || result.error.error === 'forbidden') {
-        openSignIn();
+    let sheet: ReturnType<typeof openPublishSheet> = null;
+    try {
+      // The sheet opens now and fills in when main has the plan.
+      sheet = openPublishSheet(PM, bridge, item, (published) => {
+        void loadLibrary();
+        refreshDiscover();
+        // The page you published from now has a store page of its own.
+        const current = detail;
+        const coord = splitCoordinate(published.coordinate);
+        if (current?.localId === item.localId && coord) {
+          detail = { ...current, coord };
+          void loadDetail(detail);
+        }
+      });
+      const result = await call(() => bridge.publishPrepare({ localId: item.localId }));
+      if (!result.ok) {
+        // Cancelled while preparing: nothing to report.
+        if (sheet?.closed) return;
+        sheet?.close();
+        // Signed out, or no handle yet: the account sheet asks for what is missing.
+        if (result.error.error === 'unauthorized' || result.error.error === 'forbidden') {
+          openSignIn();
+          return;
+        }
+        const message = result.error.detail === 'unavailable' ? 'Can’t reach the store. Check your connection and try again.' : publishErrorText(result.error);
+        if (detail) actionError = message;
+        else toast(message, true);
         return;
       }
-      const message = result.error.detail === 'unavailable' ? 'Can’t reach the store. Check your connection and try again.' : publishErrorText(result.error);
+      sheet?.ready(result.value);
+    } catch {
+      sheet?.close();
+      const message = 'Couldn’t open the publishing panel. Please try again.';
       if (detail) actionError = message;
       else toast(message, true);
-      return;
+    } finally {
+      setBusy(item.localId, null);
     }
-    sheet?.ready(result.value);
   }
 
   async function withdraw(repoId: string, version: VersionEntry): Promise<void> {
@@ -971,7 +1001,7 @@
                           <div class="st-slide-icons">
                             {#each at.listings.slice(0, ICON_SIZES.length) as l, i (l.repoId)}
                               <button class="st-slide-icon" type="button" style={`--size:${ICON_SIZES[i]}px;--lift:${ICON_LIFTS[i]}px`} aria-label={`Open ${l.name}`} title={l.name} onclick={() => openListing(l)}>
-                                <span class="st-thumb" style={art(l.art)}></span>
+                                <StoreIcon url={l.iconUrl} art={l.art} />
                               </button>
                             {/each}
                           </div>
@@ -1101,7 +1131,7 @@
   {@const pending = busy[item?.localId ?? ''] ?? busy[l.repoId]}
   <div class="st-item">
     <button class="st-item-open" type="button" aria-label={`Open ${l.name}`} onclick={() => openListing(l)}></button>
-    <span class="st-item-icon"><span class="st-thumb" style={art(l.art)}></span></span>
+    <span class="st-item-icon"><StoreIcon url={l.iconUrl} art={l.art} /></span>
     <span class="st-item-copy">
       <b>{l.name}</b>
       <span class="st-item-line">{l.tagline}</span>
@@ -1154,7 +1184,7 @@
   {@const makerHandle = 'handle' in item.maker ? item.maker.handle : null}
   <div class="st-item is-library" class:is-off={needsSetup(item) || needsTrust(item) || !item.enabled}>
     <button class="st-item-open" type="button" aria-label={`Open ${item.name}`} onclick={() => openItem(item)}></button>
-    <span class="st-item-icon"><span class="st-thumb" style={itemArt(item)}></span></span>
+    <span class="st-item-icon"><StoreIcon url={itemIcon(item)} art={artFor(item.published?.repoId ?? item.origin?.repoId ?? `local:${item.localId}`)} /></span>
     <span class="st-item-copy">
       <b>{item.name}</b>
       <span class="st-item-line">{item.description ?? KIND_LABEL[item.category]}</span>
@@ -1269,7 +1299,7 @@
        like the hero card and every row. Anything the action needs to
        explain goes under the head as its own line. -->
   <header class="st-detail-head">
-    <span class="st-thumb is-hero" style={art(pair)}></span>
+    <StoreIcon url={data?.iconUrl ?? preview?.iconUrl ?? (item ? itemIcon(item) : null)} art={pair} hero />
     <div class="st-detail-copy">
       <div class="st-detail-title">
         <h2>{name}</h2>
