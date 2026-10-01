@@ -99,6 +99,7 @@ it('refuses malicious port calls before they touch the host', async () => {
   const remove = vi.fn();
   const storageSet = vi.fn();
   const hostEvent = vi.fn();
+  const panelOpen = vi.fn();
   kernel.commands.register('app', { id: 'delete', label: 'Delete', run: deletes });
   const save = vi.fn();
   const duplicate = vi.fn();
@@ -113,7 +114,7 @@ it('refuses malicious port calls before they touch the host', async () => {
     assets: { pick: async () => [], import: async () => ({ id: 'x', name: 'x', kind: 'image' }), get: () => undefined, readText: async () => '' },
     storage: () => ({ get: () => undefined, set: storageSet, delete: vi.fn() }),
     extensions: { list: () => [], setEnabled: vi.fn(), remove, reload: vi.fn(), reveal: vi.fn(), requestFix: vi.fn(), rebase: vi.fn(), setUp: vi.fn() },
-    panelsBackend: { open: vi.fn(), close: vi.fn(), isOpen: () => false, refresh: vi.fn(), list: () => [] }, paletteOpen: vi.fn(), reportRuntimeError: vi.fn()
+    panelsBackend: { open: panelOpen, close: vi.fn(), isOpen: () => false, refresh: vi.fn(), list: () => [] }, paletteOpen: vi.fn(), reportRuntimeError: vi.fn()
   } as unknown as HostDeps;
   const record = { id: 'evil-ext', trust: 'store', scope: 'user', manifest: { id: 'evil-ext', name: 'Evil', version: '1.0.0', apiVersion: 3, permissions: [] }, dir: '/tmp/evil', enabled: true, bundleUrl: '/ext/evil-ext/bundle.js', bundleHash: 'x', health: { state: 'ok' }, updatedAt: 0 } as ExtensionRecord;
   const frame = document.createElement('iframe');
@@ -133,9 +134,19 @@ it('refuses malicious port calls before they touch the host', async () => {
   await errorCode(client!.call('invoke', 'project', 'select', [[]]), 'project:write');
   await expect(client!.call('invoke', 'extensions', 'remove', ['other'])).rejects.toThrow('unavailable');
   await errorCode(client!.call('invoke', 'extensions', 'setUp', ['other']), 'permission_denied');
-  await errorCode(client!.call('register', 'commands', 'undo', { id: 'undo', label: 'Undo', run: 1 }), 'id_collision');
+  // The system namespaces registration ids, so a bare id that would shadow a built-in
+  // (`undo`) or a sibling's namespace (`evil-ext-other.command`) is accepted but relocated
+  // into THIS extension's namespace — it never grabs the bare/foreign id.
+  await client!.call('register', 'commands', 'undo', { id: 'undo', label: 'Undo', run: client!.handle(() => 0) });
+  expect(kernel.commands.topEntry('undo')?.ownerId).not.toBe('evil-ext');
+  expect(kernel.commands.topEntry('evil-ext.undo')?.ownerId).toBe('evil-ext');
+  await client!.call('register', 'commands', 'sibling', { id: 'evil-ext-other.command', label: 'Sibling', run: client!.handle(() => 0) });
+  expect(kernel.commands.topEntry('evil-ext-other.command')?.ownerId).toBeUndefined();
+  expect(kernel.commands.topEntry('evil-ext.evil-ext-other.command')?.ownerId).toBe('evil-ext');
+  // Release these two so they don't count against the registration-limit boundary below.
+  for (const token of ['undo', 'sibling']) await client!.call('dispose-registration', token);
+  // A collision inside the extension's OWN namespace with another owner is still refused.
   await errorCode(client!.call('register', 'commands', 'collision', { id: 'evil-ext.collide', label: 'Collision', run: 1 }), 'id_collision');
-  await errorCode(client!.call('register', 'commands', 'sibling', { id: 'evil-ext-other.command', label: 'Sibling', run: 1 }), 'id_collision');
   await expect(client!.call('register', 'commands', 'malformed', { id: 'evil-ext.malformed', label: 'Malformed', run: 'callback' })).rejects.toMatchObject({ name: 'ZodError' });
   await errorCode(client!.call('invoke', 'events', 'emit', ['project:changed', {}]), 'permission_denied');
   await errorCode(client!.call('register', 'events', 'foreign-event', { event: 'other-ext:secret' }), 'permission_denied');
@@ -162,7 +173,10 @@ it('refuses malicious port calls before they touch the host', async () => {
   await expect(client!.call('invoke', 'keybindings', 'unbind', ['cmd+s', 1])).rejects.toMatchObject({ name: 'ZodError' });
   await client!.call('invoke', 'keybindings', 'unbind', ['cmd+s']);
   expect(kernel.bindingsFor('cmd+s')[0]?.command).toBe('save');
-  await errorCode(client!.call('invoke', 'panels', 'open', ['foreign.panel']), 'permission_denied');
+  // Opening a "foreign" panel is relocated to the extension's own namespace, so the
+  // real foreign panel is never touched — the ext can only operate its own ids.
+  await client!.call('invoke', 'panels', 'open', ['foreign.panel']);
+  expect(panelOpen.mock.calls.at(-1)?.[0]).toBe('evil-ext.foreign.panel');
   await expect(client!.call('invoke', 'theme', 'setScheme', ['dark'])).rejects.toThrow('unavailable');
   await client!.call('invoke', 'commands', 'run', ['evil-ext.own']);
   record.manifest!.permissions!.push('project:write');

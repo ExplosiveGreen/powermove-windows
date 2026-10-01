@@ -135,8 +135,9 @@ it('answers panels.isOpen for the extension’s own panels only', async () => {
   const h = await start({ open: ['stub-ext.panel', 'layers'] });
   await expect(h.api.panels.isOpen('stub-ext.panel')).resolves.toBe(true);
   await expect(h.api.panels.isOpen('stub-ext.other')).resolves.toBe(false);
-  // Whether an app or another extension's panel is open is not this extension's to ask.
-  await expect(h.api.panels.isOpen('layers') as unknown as Promise<boolean>).rejects.toMatchObject({ code: 'permission_denied' });
+  // Asking about an app/other-extension panel is relocated to this extension's own
+  // namespace ('stub-ext.layers'), so it never leaks that the host's 'layers' panel is open.
+  await expect(h.api.panels.isOpen('layers')).resolves.toBe(false);
   h.open.delete('stub-ext.panel');
   await expect(h.api.panels.isOpen('stub-ext.panel')).resolves.toBe(false);
 });
