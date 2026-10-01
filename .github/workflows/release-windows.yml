@@ -1,7 +1,8 @@
 name: Release Windows
 # Pushing a v* tag builds the Windows x64 app as a GitHub release in this
 # repository. vX.Y.Z is a stable release (updater channel: latest);
-# vX.Y.Z-beta.N is a prerelease (channel: beta).
+# vX.Y.Z-beta.N is a prerelease (channel: beta); vX.Y.Z-windows[.N] is a
+# Windows port release of vX.Y.Z (channel: latest).
 # Unsigned NSIS: no signing credentials required.
 on:
   push:
@@ -31,7 +32,7 @@ jobs:
         run: |
           node -e '
             const t = process.env.RELEASE_TAG;
-            if (!/^v\d+\.\d+\.\d+(-beta\.\d+)?$/.test(t)) throw Error("Select a vX.Y.Z or vX.Y.Z-beta.N tag");
+            if (!/^v\d+\.\d+\.\d+(-beta\.\d+|-windows(\.\d+)?)?$/.test(t)) throw Error("Select a vX.Y.Z, vX.Y.Z-beta.N or vX.Y.Z-windows[.N] tag");
             const beta = t.includes("-beta.");
             require("fs").appendFileSync(process.env.GITHUB_OUTPUT,
               `version=${t.slice(1)}\nchannel=${beta ? "beta" : "latest"}\nprerelease=${beta}\n`);
