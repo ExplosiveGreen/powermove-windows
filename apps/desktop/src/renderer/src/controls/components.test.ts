@@ -5,6 +5,7 @@ import { doc } from '../state/document.svelte';
 import { transport, updateControlTime } from '../state/transport.svelte';
 import ColorField from './ColorField.svelte';
 import FillField from './FillField.svelte';
+import { BLINK_MS } from './menu-blink';
 import FontField from './FontField.svelte';
 import NumField from './NumField.svelte';
 import RowNumFieldHarness from './__fixtures__/RowNumFieldHarness.svelte';
@@ -329,6 +330,7 @@ describe('one-shot fields', () => {
     target.querySelector<HTMLButtonElement>('button')!.click();
     await tick();
     document.body.querySelectorAll<HTMLButtonElement>('.font-menu-row')[0]!.click();
+    await new Promise((resolve) => setTimeout(resolve, BLINK_MS * 2 + 10));
     expect(Edit.apply).toHaveBeenCalledWith(expect.objectContaining({ value: 'Inter' }), expect.anything());
   });
 
@@ -397,6 +399,7 @@ describe('one-shot fields', () => {
     expect(closeMenus).toHaveBeenCalledTimes(1);
     expect(target.querySelector('[role="dialog"] [role="listbox"]')).not.toBeNull();
     target.querySelectorAll<HTMLElement>('.font-menu-row')[1]!.click();
+    await new Promise((resolve) => setTimeout(resolve, BLINK_MS * 2 + 10));
     expect(Edit.apply).toHaveBeenCalledWith(expect.objectContaining({ value: 'Avenir Next' }), { label: 'Font', origin: 'inspector' });
     expect(invalidate).toHaveBeenCalledWith();
     expect(fonts.ensure).toHaveBeenCalledWith('Avenir Next', 400);
@@ -592,6 +595,7 @@ describe('picker drafts', () => {
     expect([...document.body.querySelectorAll('.fill-picker [role="tab"]')].map((tab) => tab.textContent)).toEqual(['Solid', 'Linear', 'Radial', 'None']);
     document.body.querySelector<HTMLButtonElement>('.cp-space')!.click();
     [...document.body.querySelectorAll<HTMLElement>('.pm-menu-item')].find((item) => item.textContent === 'sRGB')!.click();
+    await new Promise((resolve) => setTimeout(resolve, BLINK_MS * 2 + 10));
     flushSync();
     const sv = document.body.querySelector<HTMLElement>('.cp-plane')!;
     vi.spyOn(sv, 'getBoundingClientRect').mockReturnValue({

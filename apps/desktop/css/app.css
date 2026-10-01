@@ -748,6 +748,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:11px;heigh
 .drop .di .kb{margin-left:auto;padding-left:16px;font-family:var(--f-mono);font-size:var(--fs-xs);color:var(--tx-4)}
 .drop .di.disabled{opacity:var(--disabled)}
 .drop .di.disabled:hover{background:transparent}
+/* The macOS pick (controls/menu-blink.ts): the chosen row goes dark, then lights, then the menu closes. */
+.drop:has(.di[data-blink]) .di{transition:none;background:transparent}
+.drop .di[data-blink=on]{background:var(--ink-1)}
 .drop .sep{height:1px;background:var(--line);margin:4px 6px}
 .drop .hd{font-size:var(--fs-xs);font-weight:var(--fw-medium);color:var(--tx-4);padding:6px 8px 3px}
 /* Same width as every other field in the column; long family names ellipsize. */
@@ -1215,6 +1218,8 @@ select.pm-select-native{position:absolute!important;width:1px!important;height:1
 .pm-menu[data-side=top]{--pm-menu-slide:4px}
 .pm-menu-glider{position:absolute;left:4px;right:4px;top:0;height:0;opacity:0;pointer-events:none;border-radius:6px;background:var(--ink-2);transition:transform 220ms cubic-bezier(.23,1,.32,1),height 220ms cubic-bezier(.23,1,.32,1),opacity 150ms ease}
 .pm-menu-glider.on{opacity:1}
+:has(> [data-blink]) > .pm-menu-glider{transition:none}
+:has(> [data-blink=off]) > .pm-menu-glider{opacity:0}
 .pm-menu-item{position:relative;z-index:1;display:flex;align-items:center;gap:8px;height:30px;padding:0 28px 0 8px;border-radius:6px;color:var(--tx);white-space:nowrap}
 .pm-menu-item[aria-disabled=true]{color:var(--tx-4);pointer-events:none}
 .pm-menu-label{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis}

@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { BLINK_MS } from '../menu-blink';
 import { enhanceSelect } from './enhance';
 
 function build(): HTMLSelectElement {
@@ -34,6 +35,7 @@ describe('enhanceSelect', () => {
   });
 
   it('opens a listbox, picks with the keyboard, and fires change on the select', async () => {
+    vi.useFakeTimers();
     const select = build();
     enhanceSelect(select);
     const trigger = document.querySelector('button.pm-select') as HTMLButtonElement;
@@ -45,6 +47,8 @@ describe('enhanceSelect', () => {
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
     menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
     menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    vi.advanceTimersByTime(BLINK_MS * 2);
+    vi.useRealTimers();
     expect(changed).toBe('webm');
     expect(trigger.querySelector('.pm-select-label')?.textContent).toBe('WebM');
   });

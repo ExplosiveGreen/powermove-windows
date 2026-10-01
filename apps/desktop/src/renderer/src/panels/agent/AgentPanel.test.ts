@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import AgentPanel from '../AgentPanel.svelte';
 import ThreadPicker from './ThreadPicker.svelte';
+import { BLINK_MS } from '../../controls/menu-blink';
 import { install as installSpatial } from '../../legacy/assistant/spatial';
 import { registerAgentPanel } from '../register-agent';
 import {
@@ -255,7 +256,7 @@ describe('AgentPanel', () => {
     });
   });
 
-  it('offers accessible new-thread and switching controls and disables them during a run', () => {
+  it('offers accessible new-thread and switching controls and disables them during a run', async () => {
     PM.AgentUI.newThread = vi.fn(); PM.AgentUI.switchThread = vi.fn(); PM.AgentUI.deleteThread = vi.fn();
     const now = Date.now();
     const threads = [
@@ -283,6 +284,7 @@ describe('AgentPanel', () => {
     expect(PM.AgentUI.switchThread).not.toHaveBeenCalled();
 
     flushSync(() => rows[1]!.click());
+    await new Promise((resolve) => setTimeout(resolve, BLINK_MS * 2 + 10));
     expect(PM.AgentUI.switchThread).toHaveBeenCalledWith('second');
     newThread.click();
     expect(PM.AgentUI.newThread).toHaveBeenCalledOnce();
@@ -305,6 +307,8 @@ describe('AgentPanel', () => {
     flushSync(() => picker.click());
     await tick(); flushSync();
     flushSync(() => target.querySelector<HTMLElement>('.thread-row')!.click());
+    await new Promise((resolve) => setTimeout(resolve, BLINK_MS * 2 + 10));
+    flushSync();
     expect(picker.getAttribute('aria-expanded')).toBe('false');
     flushSync(() => picker.click());
     await tick(); flushSync();
@@ -331,7 +335,7 @@ describe('AgentPanel', () => {
     expect(remove).toHaveBeenCalledWith('scroll', registration()![1], true);
   });
 
-  it('filters threads by the picker search field', () => {
+  it('filters threads by the picker search field', async () => {
     PM.AgentUI.switchThread = vi.fn();
     const threads = [{ id: 'first', title: 'Animate the title' }, { id: 'second', title: 'Colour grade' }];
     renderPanel(snapshot({ threadId: 'first', threads }));
@@ -343,6 +347,7 @@ describe('AgentPanel', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]!.textContent).toContain('Colour grade');
     flushSync(() => rows[0]!.click());
+    await new Promise((resolve) => setTimeout(resolve, BLINK_MS * 2 + 10));
     expect(PM.AgentUI.switchThread).toHaveBeenCalledWith('second');
   });
   it('renders idle, prompt, running, preview, and result blocks from state setters', () => {

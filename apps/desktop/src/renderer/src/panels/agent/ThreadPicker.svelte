@@ -3,6 +3,7 @@
   import { onDestroy, tick } from 'svelte';
   import { agentState } from './agent-state.svelte';
   import { relativeOpened } from './threads';
+  import { blink } from '../../controls/menu-blink';
 
   let { PM }: { PM: Record<string, any> } = $props();
   let trigger = $state<HTMLButtonElement>();
@@ -141,12 +142,13 @@
     glider.classList.add('on');
   }
   function rest(): void {
+    if (picking) return;
     glider?.classList.remove('on');
     gliderOn = false;
   }
   function onRowPointer(event: PointerEvent): void {
     const row = (event.target as HTMLElement).closest<HTMLElement>('.thread-row');
-    if (row) glideTo(row);
+    if (row && !picking) glideTo(row);
   }
   function onListScroll(): void {
     if (!list || visible >= matches.length) return;
@@ -170,7 +172,17 @@
     glideTo(row);
   }
 
-  function choose(id: string): void {
+  // A row picked by click or key blinks before the menu closes (menu-blink.ts);
+  // until then the list takes no more input.
+  let picking = false;
+  function choose(id: string, row?: HTMLElement): void {
+    if (picking) return;
+    if (row) {
+      picking = true;
+      glideTo(row);
+      blink(row, () => { picking = false; choose(id); });
+      return;
+    }
     close(false);
     if (id !== agentState.threadId) PM.AgentUI?.switchThread(id);
   }
@@ -183,6 +195,7 @@
 
   function onKeydown(event: KeyboardEvent): void {
     event.stopPropagation();
+    if (picking) { event.preventDefault(); return; }
     const target = event.target as HTMLElement;
     const row = target.closest<HTMLElement>('.thread-row');
     if (event.key === 'Escape') { event.preventDefault(); close(); return; }
@@ -267,9 +280,9 @@
           role="option"
           tabindex="-1"
           aria-selected={thread.id === agentState.threadId}
-          onclick={() => choose(thread.id)}
+          onclick={(event) => choose(thread.id, event.currentTarget as HTMLElement)}
           onfocus={(event) => glideTo(event.currentTarget as HTMLElement)}
-          onkeydown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); choose(thread.id); } }}
+          onkeydown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); choose(thread.id, event.currentTarget as HTMLElement); } }}
         >
           <span class="thread-row-text">
             <span class="thread-row-title">

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import Icon from '../panels/Icon.svelte';
+  import { blink } from '../controls/menu-blink';
 
   import { positionMenuAtCursor } from './position';
   import type { MenuItem } from './types';
@@ -30,6 +31,8 @@
   let active = $state(0);
   let left = $state(0);
   let top = $state(0);
+  // Set from a pick until its blink ends; the menu takes no more input.
+  let picking = false;
   const hasCurves = $derived(items.some(item => typeof item === 'object' && 'curve' in item && !!item.curve));
 
   export function element(): HTMLElement {
@@ -47,6 +50,12 @@
 
   function keydown(event: KeyboardEvent): void {
     if (!menu?.isConnected) return;
+    if (picking) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      return;
+    }
     const onItem = buttons.includes(document.activeElement as HTMLButtonElement);
     const onCurve = onItem && buttons[active]?.classList.contains('curve-option');
     if (event.key === 'ArrowDown') focusAt(onItem ? (onCurve ? Math.min(buttons.length - 1, active + 4) : active + 1) : 0);
@@ -114,7 +123,9 @@
         tabindex="-1"
         onclick={(event) => {
           event.stopPropagation();
-          if (!item.disabled) onrun(item);
+          if (item.disabled || picking) return;
+          picking = true;
+          blink(event.currentTarget, () => onrun(item));
         }}
       >
         {#if item.curve}

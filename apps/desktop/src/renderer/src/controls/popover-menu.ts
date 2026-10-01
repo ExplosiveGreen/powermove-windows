@@ -4,6 +4,9 @@
 // the same fade, scale and slide from the trigger's edge. It may carry a
 // header above its rows, such as who you are signed in as. Rows that carry
 // `checked` are a radio group and show the listbox's check on the chosen one.
+// A pick blinks its row before the menu closes, as the listbox's does.
+
+import { blink } from './menu-blink';
 
 export type PopoverMenuItem = '-' | { label: string; run: () => void; checked?: boolean };
 
@@ -84,7 +87,7 @@ export function openPopoverMenu(req: PopoverMenuRequest): PopoverMenuHandle {
       check.innerHTML = '<path d="M3.5 8.5l3 3 6-6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>';
       item.append(check);
     }
-    item.addEventListener('pointermove', () => setActive(index));
+    item.addEventListener('pointermove', () => { if (!picking) setActive(index); });
     item.addEventListener('click', (event) => { event.stopPropagation(); pick(index); });
     rows.push({ item, run: entry.run });
     el.append(item);
@@ -118,11 +121,13 @@ export function openPopoverMenu(req: PopoverMenuRequest): PopoverMenuHandle {
   }
 
   let closed = false;
+  let picking = false;
   function pick(i: number): void {
     const row = rows[i];
-    if (!row) return;
-    close();
-    row.run();
+    if (!row || picking) return;
+    picking = true;
+    setActive(i);
+    blink(row.item, () => { close(); row.run(); });
   }
 
   function place(): void {
@@ -143,6 +148,7 @@ export function openPopoverMenu(req: PopoverMenuRequest): PopoverMenuHandle {
 
   function onKey(event: KeyboardEvent): void {
     event.stopPropagation();
+    if (picking) { event.preventDefault(); return; }
     const step = (delta: number) => setActive(active < 0 ? (delta > 0 ? 0 : rows.length - 1) : (active + delta + rows.length) % rows.length);
     switch (event.key) {
       case 'ArrowDown': event.preventDefault(); step(1); break;
@@ -189,7 +195,7 @@ export function openPopoverMenu(req: PopoverMenuRequest): PopoverMenuHandle {
   document.body.append(el);
   place();
   el.dataset.state = 'open';
-  el.addEventListener('pointerleave', rest);
+  el.addEventListener('pointerleave', () => { if (!picking) rest(); });
   el.focus({ preventScroll: true });
   el.addEventListener('keydown', onKey);
   document.addEventListener('pointerdown', onPointerDown, true);

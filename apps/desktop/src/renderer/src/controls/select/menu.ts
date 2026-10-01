@@ -1,6 +1,9 @@
 // A floating listbox for select controls. One instance at a time, anchored to
 // its trigger, drawn above everything else. Opens with a short fade, scale and
-// slide from the trigger's edge; closes the same way in reverse.
+// slide from the trigger's edge; closes the same way in reverse. A pick
+// blinks its row first, as macOS menus do (menu-blink.ts).
+
+import { blink } from '../menu-blink';
 
 export interface MenuOption {
   value: string;
@@ -64,7 +67,7 @@ export function openSelectMenu(req: MenuRequest): MenuHandle {
     check.setAttribute('class', 'pm-menu-check');
     check.innerHTML = '<path d="M3.5 8.5l3 3 6-6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>';
     item.append(label, check);
-    item.addEventListener('pointermove', () => setActive(i));
+    item.addEventListener('pointermove', () => { if (!picking) setActive(i); });
     item.addEventListener('click', (event) => { event.stopPropagation(); if (!option.disabled) pick(i); });
     items.push(item);
     el.append(item);
@@ -121,11 +124,15 @@ export function openSelectMenu(req: MenuRequest): MenuHandle {
   }
 
   let closed = false;
+  // Set from the pick until the blink ends: the row is chosen, so the pointer
+  // and the keys no longer move the highlight. A close meanwhile still picks.
+  let picking = false;
   function pick(i: number): void {
     const option = req.options[i];
-    if (!option || option.disabled) return;
-    close();
-    req.onPick(option.value);
+    if (!option || option.disabled || picking) return;
+    picking = true;
+    setActive(i);
+    blink(items[i]!, () => { close(); req.onPick(option.value); });
   }
 
   function place(): void {
@@ -152,6 +159,7 @@ export function openSelectMenu(req: MenuRequest): MenuHandle {
 
   function onKey(event: KeyboardEvent): void {
     event.stopPropagation();
+    if (picking) { event.preventDefault(); return; }
     switch (event.key) {
       case 'ArrowDown': event.preventDefault(); step(1); break;
       case 'ArrowUp': event.preventDefault(); step(-1); break;
@@ -203,7 +211,7 @@ export function openSelectMenu(req: MenuRequest): MenuHandle {
   }
   el.dataset.state = 'open';
   // Nothing is lit until the pointer or the arrow keys pick a row; the index still starts on the current value.
-  el.addEventListener('pointerleave', rest);
+  el.addEventListener('pointerleave', () => { if (!picking) rest(); });
   el.focus({ preventScroll: true });
   el.addEventListener('keydown', onKey);
   document.addEventListener('pointerdown', onPointerDown, true);

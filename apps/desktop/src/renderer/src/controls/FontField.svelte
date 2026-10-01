@@ -1,5 +1,6 @@
 <script lang="ts">
   import { cssFontStack } from '../typography/font-stack';
+  import { blink } from './menu-blink';
   import { sel } from '../state/selection.svelte';
   import { tick } from 'svelte';
   import { doc } from '../state/document.svelte';
@@ -157,12 +158,13 @@
     glider.classList.add('on');
   }
   function rest(): void {
+    if (picking) return;
     glider?.classList.remove('on');
     gliderOn = false;
   }
   function onRowPointer(event: PointerEvent): void {
     const row = (event.target as HTMLElement).closest<HTMLElement>('.font-menu-row');
-    if (row) glideTo(row);
+    if (row && !picking) glideTo(row);
   }
   function onListScroll(): void {
     if (!list || visible >= matches.length) return;
@@ -185,7 +187,17 @@
     glideTo(row);
   }
 
-  function choose(name: string): void {
+  // A row picked by click or key blinks before the menu closes (menu-blink.ts);
+  // until then the list takes no more input.
+  let picking = false;
+  function choose(name: string, row?: HTMLElement): void {
+    if (picking) return;
+    if (row) {
+      picking = true;
+      glideTo(row);
+      blink(row, () => { picking = false; choose(name); });
+      return;
+    }
     close();
     const current = String(get() ?? '');
     if (name === current && !(mixed?.(edit, current) ?? false)) return;
@@ -197,6 +209,7 @@
 
   function onKeydown(event: KeyboardEvent): void {
     event.stopPropagation();
+    if (picking) { event.preventDefault(); return; }
     const target = event.target as HTMLElement;
     const row = target.closest<HTMLElement>('.font-menu-row');
     if (event.key === 'Escape') { event.preventDefault(); close(); return; }
@@ -266,9 +279,9 @@
           tabindex="-1"
           aria-selected={!isMixed && name === value}
           title={name}
-          onclick={() => choose(name)}
+          onclick={(event) => choose(name, event.currentTarget as HTMLElement)}
           onfocus={(event) => glideTo(event.currentTarget as HTMLElement)}
-          onkeydown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); choose(name); } }}
+          onkeydown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); choose(name, event.currentTarget as HTMLElement); } }}
         >
           <span class="pm-menu-label font-menu-name" style:font-family={cssFontStack(name)}>{name}</span>
           <svg class="pm-menu-check" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>

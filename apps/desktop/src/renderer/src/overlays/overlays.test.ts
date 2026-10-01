@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installSvelteOverlays, unmountSvelteOverlays } from './install';
 import { paletteEntries, scorePaletteMatch } from './palette';
 import { withWhenCheck } from '../kernel/registries';
+import { BLINK_MS } from '../controls/menu-blink';
 
 let PM: Record<string, any>;
 
@@ -62,6 +63,7 @@ afterEach(async () => {
 
 describe('installSvelteOverlays', () => {
   it('renders a keyboard-accessible easing grid with actual Bézier paths', () => {
+    vi.useFakeTimers();
     const run = vi.fn();
     const curve = [0, 0, 1, 1];
     const menu = PM.menu(document.body, [
@@ -79,6 +81,7 @@ describe('installSvelteOverlays', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
     expect(document.activeElement?.textContent?.trim()).toBe('Curve 5');
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    vi.advanceTimersByTime(BLINK_MS * 2);
     expect(run).toHaveBeenCalledOnce();
   });
   it('keeps the shared toast live region intact across consecutive installs', async () => {
@@ -123,6 +126,7 @@ describe('installSvelteOverlays', () => {
   });
 
   it('renders menu actions, separators, and reachable disabled items, then restores focus', () => {
+    vi.useFakeTimers();
     const trigger = document.querySelector<HTMLButtonElement>('#trigger')!;
     trigger.focus();
     const enabled = vi.fn();
@@ -157,6 +161,7 @@ describe('installSvelteOverlays', () => {
     expect(menu.isConnected).toBe(true);
 
     items[0]?.click();
+    vi.advanceTimersByTime(BLINK_MS * 2);
     expect(enabled).toHaveBeenCalledOnce();
     expect(document.querySelector('.drop')).toBeNull();
     expect(document.activeElement).toBe(trigger);
@@ -179,6 +184,7 @@ describe('installSvelteOverlays', () => {
   });
 
   it('captures handled menu keys before global shortcuts and activates with Space or Enter', () => {
+    vi.useFakeTimers();
     const trigger = document.querySelector<HTMLButtonElement>('#trigger')!;
     const first = vi.fn();
     const second = vi.fn();
@@ -202,12 +208,14 @@ describe('installSvelteOverlays', () => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', cancelable: true }));
       expect(document.activeElement).toBe(items[0]);
       window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', cancelable: true }));
+      vi.advanceTimersByTime(BLINK_MS * 2);
       expect(first).toHaveBeenCalledOnce();
       expect(document.querySelector('.drop')).toBeNull();
 
       items = open();
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', cancelable: true }));
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', cancelable: true }));
+      vi.advanceTimersByTime(BLINK_MS * 2);
       expect(second).toHaveBeenCalledOnce();
 
       open();
@@ -253,6 +261,7 @@ describe('installSvelteOverlays', () => {
     second.click();
     expect(document.querySelectorAll('.drop')).toHaveLength(1);
     document.querySelector<HTMLButtonElement>('.drop .di')!.click();
+    vi.advanceTimersByTime(BLINK_MS * 2);
     expect(run).toHaveBeenCalledOnce();
     expect(document.querySelector('.drop')).toBeNull();
   });
