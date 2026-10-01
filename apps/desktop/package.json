@@ -25,13 +25,9 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.280",
     "@anthropic-ai/claude-code": "2.1.280",
-    "@anthropic-ai/claude-code-darwin-arm64": "2.1.280",
-    "@anthropic-ai/claude-code-win32-x64": "2.1.280",
     "@lisse/core": "0.7.2",
     "@motion-core/motion-gpu": "0.15.1",
     "@openai/codex": "0.159.1",
-    "@openai/codex-darwin-arm64": "npm:@openai/codex@0.159.1-darwin-arm64",
-    "@openai/codex-win32-x64": "npm:@openai/codex@0.159.1-win32-x64",
     "@powermove/macos-haptics": "workspace:*",
     "@powermove/player": "workspace:*",
     "@powermove/registry": "workspace:*",
@@ -43,6 +39,12 @@
     "node-diff3": "3.2.1",
     "smol-toml": "1.9.0",
     "zod": "4.6.5"
+  },
+  "optionalDependencies": {
+    "@anthropic-ai/claude-code-darwin-arm64": "2.1.280",
+    "@anthropic-ai/claude-code-win32-x64": "2.1.280",
+    "@openai/codex-darwin-arm64": "npm:@openai/codex@0.159.1-darwin-arm64",
+    "@openai/codex-win32-x64": "npm:@openai/codex@0.159.1-win32-x64"
   },
   "devDependencies": {
     "@electron/fuses": "2.1.3",
