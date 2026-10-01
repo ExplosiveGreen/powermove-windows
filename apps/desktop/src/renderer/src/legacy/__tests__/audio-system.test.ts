@@ -133,6 +133,23 @@ describe('legacy audio system behavior', () => {
     ]);
   });
 
+  it('leaves a muted video soundtrack out of playback', () => {
+    const buffer = new FakeAudioBuffer([new Float32Array(40)], 4);
+    const h = audioHarness();
+    h.PM.evP = (_layer: any, prop: any) => prop.v;
+    const asset = { ...audioAsset(buffer), kind: 'video', name: 'interview.mp4' };
+    h.assets.set(asset.id, asset);
+    h.PM.proj.layers = [{
+      id: 'video-1', name: 'Interview', type: 'video', on: true,
+      from: 0, dur: 4,
+      d: { asset: asset.id, trim: 0, speed: 1, embeddedAudio: true, audioMuted: true },
+    }];
+
+    expect(h.PM.Audio.hasAudibleLayers()).toBe(false);
+    h.PM.Audio.start(1);
+    expect(h.PM.Audio.inspect().voices).toEqual([]);
+  });
+
   it('schedules a future clip at its in-point', () => {
     const buffer = new FakeAudioBuffer([new Float32Array(40)], 4);
     const h = audioHarness();

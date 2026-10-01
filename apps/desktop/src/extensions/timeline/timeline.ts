@@ -1764,7 +1764,8 @@ function drawGutter(c: any, W: any, H: any, dynamicOnly = false): boolean {
       const hasParentControl = layerSupportsTransform(L.type);
       const showParentControl = hasParentControl && (active || !!L.parent);
       const statusWidth = (L.solo ? 12 : 0) + (evaluatedValue(L, L.mblur, api.transport.time(), 'l.mblur') ? 12 : 0);
-      const nameRight = T.gut - (hasParentControl ? 50 : 12) - statusWidth;
+      const audioX = embeddedAudioToggleX(L);
+      const nameRight = T.gut - (hasParentControl ? 50 : 12) - statusWidth - (audioX == null ? 0 : AUDIO_TOGGLE_WIDTH);
       clipText(c, L.name, 96 + indent, iy, Math.max(0, nameRight - 96 - indent));
       if (showParentControl) {
         c.strokeStyle = L.parent ? theme.accent : theme.tx3; c.lineWidth = 1.2;
@@ -1782,6 +1783,8 @@ function drawGutter(c: any, W: any, H: any, dynamicOnly = false): boolean {
       if (evaluatedValue(L, L.mblur, api.transport.time(), 'l.mblur')) {
         c.fillStyle = theme.accent; c.beginPath(); c.arc(statusX, iy, 2, 0, 7); c.fill();
       }
+      /* embedded soundtrack: shown on hover/selection, and always while muted */
+      if (audioX != null && (active || L.d.audioMuted === true)) icoSpeaker(c, audioX, iy, L.d.audioMuted !== true);
     } else {
       const L = r.L;
       const selected = api.selection.layers().includes(L.id) && trackSelected(r, api.selection.chan() ?? '');
@@ -1946,6 +1949,25 @@ function icoEye(c: any, x: any, y: any, on: any) {
   c.lineWidth = 1.1; c.beginPath();
   c.ellipse(x, y, 5, 3.2, 0, 0, 7); c.stroke();
   if (on) { c.fillStyle = INK.hi; c.beginPath(); c.arc(x, y, 1.5, 0, 7); c.fill(); }
+}
+const AUDIO_TOGGLE_WIDTH = 16;
+/** Centre of a video row's mute toggle, or null when it has no embedded audio. */
+function embeddedAudioToggleX(L: any): number | null {
+  if (L.type !== 'video' || L.d?.embeddedAudio !== true) return null;
+  return T.gut - (layerSupportsTransform(L.type) ? 50 : 12) - AUDIO_TOGGLE_WIDTH / 2;
+}
+function icoSpeaker(c: any, x: any, y: any, on: any) {
+  c.save();
+  c.strokeStyle = on ? INK.hi : theme.accent;
+  c.lineWidth = 1.1; c.lineJoin = 'round'; c.lineCap = 'round';
+  c.beginPath();
+  c.moveTo(x - 5, y - 1.6); c.lineTo(x - 3, y - 1.6); c.lineTo(x, y - 4); c.lineTo(x, y + 4);
+  c.lineTo(x - 3, y + 1.6); c.lineTo(x - 5, y + 1.6); c.closePath(); c.stroke();
+  c.beginPath();
+  if (on) c.arc(x + 1, y, 3, -Math.PI / 4, Math.PI / 4);
+  else { c.moveTo(x + 2, y - 2); c.lineTo(x + 6, y + 2); c.moveTo(x + 6, y - 2); c.lineTo(x + 2, y + 2); }
+  c.stroke();
+  c.restore();
 }
 function icoLock(c: any, x: any, y: any, on: any) {
   c.strokeStyle = on ? theme.accent : INK.lo;
@@ -3026,6 +3048,12 @@ function gutterDown(e: any, x: any, y: any) {
   const wasCollapsed = L.type === 'group' ? api.uiState.getGroupCollapsed(L) : api.uiState.getLayerCollapsed(L);
   T.keySelectionActive = false;
   api.selection.set({ keys: [] });
+  const audioX = embeddedAudioToggleX(L);
+  if (audioX != null && Math.abs(x - audioX) <= AUDIO_TOGGLE_WIDTH / 2) {
+    const muted = L.d.audioMuted === true;
+    api.edit.apply({ type: 'set_content', target: L.id, patch: { audioMuted: !muted }, overrideLock: true }, { label: muted ? 'Unmute audio' : 'Mute audio', origin: 'timeline' });
+    return;
+  }
   if (layerSupportsTransform(L.type) && x >= T.gut - 40) {
     const ids = api.selection.layers().includes(L.id) ? api.selection.layers() : [L.id];
     if (x < T.gut - 20) api.ui.beginParentPick(e, ids);

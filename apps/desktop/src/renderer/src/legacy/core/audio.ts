@@ -58,7 +58,7 @@ function audioLayers(project: any = PM.proj) {
         });
         continue;
       }
-      if (layer.type === 'video' && layer.d?.embeddedAudio === true && !evaluatedValue(PM,layer,layer.d.timeRemap,PM.time,'c.timeRemap')) {
+      if (layer.type === 'video' && layer.d?.embeddedAudio === true && layer.d.audioMuted !== true && !evaluatedValue(PM,layer,layer.d.timeRemap,PM.time,'c.timeRemap')) {
         output.push({
           ...layer,
           type: 'audio',

@@ -8,7 +8,7 @@
   import { axisContentKey, type FontStyle } from 'powermove';
 
   const { api, doc, transport, mixed, edit: inspectorEdit } = inspectorContext();
-  const { ColorField, FontField, NumField, Section, SelectField } = api.ui.controls;
+  const { ColorField, FontField, NumField, Section, SelectField, ToggleField } = api.ui.controls;
   const { contentBinding } = api.ui.controls.binding;
   const weightLabels: Record<number, string> = {
     100: 'Thin',
@@ -346,6 +346,9 @@
   {#if layer.type === 'video'}
     <AnimatedRow {layer} label="Trim start" path="c.trim"><NumField {api} {mixed} get={get('trim', 0)} edit={edit('trim', 'Trim start')} label="Trim start" step={0.05} precision={2} unit="s" /></AnimatedRow>
     <AnimatedRow {layer} label="Speed" path="c.speed"><NumField {api} {mixed} get={get('speed', 1)} edit={edit('speed', 'Speed')} label="Speed" step={0.05} precision={2} min={0.05} /></AnimatedRow>
+    {#if content.embeddedAudio === true}
+      <AnimatedRow {layer} label="Mute audio"><ToggleField {api} {mixed} get={get('audioMuted', false)} edit={edit('audioMuted', 'Mute audio')} label="Mute audio" /></AnimatedRow>
+    {/if}
   {/if}
 {:else if layer.type === 'audio'}
   <AnimatedRow {layer} label="Trim start" path="c.trim"><NumField {api} {mixed} get={get('trim', 0)} edit={edit('trim', 'Trim start')} label="Trim start" step={0.05} precision={2} min={0} unit="s" /></AnimatedRow>

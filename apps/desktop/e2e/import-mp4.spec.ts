@@ -163,4 +163,40 @@ test.describe('@import-mp4 H.264 import smoke', () => {
         && !PM.proj.layers.some((item: any) => item.type === 'audio' && item.d.asset === video.d.asset);
     })).toBe(true);
   });
+  test('mutes a video soundtrack from the timeline and the inspector', async ({ session }) => {
+    const { page } = session;
+    await importFixture(page, 'h264-aac.mp4');
+    await page.waitForFunction(() => {
+      const PM = (window as any).PM;
+      const layer = PM.proj.layers.find((item: any) => item.type === 'video' && item.name === 'h264-aac.mp4');
+      const asset = layer && PM.assets.get(layer.d.asset);
+      return layer?.d.embeddedAudio === true && asset?.hasAudio === true && asset?.audioBuffer;
+    });
+    const muted = () => page.evaluate(() => (window as any).PM.proj.layers.find((item: any) => item.type === 'video').d.audioMuted === true);
+    const toggle = await page.evaluate(() => {
+      const PM = (window as any).PM;
+      const timeline = PM.Kernel.services.get('timeline');
+      const layer = PM.proj.layers.find((item: any) => item.type === 'video' && item.name === 'h264-aac.mp4');
+      PM.Edit.apply({ type: 'set_layer', target: layer.id, patch: { from: 0 } }, { label: 'e2e: pin clip to 0' });
+      PM.selectLayers(layer.id);
+      const index = timeline.rows.findIndex((row: any) => row.kind === 'layer' && row.L.id === layer.id);
+      return { x: timeline.gut - 58, y: timeline.ruler + index * timeline.row - timeline.scrollY + timeline.row / 2 };
+    });
+
+    await page.locator('#tl-canvas').click({ position: toggle });
+    await expect.poll(muted).toBe(true);
+    const inspectorToggle = page.getByRole('radiogroup', { name: 'Mute audio' });
+    await expect(inspectorToggle.getByRole('radio', { name: 'On' })).toHaveAttribute('aria-checked', 'true');
+
+    await page.evaluate(() => { const PM = (window as any).PM; PM.setTime(.25, { raw: true, force: true }); PM.play(); });
+    await page.waitForTimeout(400);
+    expect(await page.evaluate(() => Number(document.documentElement.dataset.audioVoices || 0))).toBe(0);
+    await page.evaluate(() => (window as any).PM.pause());
+
+    await inspectorToggle.getByRole('radio', { name: 'Off' }).click();
+    await expect.poll(muted).toBe(false);
+    await page.evaluate(() => { const PM = (window as any).PM; PM.setTime(.25, { raw: true, force: true }); PM.play(); });
+    await page.waitForFunction(() => Number(document.documentElement.dataset.audioVoices || 0) > 0);
+    await page.evaluate(() => (window as any).PM.pause());
+  });
 });

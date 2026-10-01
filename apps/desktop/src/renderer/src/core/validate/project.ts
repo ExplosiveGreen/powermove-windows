@@ -390,6 +390,7 @@ function staticContentFor(type: LayerType, raw: unknown, comp: Pick<Comp, 'w' | 
         fit: source.fit === 'contain' || source.fit === 'stretch' ? source.fit : 'cover',
         trim: finite(source.trim), speed: finite(source.speed, 1),
         embeddedAudio: source.embeddedAudio === true,
+        audioMuted: source.audioMuted === true,
         w: finite(source.w, 1920), h: finite(source.h, 1080)
       };
     case 'audio':

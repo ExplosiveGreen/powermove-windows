@@ -76,7 +76,11 @@ export function installLayerMenu(PM: PMRegistry): void {
         { label: 'Fit to composition', run: () => patch({ from: 0, duration: PM.proj.dur }, 'Fit duration') },
       ]) });
     }
-    if (selected.length === 1 && layer.type === 'video' && layer.d?.embeddedAudio === true) items.push({ label: 'Separate audio', icon: 'speaker', disabled: !editable, run: () => PM.cmd('separateAudio', layer.id) });
+    if (selected.length === 1 && layer.type === 'video' && layer.d?.embeddedAudio === true) {
+      const muted = layer.d.audioMuted === true;
+      items.push({ label: muted ? 'Unmute audio' : 'Mute audio', icon: 'speaker', disabled: !editable, run: () => apply({ type: 'set_content', target: layer.id, patch: { audioMuted: !muted } }, muted ? 'Unmute audio' : 'Mute audio') });
+      items.push({ label: 'Separate audio', icon: 'speaker', disabled: !editable, run: () => PM.cmd('separateAudio', layer.id) });
+    }
     items.push('-',
       { label: evaluatedValue(PM, layer, layer.on, PM.time, 'l.on') ? 'Hide' : 'Show', icon: evaluatedValue(PM, layer, layer.on, PM.time, 'l.on') ? 'eyeoff' : 'eye', disabled: !editable, run: () => patch({ visible: !evaluatedValue(PM, layer, layer.on, PM.time, 'l.on') }, 'Visibility') },
       { label: layer.solo ? 'Unsolo' : 'Solo', icon: 'headphones', disabled: !editable, run: () => patch({ solo: !layer.solo }, 'Solo layers') },
