@@ -109,7 +109,7 @@ function ensure() {
   sort.value = S.sort;
   sort.onchange = () => { S.sort = sort.value; PM.store.set('projectsSort', S.sort); paint(); };
   const top = h('div.ps-top', h('div.ps-title', S.title, S.count), view, sort,
-    h('button.btn', { onclick: openProjectFromDisk }, 'Open Project…'),
+    h('button.btn', { title: 'Open a project, or start one from media', onclick: () => PM.openFiles?.() }, 'Open…'),
     h('button.btn.pri', { onclick: () => { PM.ProjectsScreen.hide(); PM.newProject(); } }, PM.icon('plus'), 'New Project'));
   S.grid = h('div.ps-grid');
   S.pager = h('nav.ps-pagination', { 'aria-label': 'Project pages', hidden: true });
@@ -260,11 +260,6 @@ function projectMenu(anchor: any, m: any, trashed: any, x?: any, y?: any) {
   PM.menu(anchor, items, x == null ? {} : { x, y });
 }
 
-async function openProjectFromDisk() {
-  const before = PM.proj.id;
-  await PM.openProject?.();
-  if (PM.proj.id !== before) PM.ProjectsScreen.hide();
-}
 /* A click opens the project as a tab of this window, or shows the tab it
    already has. A document lives in one window at a time, so one open elsewhere
    brings its own window forward instead and this window keeps what it had. */

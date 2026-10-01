@@ -826,10 +826,53 @@ async function openProjectFile(file: any, association?: { path: string; projectI
     captureProjectSession();
     opening.finish('Opened ' + file.name, 2200);
     PM.ProjectsScreen?.hide?.();
+    return true;
   } catch (e: any) {
     opening.close();
     PM.toast('Could not open project: ' + e.message, 4500);
+    return false;
   }
+}
+const PROJECT_FILE = /\.(pmv|json)$/i;
+/* Home's Open takes a project or media. A project opens as itself, with any
+   media alongside imported into it; media alone starts a blank project in the
+   current format, named after the first file. */
+PM.openFiles = () => {
+  const inp = h('input', {
+    type: 'file', multiple: true, accept: MEDIA_ACCEPT + ',.json',
+    style: { position: 'fixed', width: '1px', height: '1px', opacity: '0', pointerEvents: 'none' },
+  });
+  const cleanup = () => { inp.onchange = null; inp.remove(); };
+  inp.onchange = () => {
+    const files: File[] = [...inp.files];
+    cleanup();
+    if (files.length) void openFiles(files);
+  };
+  inp.addEventListener('cancel', cleanup, { once: true });
+  window.document.body.appendChild(inp);
+  inp.click();
+};
+async function openFiles(files: File[]) {
+  const projectFile = files.find(f => PROJECT_FILE.test(f.name));
+  const media = files.filter(f => !PROJECT_FILE.test(f.name));
+  if (projectFile) {
+    if (!await openPickedProject(projectFile)) return;
+  } else {
+    switchProject(PM.mkProject({
+      name: media[0]!.name.replace(/\.[^.]+$/, '') || 'Untitled',
+      w: PM.proj.w, h: PM.proj.h, fps: PM.proj.fps, dur: PM.proj.dur, bg: PM.proj.bg,
+      exportDefaults: { ...readExportDefaults(), fps: PM.proj.fps },
+    }));
+    PM.ProjectsScreen?.hide?.();
+  }
+  if (media.length) await PM.importFiles(media);
+}
+async function openPickedProject(file: File) {
+  const result = await hostBridge()?.openProjectFromFile?.(file);
+  if (!result) return openProjectFile(file);
+  if (result.ok) return openProjectFile({ name: result.path.split(/[\\/]/).pop(), native: result }, result);
+  if (!result.cancelled) PM.toast('Could not open project: ' + result.error, 6000);
+  return false;
 }
 PM.newProject = () => {
   /* New projects start from the current one's format: the next composition is

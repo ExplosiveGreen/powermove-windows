@@ -108,6 +108,10 @@ const bridge: PowermoveBridge = {
     } finally { await ipcRenderer.invoke(IPC.fileSaveAbort, uploadId).catch(() => undefined); }
   },
   openProjectFile: () => ipcRenderer.invoke(IPC.projectOpen),
+  openProjectFromFile: (file) => {
+    const filePath = webUtils.getPathForFile(file);
+    return filePath ? ipcRenderer.invoke(IPC.projectOpenPath, filePath) : Promise.resolve(null);
+  },
   onProjectOpenExternal: (cb) => {
     const listener = (_event: IpcRendererEvent, result: Parameters<typeof cb>[0]): void => cb(result);
     ipcRenderer.on(IPC.projectOpenExternal, listener);

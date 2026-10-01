@@ -28,6 +28,7 @@ import { registerLogIpc } from './log';
 import { MIN_HAPTIC_INTERVAL_MS, registerHapticsIpc } from './haptics';
 import {
   MAX_SAVE_NAME_CHARS,
+  registerProjectOpenPathIpc,
   registerSaveIpc,
   sanitizeSaveName,
   saveFiltersForName
@@ -237,6 +238,21 @@ describe('save IPC', () => {
     await call(IPC.projectOpen);
     sender.emit('destroyed');
     expect(projects.close).toHaveBeenLastCalledWith('read-token', false);
+  });
+
+  it('opens a picked project by path and refuses anything else', async () => {
+    const { EventEmitter } = await import('node:events');
+    const sender = Object.assign(new EventEmitter(), { isDestroyed: () => false });
+    const projects = { open: vi.fn(async () => ({ token: 'read-token', document: {}, media: [], size: 4 })), close: vi.fn() };
+    const { ipcMain, invokes } = fakeIpcMain();
+    registerProjectOpenPathIpc(ipcMain, { isTrustedSender: () => true, projects: projects as any });
+    const call = (payload: unknown) => invokes.get(IPC.projectOpenPath)!(invokeEvent(sender), payload);
+    expect(await call('/chosen.pmv')).toMatchObject({ ok: true, token: 'read-token' });
+    expect(projects.open).toHaveBeenCalledWith('/chosen.pmv');
+    await expect(call('relative.pmv')).rejects.toThrow('invalid project path');
+    await expect(call('/etc/passwd')).rejects.toThrow('invalid project path');
+    await expect(call(42)).rejects.toThrow('invalid project path');
+    expect(projects.open).toHaveBeenCalledOnce();
   });
 
   it('returns the streaming-export error before opening a sheet', async () => {

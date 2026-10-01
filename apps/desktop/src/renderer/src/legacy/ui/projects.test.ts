@@ -83,7 +83,7 @@ describe('legacy projects screen install', () => {
     const openProjectHere = vi.fn(async () => true);
     const openProjectInNewWindow = vi.fn(async () => true);
     let PM: PMRegistry;
-    const openProject = vi.fn(async () => { PM.proj = { id: 'P3' }; });
+    const openFiles = vi.fn();
     PM = {
       h,
       icon: (name: string) => h('svg', name),
@@ -105,7 +105,7 @@ describe('legacy projects screen install', () => {
       projectFileState: () => ({ path: '/tmp/Hero.pmv', dirty: true }),
       menu: (_anchor: any, items: any[]) => { menuItems = items; },
       newProject() {},
-      openProject,
+      openFiles,
       saveProject,
       uid: () => 'P-copy',
       toast() {},
@@ -121,7 +121,7 @@ describe('legacy projects screen install', () => {
     expect(elements.some(el => el.attrs.placeholder === 'Search projects')).toBe(true);
     expect(text).not.toContain('All Projects');
     expect(text).toContain('Recently edited');
-    expect(text).toContain('Open Project…');
+    expect(text).toContain('Open…');
     expect(text.some(value => value.includes('Unsaved changes · Hero.pmv'))).toBe(true);
 
     const liveMore = [...elements].reverse().find(el => el.attrs['aria-label'] === 'Project actions')!;
@@ -147,10 +147,9 @@ describe('legacy projects screen install', () => {
     expect(put).toHaveBeenCalledWith(expect.objectContaining({ id: 'P-copy', name: 'Hero copy' }), undefined);
     expect(putState).toHaveBeenCalledWith('P-copy', { time: 4 });
 
-    const openButton = elements.find(el => el.children.includes('Open Project…'))!;
-    await openButton.onclick();
-    expect(openProject).toHaveBeenCalledOnce();
-    expect(PM.ProjectsScreen.isOpen).toBe(false);
+    const openButton = elements.find(el => el.children.includes('Open…'))!;
+    openButton.onclick();
+    expect(openFiles).toHaveBeenCalledOnce();
 
     PM.ProjectsScreen.show('trash');
     const trashMore = [...elements].reverse().find(el => el.attrs['aria-label'] === 'Project actions')!;

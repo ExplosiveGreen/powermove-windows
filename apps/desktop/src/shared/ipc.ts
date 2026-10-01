@@ -31,6 +31,7 @@ export const IPC = {
   projectSaveFinish: 'project:save-finish',
   projectSaveAbort: 'project:save-abort',
   projectOpen: 'project:open',
+  projectOpenPath: 'project:open-path',
   projectOpenExternal: 'project:open-external', // main → renderer
   projectRead: 'project:read',
   projectReadClose: 'project:read-close',
@@ -693,6 +694,9 @@ export interface PowermoveBridge {
   };
   saveFile(req: FileSaveRequest): Promise<FileSaveResult>;
   openProjectFile(): Promise<ProjectOpenResult>;
+  /** Opens a project file the user already picked, keeping its path for Save.
+      Null when this host cannot reach the file by path; read its bytes instead. */
+  openProjectFromFile?(file: File): Promise<ProjectOpenResult | null>;
   onProjectOpenExternal(cb: (result: ProjectOpenResult) => void): () => void;
   projectRead?: {
     read(token: string, offset: number, length: number): Promise<Uint8Array>;

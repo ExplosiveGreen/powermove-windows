@@ -256,6 +256,14 @@ function createBridge(link: ReconnectingLink, hello: WebHello, storeSnapshot: Re
         return { ok: false, cancelled: false, error: error instanceof Error ? error.message : 'Could not open project.' };
       }
     },
+    openProjectFromFile: async (file) => {
+      try {
+        const hostPath = await upload(link, file, 'project');
+        return await link.invoke<ProjectOpenResult>(WEB.projectOpenPath, hostPath);
+      } catch (error) {
+        return { ok: false, cancelled: false, error: error instanceof Error ? error.message : 'Could not open project.' };
+      }
+    },
     onProjectOpenExternal: subscribe(IPC.projectOpenExternal),
     projectRead: {
       read: (token, offset, length) => link.invoke(IPC.projectRead, { token, offset, length }),

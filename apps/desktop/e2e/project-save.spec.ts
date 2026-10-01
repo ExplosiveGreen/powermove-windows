@@ -2,6 +2,7 @@ import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { expect, test, type LaunchedApp } from './helpers/app';
 import { decodeProjectContainer } from '../src/shared/project-container';
+import { fixturePath } from './helpers/media';
 
 async function newestBackup(userData: string): Promise<string> {
   const root = path.join(userData, 'backups');
@@ -154,13 +155,26 @@ test('Projects screen exposes file state and saves active, duplicated, and opene
   await page.screenshot({ path: '/tmp/powermove-projects-functional.png' });
 
   const beforeOpen = await page.evaluate(() => (window as any).PM.proj.id);
-  await session.app.evaluate(({ dialog }, filePath) => {
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [filePath] });
-  }, saveAs);
-  await page.getByRole('button', { name: 'Open Project…', exact: true }).click();
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Open…', exact: true }).click();
+  await (await chooser).setFiles(saveAs);
   await expect(page.locator('#projects-screen')).not.toHaveClass(/\bon\b/);
   await expect.poll(() => page.evaluate(() => (window as any).PM.proj.id)).not.toBe(beforeOpen);
   await expect.poll(() => page.evaluate(() => (window as any).PM.app.dirty)).toBe(false);
+});
+
+test('Open on Home starts a blank project from media', async ({ session }) => {
+  await session.openEditor();
+  const page = session.page;
+  const beforeOpen = await page.evaluate(() => (window as any).PM.proj.id);
+  await page.evaluate(() => (window as any).PM.ProjectsScreen.show('projects'));
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Open…', exact: true }).click();
+  await (await chooser).setFiles(fixturePath('h264-aac.mp4'));
+  await expect(page.locator('#projects-screen')).not.toHaveClass(/\bon\b/);
+  await expect.poll(() => page.evaluate(() => (window as any).PM.proj.layers.length), { timeout: 20_000 }).toBe(1);
+  expect(await page.evaluate(() => (window as any).PM.proj.name)).toBe('h264-aac');
+  expect(await page.evaluate(() => (window as any).PM.proj.id)).not.toBe(beforeOpen);
 });
 
 test('cancel, disk-write failures, and external modifications never clear unsaved changes', async ({ session }) => {

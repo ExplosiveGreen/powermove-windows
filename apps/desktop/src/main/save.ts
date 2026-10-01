@@ -135,6 +135,20 @@ export function saveFiltersForName(name: string): FileFilter[] | undefined {
   ];
 }
 
+/** Desktop only: opens a project file the user picked in a renderer file
+ *  input. The browser host never registers it, so remote clients cannot name
+ *  arbitrary paths on the host. */
+export function registerProjectOpenPathIpc(ipcMain: Pick<IpcMain, 'handle'>, ctx: Pick<SaveIpcContext, 'isTrustedSender' | 'projects'>): void {
+  ipcMain.handle(IPC.projectOpenPath, async (event, filePath: unknown): Promise<ProjectOpenResult> => {
+    if (!ctx.isTrustedSender(event)) throw new Error('Unauthorized IPC sender');
+    if (!isString(filePath) || !path.isAbsolute(filePath) || !/\.(pmv|json)$/i.test(filePath)) {
+      throw new IpcValidationError(IPC.projectOpenPath, 'invalid project path');
+    }
+    if (!ctx.projects) throw new Error('Project window is unavailable');
+    return openProjectForWindow({ projects: ctx.projects }, event.sender, filePath);
+  });
+}
+
 export function registerSaveIpc(ipcMain: Pick<IpcMain, 'handle'>, ctx: SaveIpcContext): void {
   const pending = new Set<object>();
   const destinations = new Map<object, { token: string; path: string; directory: boolean }>();

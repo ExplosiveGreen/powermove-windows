@@ -62,7 +62,7 @@ import { userInput } from './user-input';
 import { MediaProxyService, playbackConverter, previewConverter, imageSequenceConverter, stillImageConverter, registerMediaProxyIpc } from './media-proxy';
 import { registerNativeEditIpc } from './native-edit';
 import { installMenu, installRendererMenuShortcutRouting } from './menu';
-import { openProjectForWindow, registerSaveIpc } from './save';
+import { openProjectForWindow, registerProjectOpenPathIpc, registerSaveIpc } from './save';
 import { ProjectFiles } from './project-files';
 import { registerShellIpc } from './shell';
 import { registerRemoteMediaIpc } from './remote-media';
@@ -981,6 +981,7 @@ if (!hasSingleInstanceLock) {
     const ctx = { isTrustedSender, isTrustedSenderContents };
     projects = new ProjectFiles(path.join(app.getPath('userData'), 'project-files.json'), path.join(app.getPath('userData'), 'backups'));
     registerSaveIpc(ipcMain, { ...ctx, projects });
+    registerProjectOpenPathIpc(ipcMain, { ...ctx, projects });
     registerCaptureIpc(ipcMain, ctx);
     registerShellIpc(ipcMain, { ...ctx, attachmentCacheDirectory: path.join(app.getPath('userData'), 'Attachment Cache') });
     registerThemeIpc(ipcMain, ctx);
