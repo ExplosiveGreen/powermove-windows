@@ -30,7 +30,11 @@ const SAFE_INVOKE: Record<string, Set<string>> = {
   extensions: new Set(['setUp'])
 };
 const HOST_EVENTS = new Set(['project:changed', 'selection', 'time', 'transport', 'theme', 'extensions:changed']);
-const ownId = (extension: string, id: string): boolean => id.startsWith(`${extension}.`);
+// Own ids are the extension id itself or anything under its `<id>.` namespace.
+// Allowing the bare id (it's unique, so it can't impersonate another owner) spares
+// the common case of naming your one effect/panel after the extension; the dot is
+// still required for suffixes so `foo` can't claim `foo-bar.*`.
+export const ownId = (extension: string, id: string): boolean => id === extension || id.startsWith(`${extension}.`);
 /** Distinct CSP violations remembered (and logged) per extension session. */
 const MAX_VIOLATION_KEYS = 100;
 /* assets.import files skip the RPC byte limit (importedFile); these caps
@@ -335,7 +339,7 @@ export async function createSandboxRuntime(kernel: Kernel, record: ExtensionReco
       if (new Set([...remoteHandles, ...handles]).size > 2000) denied('Sandbox handle limit is 2000', 'resource_limit');
       const id = value.id;
       if (typeof id === 'string') {
-        if (!ownId(record.id, id)) denied(`Registration id must start with ${record.id}.`, 'id_collision');
+        if (!ownId(record.id, id)) denied(`Registration id must be "${record.id}" or start with "${record.id}."`, 'id_collision');
         const registry = ({ commands: reg.commands, effects: reg.effects, transitions: reg.transitions,
           layers: reg.layerTypes, theme: reg.themes, status: reg.status, panels: reg.panels } as Record<string, { topEntry(id: string): { ownerId: string } | undefined }>)[kind];
         const owner = registry?.topEntry(id)?.ownerId;
