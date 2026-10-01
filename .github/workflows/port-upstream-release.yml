@@ -1,0 +1,182 @@
+name: Port upstream release to Windows
+# Once a day (and on demand), check whether iterative-computer/powermove has a
+# release that this fork has not ported yet. If so, rebuild the Windows port
+# on top of that tag: cherry-pick the port commits, refresh the changelog,
+# smoke-test (targeted unit tests + renderer build), then push the
+# `<upstream>-windows` tag, which triggers Release Windows to build the setup
+# .exe and publish the release. Anything that needs a human opens an issue.
+on:
+  schedule:
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Upstream tag to port (default: latest upstream release)'
+        required: false
+permissions:
+  contents: write
+  issues: write
+concurrency:
+  group: port-upstream-release
+  cancel-in-progress: false
+jobs:
+  port:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Resolve upstream tag
+        id: tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          git remote add upstream https://github.com/iterative-computer/powermove.git
+          git fetch upstream --tags --quiet
+          if [ -n "$INPUT_TAG" ]; then
+            UPSTREAM_TAG="$INPUT_TAG"
+          else
+            UPSTREAM_TAG=$(gh release list --repo iterative-computer/powermove --limit 1 --json tagName -q '.[0].tagName')
+          fi
+          if ! git rev-parse -q --verify "refs/tags/${UPSTREAM_TAG}" >/dev/null; then
+            echo "Unknown upstream tag: ${UPSTREAM_TAG}"; exit 1
+          fi
+          echo "upstream=${UPSTREAM_TAG}" >> "$GITHUB_OUTPUT"
+          echo "win=${UPSTREAM_TAG}-windows" >> "$GITHUB_OUTPUT"
+      - name: Skip when already ported
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_TAG: ${{ steps.tags.outputs.upstream }}
+          WIN_TAG: ${{ steps.tags.outputs.win }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/${WIN_TAG}" >/dev/null; then
+            echo "port-needed=false (tag ${WIN_TAG} already exists)" >> "$GITHUB_OUTPUT"
+          else
+            echo "port-needed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Cherry-pick the Windows port
+        if: steps.check.outputs.port-needed == 'true'
+        env:
+          UPSTREAM_TAG: ${{ steps.tags.outputs.upstream }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git checkout -b "windows-${UPSTREAM_TAG}" "refs/tags/${UPSTREAM_TAG}"
+          mapfile -t PORT_COMMITS < <(git log --reverse --format=%H upstream/main..origin/windows)
+          if [ "${#PORT_COMMITS[@]}" -eq 0 ]; then
+            echo 'No port commits found on the windows branch.'; exit 1
+          fi
+          printf 'Porting %d commits onto %s\n' "${#PORT_COMMITS[@]}" "$UPSTREAM_TAG"
+          for sha in "${PORT_COMMITS[@]}"; do
+            git cherry-pick "$sha" || {
+              echo "CONFLICT in $sha — a human must rebase the port."
+              git cherry-pick --abort
+              exit 3
+            }
+          done
+      - name: Refresh the Windows changelog
+        if: steps.check.outputs.port-needed == 'true'
+        env:
+          UPSTREAM_TAG: ${{ steps.tags.outputs.upstream }}
+        run: |
+          python3 - "$UPSTREAM_TAG" <<'EOF'
+          import json, subprocess, sys, urllib.request
+          tag = sys.argv[1]
+          version = tag[1:] if tag.startswith('v') else tag
+          with urllib.request.urlopen(
+            'https://api.github.com/repos/iterative-computer/powermove/releases?per_page=50'
+          ) as response:
+            releases = json.load(response)
+          releases.sort(key=lambda r: r['created_at'])
+          out = []
+          out.append(f'# Powermove {version} for Windows (x64)\n')
+          out.append(
+            'This is an unofficial Windows port of Powermove (original: '
+            'https://github.com/iterative-computer/powermove), built from the '
+            f'upstream {tag} release with native Windows packaging and platform '
+            'support. Everything below the Windows section already shipped upstream.\n'
+          )
+          out.append('## Install\n')
+          out.append(
+            f"1. Download `Powermove-{version}-windows-win-x64-setup.exe` below and run it.\n"
+            '2. Windows SmartScreen will warn that the publisher is unknown — this build\n'
+            '   is unsigned. Click **More info → Run anyway**.\n'
+            '3. The installer offers per-user or machine-wide install, Start Menu and\n'
+            '   Desktop shortcuts, opens `.pmv` project files, and registers the\n'
+            '   `powermove://` sign-in link.\n'
+          )
+          out.append('## Windows support\n')
+          out.append(
+            '- **Native installer**: NSIS setup with install-directory choice, Start Menu\n'
+            '  and Desktop shortcuts, `.pmv` file association, and `powermove://` protocol.\n'
+            '- **Built-in agent runtimes**: the same Claude and Codex runtimes ship inside\n'
+            '  the installer as Windows (`win32-x64`) binaries, with automatic discovery\n'
+            '  and self-updating, just like macOS.\n'
+            '- **Auto-updates**: update checks, download, and quit-to-install work through\n'
+            '  the in-app Updates UI.\n'
+            '- **Fonts**: installed Windows fonts are enumerated for the font picker.\n'
+            '- **Agent commands** run through `cmd.exe` with the user `PATH` plus the\n'
+            '  usual tool locations (bun, Node.js, Git).\n'
+            '- **Encoder**: Windows `ffmpeg.exe` ships in the package for export.\n'
+            '\nKnown macOS-only differences (no Windows equivalent exists):\n'
+            '\n- Project-command filesystem sandboxing (`sandbox-exec` seatbelts) is macOS\n'
+            '  only. On Windows, Project commands run directly in the workspace.\n'
+            '- Trackpad alignment haptics and iCloud file states are macOS-only; on\n'
+            '  Windows they gracefully report "unknown"/unavailable.\n'
+            '- `powermove install` (stay-running service) supports systemd (Linux) and\n'
+            '  launchd (macOS) only.\n'
+          )
+          out.append(f'## Everything in {version} (upstream, all platforms)\n')
+          for release in releases:
+            if release['tag_name'] > tag:
+              continue
+            body = (release['body'] or '').strip()
+            out.append(f"### {release['tag_name']} — {release['name']}\n")
+            out.append(body if body else '_No notes published upstream._')
+            out.append('')
+          out.append('Full per-PR history: https://github.com/iterative-computer/powermove/releases\n')
+          with open('.github/release-notes-windows.md', 'w') as handle:
+            handle.write('\n'.join(out))
+          print('Wrote .github/release-notes-windows.md')
+          EOF
+          git add .github/release-notes-windows.md
+          git commit -m "Refresh Windows changelog for ${UPSTREAM_TAG}" 2>&1 | tail -n 1
+      - uses: oven-sh/setup-bun@v2
+        if: steps.check.outputs.port-needed == 'true'
+        with:
+          bun-version: 1.3.14
+      - name: Smoke-test the port
+        if: steps.check.outputs.port-needed == 'true'
+        run: |
+          bun install --frozen-lockfile
+          bun run --cwd apps/desktop test -- src/main/claude/env.test.ts src/main/codex/env.test.ts src/main/updates.test.ts src/main/runtime-updates.test.ts src/main/login-shell-path.test.ts src/main/fonts.test.ts
+          bun run --cwd apps/desktop build
+      - name: Push port branch and release tag
+        if: steps.check.outputs.port-needed == 'true'
+        env:
+          UPSTREAM_TAG: ${{ steps.tags.outputs.upstream }}
+          WIN_TAG: ${{ steps.tags.outputs.win }}
+        run: |
+          git push origin "windows-${UPSTREAM_TAG}"
+          git tag -a "${WIN_TAG}" -m "Powermove ${UPSTREAM_TAG} Windows port (x64 NSIS)"
+          git push origin "refs/tags/${WIN_TAG}"
+      - name: Open an issue when the port needs a human
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_TAG: ${{ steps.tags.outputs.upstream }}
+          WIN_TAG: ${{ steps.tags.outputs.win }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Windows port needed: upstream ${UPSTREAM_TAG}"
+          if gh issue list --search "$title" --state open --json title -q '.[].title' | grep -q .; then
+            echo 'Issue already open; not duplicating.'
+          else
+            gh issue create --title "$title" --body "Upstream released \`${UPSTREAM_TAG}\` but the automatic Windows port failed (cherry-pick conflict or smoke test). The \`${WIN_TAG}\` release was **not** created.
+
+            - Failing run: ${RUN_URL}
+            - Expected work, visible step by step: rebase the port commits (\`git log upstream/main..origin/windows\`) onto \`${UPSTREAM_TAG}\`, refresh \`.github/release-notes-windows.md\`, run the targeted tests + desktop build, then push the \`${WIN_TAG}\` tag to trigger Release Windows."
+          fi

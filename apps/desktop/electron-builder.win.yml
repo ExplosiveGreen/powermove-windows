@@ -73,13 +73,13 @@ extraMetadata:
   main: out/main/index.js
 
 afterPack: ./scripts/after-pack.mjs
-# Windows releases live in this repository. electron-updater reads the GitHub
-# release feed (latest.yml), so the repo must be public for updates to work on
-# user machines.
+# Windows releases live in this repository (the unofficial Windows fork).
+# electron-updater reads the GitHub release feed (latest.yml), so the repo
+# must be public for updates to work on user machines.
 publish:
   provider: github
-  owner: iterative-computer
-  repo: powermove
+  owner: ExplosiveGreen
+  repo: powermove-windows
   releaseType: draft
 
 artifactName: ${productName}-${version}-win-${arch}.${ext}
