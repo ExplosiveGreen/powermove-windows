@@ -5,6 +5,11 @@ directories:
   output: dist
 
 asar: true
+# No native modules ship for Windows: @powermove/macos-haptics is macOS-only
+# (its install script is a no-op elsewhere and index.cjs never loads it off
+# darwin), everything else is prebuilt. Rebuilding would invoke node-gyp on
+# AppKit sources that cannot compile on Windows.
+npmRebuild: false
 electronLanguages:
   - en
 files:
