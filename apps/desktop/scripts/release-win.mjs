@@ -30,7 +30,11 @@ async function main() {
   }
 
   const { version } = JSON.parse(await readFile(path.join(repository, 'package.json'), 'utf8'));
-  const channel = /^\d+\.\d+\.\d+-([a-z]+)\./i.exec(version)?.[1]?.toLowerCase() ?? 'latest';
+  // Same rule as the release workflow: only -beta. prereleases leave the
+  // latest channel. (Matching `-([a-z]+)\.` here would mistake the `-windows.`
+  // in `1.1.0-windows.1` for a channel and emit `windows.yml` instead of
+  // `latest.yml`.)
+  const channel = version.includes('-beta.') ? 'beta' : 'latest';
 
   await run('bun', ['run', 'build']);
   await run(path.join(repository, 'node_modules', '.bin', process.platform === 'win32' ? 'electron-builder.exe' : 'electron-builder'), [
