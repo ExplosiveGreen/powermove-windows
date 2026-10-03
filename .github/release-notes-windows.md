@@ -1,5 +1,23 @@
 # Powermove 1.1.0 for Windows (x64)
 
+## 1.1.0-windows.1 hotfix
+
+- **First launch no longer ends on a blank window**: agent resource setup
+  (Codex/Claude skills, rules, hooks) used Unix symlinks, which Windows
+  blocks without Developer Mode. Directories are now shared as junctions
+  and files as hard links (copies across drives) — no privileges needed.
+  The same fix covers media import (image sequences, animation frames,
+  preview naming), which used symlinks the same way.
+- **A crashed renderer no longer strands the app**: if the renderer process
+  dies natively (e.g. a broken GPU driver), Powermove now restarts itself
+  once with software rendering instead of sitting on a white page with dead
+  menus and an unresponsive close button.
+- **Native window frame**: the macOS hidden titlebar and vibrant canvas are
+  now macOS-only; Windows uses its standard frame with working caption
+  buttons.
+- **Auto-updates check the right repository**: update checks now read this
+  fork's releases instead of upstream's macOS feed.
+
 This is the first Windows release of Powermove: the complete 1.1.0 editor,
 ported 1-to-1 from macOS. Everything below 1.1.0 already shipped upstream;
 the Windows port adds native Windows packaging and platform support on top.

@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { IPC, type OnboardingLogoTarget } from '../shared/ipc';
 import { LIGHT_BACKGROUND } from './theme';
+import { installRendererCrashRecovery } from './crash-recovery';
 
 export const ONBOARDING_VERSION = 1;
 export const ONBOARDING_ANIMATION_SECONDS = 9.766666666666667;
@@ -200,6 +201,7 @@ export class OnboardingFlow {
     const window = new BrowserWindow(onboardingOverlayOptions(bounds, this.options.backgroundTest));
     this.animationWindow = window;
     this.options.secure(window);
+    installRendererCrashRecovery(window.webContents);
     window.setIgnoreMouseEvents(true);
     if (!this.options.backgroundTest) window.setAlwaysOnTop(true, 'screen-saver');
     this.applyOverlayBounds(window, bounds);
@@ -302,6 +304,7 @@ export class OnboardingFlow {
     ));
     this.welcomeWindow = window;
     this.options.secure(window);
+    installRendererCrashRecovery(window.webContents);
     window.once('ready-to-show', () => {
       if (!window.isDestroyed() && !this.options.backgroundTest) {
         window.show();

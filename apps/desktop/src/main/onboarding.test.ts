@@ -14,6 +14,9 @@ const electronMocks = vi.hoisted(() => {
     readonly webContents = {
       mainFrame: {},
       send: vi.fn(),
+      on: vi.fn((name: string, listener: (...args: unknown[]) => void) => {
+        this.contentsEvents.set(name, listener);
+      }),
       once: vi.fn((name: string, listener: (...args: unknown[]) => void) => {
         this.contentsEvents.set(name, listener);
       })

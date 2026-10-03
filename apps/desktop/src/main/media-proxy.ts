@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, open, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, open, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
@@ -18,6 +18,7 @@ import { orderedSequence, validSequenceFps } from '../shared/image-sequence';
 import { MAX_SEQUENCE_FRAMES } from '../shared/animated-image';
 import { CONVERTED_VIDEO_EXTENSIONS, NATIVE_VIDEO_EXTENSIONS, mediaExtension, needsImageConversion } from '../shared/media-formats';
 import { spawnWithRetry } from './spawn-retry';
+import { portableLink } from './fs-links';
 
 const execFileAsync = promisify(execFile);
 const STILL_TIMEOUT_MS = 2 * 60 * 1000;
@@ -175,7 +176,7 @@ export class MediaProxyService {
       try { await handle.read(prefix, 0, 4, 0); } finally { await handle.close(); }
       if (prefix.equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) {
         const named = entry.file + '.webm';
-        await symlink(entry.file, named); entry.file = named;
+        await portableLink(entry.file, named); entry.file = named;
       }
       const output = path.join(entry.directory, 'preview.webm');
       await this.convertPreview!(entry.file, output);
@@ -229,7 +230,7 @@ export class MediaProxyService {
         const source = await realpath(frames[index]!.source);
         const info = await stat(source);
         if (!info.isFile() || info.size <= 0) throw new Error(`Could not read ${frames[index]!.name}`);
-        await symlink(source, path.join(directory, `frame-${String(index).padStart(8, '0')}${extension}`));
+        await portableLink(source, path.join(directory, `frame-${String(index).padStart(8, '0')}${extension}`));
       }
       await this.convertSequence(path.join(directory, `frame-%08d${extension}`), fps, frames.length, output, onProgress);
       const converted = await stat(output);
@@ -289,7 +290,7 @@ export class MediaProxyService {
       for (let index = 0; index < animation.repeats.length; index++) {
         const source = path.join(entry.directory, `source-${String(index).padStart(8, '0')}.png`);
         for (let repeat = 0; repeat < animation.repeats[index]!; repeat++) {
-          await symlink(source, path.join(entry.directory, `frame-${String(slot++).padStart(8, '0')}.png`));
+          await portableLink(source, path.join(entry.directory, `frame-${String(slot++).padStart(8, '0')}.png`));
         }
       }
       const output = path.join(entry.directory, 'animation.webm');

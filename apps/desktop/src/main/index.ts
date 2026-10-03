@@ -1,4 +1,5 @@
 import { registerFontsIpc } from './fonts';
+import { installRendererCrashRecovery } from './crash-recovery';
 import { registerAgentNotifications } from './agent-notifications';
 import { installUpdates } from './updates';
 import { installWhatsNew, whatsNewOptions } from './whats-new';
@@ -501,7 +502,7 @@ function createWindow(options: EditorWindowOptions = {}): BrowserWindow {
     if (details.isMainFrame && !details.isSameDocument) openReadyEditors.delete(window.webContents);
   });
   installRendererMenuShortcutRouting(window.webContents);
-  userInput.track(window.webContents, forget => window.on('blur', forget));
+  installRendererCrashRecovery(window.webContents);  userInput.track(window.webContents, forget => window.on('blur', forget));
   let sandboxFocus = { focused: false, field: false, extensionId: '' };
   const onSandboxFocus = (event: Electron.IpcMainEvent, value: unknown): void => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || !value || typeof value !== 'object') return;

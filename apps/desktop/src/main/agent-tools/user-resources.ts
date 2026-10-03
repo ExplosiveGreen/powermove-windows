@@ -1,7 +1,8 @@
-import { lstat, mkdir, mkdtemp, readFile, readlink, rename, symlink, unlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { parse, stringify } from 'smol-toml';
+import { linkTargetEquals, portableLink } from '../fs-links';
 
 const CODEX_RESOURCE_KEYS = [
   'features', 'skills', 'plugins', 'marketplaces', 'apps', 'mcp_servers',
@@ -16,13 +17,13 @@ async function exists(file: string): Promise<boolean> {
 
 async function linkResource(source: string, target: string): Promise<void> {
   if (!await exists(source)) {
-    if (await exists(target) && (await lstat(target)).isSymbolicLink() && await readlink(target) === source) {
+    if (await exists(target) && await linkTargetEquals(target, source)) {
       await unlink(target);
     }
     return;
   }
   if (await exists(target)) {
-    if ((await lstat(target)).isSymbolicLink() && await readlink(target) === source) return;
+    if (await linkTargetEquals(target, source)) return;
     // Preserve resources created by an older private runtime before linking the
     // normal user installation. Never move or replace account/session files.
     const backupRoot = path.join(path.dirname(target), '.powermove-resource-backups');
@@ -30,7 +31,7 @@ async function linkResource(source: string, target: string): Promise<void> {
     const backup = await mkdtemp(path.join(backupRoot, `${path.basename(target)}-`));
     await rename(target, path.join(backup, path.basename(target)));
   }
-  await symlink(source, target);
+  await portableLink(source, target);
 }
 
 async function readConfig(file: string, toml: boolean): Promise<Record<string, unknown>> {
