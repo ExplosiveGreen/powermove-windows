@@ -1,5 +1,17 @@
 # Powermove 1.1.0 for Windows (x64)
 
+## 1.1.0-windows.3 hotfix — fixes the white screen
+
+- **Root cause found and fixed**: on machines whose Windows locale resolves
+  empty, Chromium crashed natively the moment any file picker element was
+  created (e.g. at editor startup) — an upstream Blink bug
+  (`LCIDFromLocaleInternal` dereferencing a null locale). **Electron
+  44.0.0 → 44.5.1**, which no longer crashes there: the app now starts
+  normally on affected machines.
+- The 1.1.0-windows.1 safety nets stay in place: any future native renderer
+  death restarts once with software rendering, and local crash dumps are
+  recorded (never uploaded) for diagnosis.
+
 ## 1.1.0-windows.2 hotfix
 
 - **Renderer deaths now trigger software-rendering fallback**: any abnormal
