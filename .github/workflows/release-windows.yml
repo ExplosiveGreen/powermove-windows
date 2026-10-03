@@ -53,7 +53,8 @@ jobs:
           CHANNEL: ${{ steps.tag.outputs.channel }}
           VERSION: ${{ steps.tag.outputs.version }}
         run: |
-          test -s "apps/desktop/dist/latest.yml"
+          ls -la apps/desktop/dist/
+          test -s "apps/desktop/dist/${CHANNEL}.yml"
           test -s "apps/desktop/dist/Powermove-${VERSION}-win-x64-setup.exe"
         shell: bash
       - uses: actions/upload-artifact@v4
