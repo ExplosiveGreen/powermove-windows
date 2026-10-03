@@ -1,5 +1,17 @@
 # Powermove 1.1.0 for Windows (x64)
 
+## 1.1.0-windows.2 hotfix
+
+- **Renderer deaths now trigger software-rendering fallback**: any abnormal
+  renderer death (native crash, external kill e.g. by antivirus, out of
+  memory) restarts the app once with `--disable-gpu` instead of stranding it
+  on a blank window. A second failure is left alone for diagnosis, so it can
+  never restart-loop.
+- **Local crash dumps**: native crashes are now recorded (never uploaded) so
+  the cause can be identified from the `.dmp` file. The log prints the
+  `crash dumps:` folder at startup; on Windows it is
+  `%APPDATA%\Powermove\Crashpad\reports`.
+
 ## 1.1.0-windows.1 hotfix
 
 - **First launch no longer ends on a blank window**: agent resource setup

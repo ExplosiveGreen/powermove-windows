@@ -1,5 +1,9 @@
 import { registerFontsIpc } from './fonts';
-import { installRendererCrashRecovery } from './crash-recovery';
+import { initCrashReporter, installRendererCrashRecovery } from './crash-recovery';
+
+// Local crash dumps first: if a renderer dies natively, the .dmp location is
+// already in the log before anything else runs.
+initCrashReporter();
 import { registerAgentNotifications } from './agent-notifications';
 import { installUpdates } from './updates';
 import { installWhatsNew, whatsNewOptions } from './whats-new';
