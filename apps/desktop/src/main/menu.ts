@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  dialog,
   Menu,
   type BrowserWindow as BrowserWindowType,
   type Input,
@@ -61,6 +62,33 @@ export interface WindowActions {
   closeWindow(): void;
 }
 
+/* Electron's built-in About box on Windows prints the numeric VERSIONINFO
+   resource (e.g. 1.1.0.0), never the real prerelease version, so Windows gets
+   a small dialog with the true app version instead. macOS keeps the native
+   panel untouched. */
+export function aboutItem(): MenuItemConstructorOptions {
+  if (process.platform !== 'win32') return { role: 'about' };
+  return {
+    label: `About ${app.name}`,
+    click: () => {
+      void dialog.showMessageBox({
+        type: 'info',
+        title: `About ${app.name}`,
+        message: `${app.name} ${app.getVersion()}`,
+        detail: [
+          'Unofficial Windows port of Powermove.',
+          'Original: github.com/iterative-computer/powermove',
+          '',
+          `Electron ${process.versions.electron}`,
+          `Chromium ${process.versions.chrome}`,
+          `Node ${process.versions.node}`
+        ].join('\n'),
+        buttons: ['OK']
+      });
+    }
+  };
+}
+
 export function appMenuTemplate(
   send: (command: MenuCommand) => void,
   windows?: WindowActions
@@ -86,7 +114,7 @@ export function appMenuTemplate(
     {
       label: app.name,
       submenu: [
-        { role: 'about' },
+        aboutItem(),
         { type: 'separator' },
         commandItem('Settings…', 'CommandOrControl+,', 'settings', send, false),
         { type: 'separator' },

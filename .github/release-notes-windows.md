@@ -1,5 +1,12 @@
 # Powermove 1.1.0 for Windows (x64)
 
+## 1.1.0-windows.4 hotfix
+
+- **About box shows the real version**: Electron's built-in Windows About
+  panel prints the numeric file version (`1.1.0.0`), never the prerelease
+  version. Windows now gets its own About dialog with the true app version
+  plus the runtime versions. macOS keeps the native panel.
+
 ## 1.1.0-windows.3 hotfix — fixes the white screen
 
 - **Root cause found and fixed**: on machines whose Windows locale resolves

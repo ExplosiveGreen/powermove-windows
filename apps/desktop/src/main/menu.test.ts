@@ -2,15 +2,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MenuItemConstructorOptions } from 'electron';
 
 const electronMocks = vi.hoisted(() => ({
-  app: { isPackaged: false, name: 'Powermove' },
+  app: { isPackaged: false, name: 'Powermove', getVersion: () => '1.1.0-windows.3' },
   buildFromTemplate: vi.fn((template: MenuItemConstructorOptions[]) => ({ template })),
   setApplicationMenu: vi.fn(),
-  getFocusedWindow: vi.fn()
+  getFocusedWindow: vi.fn(),
+  showMessageBox: vi.fn(async () => ({ response: 0 })),
 }));
 
 vi.mock('electron', () => ({
   app: electronMocks.app,
   BrowserWindow: { getFocusedWindow: electronMocks.getFocusedWindow },
+  dialog: { showMessageBox: electronMocks.showMessageBox },
   Menu: {
     buildFromTemplate: electronMocks.buildFromTemplate,
     setApplicationMenu: electronMocks.setApplicationMenu
@@ -18,6 +20,7 @@ vi.mock('electron', () => ({
 }));
 
 import {
+  aboutItem,
   appMenuTemplate,
   buildAppMenu,
   installMenu,
@@ -101,8 +104,7 @@ describe('application menu', () => {
     expect(appItems.find((item) => item.role === 'hideOthers')?.accelerator).toBe(
       'Command+Alt+H'
     );
-    expect(appItems.find((item) => item.role === 'quit')?.accelerator).toBe('Command+Q');
-    expect(appItems.find((item) => item.id === 'settings')).toMatchObject({ label: 'Settings…', accelerator: 'CommandOrControl+,', registerAccelerator: false });
+    expect(appItems.find((item) => item.role === 'quit')?.accelerator).toBe('Command+Q');    expect(appItems.find((item) => item.id === 'settings')).toMatchObject({ label: 'Settings…', accelerator: 'CommandOrControl+,', registerAccelerator: false });
     // ⌘W closes the tab; the window has ⇧⌘W.
     expect(fileItems.find((item) => item.id === 'closeTab')?.accelerator).toBe('CommandOrControl+W');
     expect(fileItems.find((item) => item.id === 'closeWindow')?.accelerator).toBe('CommandOrControl+Shift+W');
@@ -342,5 +344,25 @@ describe('application menu', () => {
     expect(editorSend).not.toHaveBeenCalled();
     expect(webContents.copy).not.toHaveBeenCalled();
     expect(webContents.paste).not.toHaveBeenCalled();
+  });
+
+  it('shows the real prerelease version in a custom About box on Windows', async () => {
+    const platform = vi.spyOn(process, 'platform', 'get');
+    try {
+      platform.mockReturnValue('darwin');
+      expect(aboutItem()).toEqual({ role: 'about' });
+
+      platform.mockReturnValue('win32');
+      const item = aboutItem();
+      expect(item.role).toBeUndefined();
+      expect(item.label).toBe('About Powermove');
+      await item.click?.({} as never, undefined, {} as never);
+      expect(electronMocks.showMessageBox).toHaveBeenCalledTimes(1);
+      const options = (electronMocks.showMessageBox.mock.calls[0] as unknown as [{ message: string }])[0];
+      expect(options.message).toBe('Powermove 1.1.0-windows.3');
+      expect(options.message).not.toContain('1.1.0.0');
+    } finally {
+      platform.mockRestore();
+    }
   });
 });
